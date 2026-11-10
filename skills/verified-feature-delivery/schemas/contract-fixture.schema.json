@@ -1,0 +1,166 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ContractFixture",
+  "description": "Stage 1 Interface Contract Fixture Schema. Owned by stage-1. Records immutable live probed responses, failure envelope censuses, partitioned payload variance censuses, and fixture_status provenance stamps (PROBED_LIVE, REPLAYED_FROM_RECORDING, PROVISIONAL_FROM_SCHEMA).",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "boundary_class",
+    "fixture_status",
+    "success_samples",
+    "failure_envelope_census"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "description": "Schema format version (e.g. 1.0.0)."
+    },
+    "boundary_class": {
+      "type": "string",
+      "enum": [
+        "SUBPROCESS_CLI",
+        "NETWORK_API",
+        "FRAMEWORK_MIDDLEWARE",
+        "DATASTORE",
+        "MESSAGE_TRANSPORT",
+        "DEVICE_IO",
+        "MODEL_ENDPOINT",
+        "UI_RUNTIME",
+        "VERIFICATION_HARNESS",
+        "OTHER"
+      ]
+    },
+    "boundary_identifier": {
+      "type": "string",
+      "description": "Unique identifier for this boundary interface (e.g. POST /v1/search, git for-each-ref)."
+    },
+    "boundary_id": {
+      "type": "string",
+      "description": "Alternative alias for boundary_identifier."
+    },
+    "property_name": {
+      "type": "string",
+      "description": "Canonical property name being probed."
+    },
+    "fixture_status": {
+      "type": "string",
+      "enum": [
+        "PROBED_LIVE",
+        "REPLAYED_FROM_RECORDING",
+        "PROVISIONAL_FROM_SCHEMA"
+      ],
+      "description": "Provenance status stamp of the contract fixture."
+    },
+    "pinned_reprobe_milestone": {
+      "type": ["string", "null"],
+      "description": "Mandatory Stage 4 milestone ID if fixture_status is PROVISIONAL_FROM_SCHEMA."
+    },
+    "contract_reference": {
+      "type": "string",
+      "description": "Path or symbol reference to machine-readable contract definition."
+    },
+    "contract_variant_selectors": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Variant selectors, enums, or flags observed in the contract definition."
+    },
+    "parity_target_class": {
+      "type": "string",
+      "description": "Primary live boundary class being doubled when class is VERIFICATION_HARNESS."
+    },
+    "differential_parity_audit": {
+      "type": "object",
+      "description": "Differential error envelope and fidelity comparison for VERIFICATION_HARNESS.",
+      "properties": {
+        "live_boundary_failure_envelope": {},
+        "harness_observed_response": {},
+        "error_code": {
+          "type": ["string", "null"]
+        },
+        "mitigation_notes": {
+          "type": "string"
+        }
+      }
+    },
+    "success_samples": {
+      "type": "array",
+      "description": "Concrete recorded payload shapes when execution succeeds.",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["sample_id"],
+        "properties": {
+          "sample_id": { "type": "string" },
+          "partition_cell": { "type": "object" },
+          "status_code": { "type": ["integer", "null"] },
+          "exit_code": { "type": ["integer", "null"] },
+          "headers": { "type": "object" },
+          "payload": {}
+        }
+      }
+    },
+    "failure_envelope_census": {
+      "type": "array",
+      "description": "Census of all distinct error envelope formats reachable from this boundary.",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "properties": {
+          "envelope_id": { "type": "string" },
+          "error_class": { "type": "string" },
+          "status_code": { "type": ["integer", "null"] },
+          "exit_code": { "type": ["integer", "null"] },
+          "payload_type": { "type": "string" },
+          "payload": {},
+          "sample": {},
+          "description": { "type": "string" }
+        }
+      }
+    },
+    "variance_census": {
+      "type": "object",
+      "description": "Payload variance census over contract-derived partition of unbounded regions.",
+      "properties": {
+        "unbounded_regions": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "contract_variant_selectors": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "declared_partition_key": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "declaration_reason": {
+          "type": ["string", "null"]
+        },
+        "partition_cells_evaluated": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["cell"],
+            "properties": {
+              "cell": { "type": "object" },
+              "sample_ref": { "type": ["string", "null"] }
+            }
+          }
+        },
+        "variance_analysis": {
+          "type": "object",
+          "properties": {
+            "key_intersection": {
+              "type": "array",
+              "items": { "type": "string" }
+            },
+            "key_union": {
+              "type": "array",
+              "items": { "type": "string" }
+            }
+          }
+        }
+      }
+    }
+  }
+}

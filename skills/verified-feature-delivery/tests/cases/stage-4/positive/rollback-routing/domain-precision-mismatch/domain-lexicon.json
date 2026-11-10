@@ -1,0 +1,31 @@
+{
+  "schema_version": "1.0.0",
+  "feature_slug": "stripe-subscription-downgrade",
+  "entities": [
+    {
+      "name": "Invoice",
+      "attributes": [
+        {"name": "amount_due", "type": "int64", "unit_ref": "integer_cents"},
+        {"name": "seat_limit", "type": "int32", "unit_ref": "seat_count"}
+      ]
+    }
+  ],
+  "unit_precisions": [
+    {
+      "id": "integer_cents",
+      "quantity_type": "CURRENCY_AMOUNT",
+      "base_unit": "cents",
+      "numeric_type": "int64",
+      "representation": "Integer cents, so fourteen dollars ninety-nine is 1499 and no floating point arithmetic touches it.",
+      "rounding_mode": "BANKERS_ROUNDING"
+    },
+    {
+      "id": "seat_count",
+      "quantity_type": "CARDINALITY",
+      "base_unit": "seats",
+      "numeric_type": "int32",
+      "representation": "Positive integer count of licensed organisation members.",
+      "rounding_mode": "EXACT"
+    }
+  ]
+}

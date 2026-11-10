@@ -1,0 +1,111 @@
+{
+  "schema_version": "1.0.0",
+  "feature_slug": "order-fulfillment-pipeline",
+  "scenario_id": "scenario_order_validation_negative_quantity_failure",
+  "slice_id": "slice_order_validation",
+  "description": "Validation rejects order submission containing invalid item quantity without invoking external payment boundary.",
+  "derived_from": {
+    "state_id": "ORDER_DRAFTED",
+    "transition_id": "TRANS_SUBMIT_INVALID_QUANTITY",
+    "branch_coverage_class": "SEMANTIC_CONTRADICTION"
+  },
+  "mock_boundary_contract": {
+    "isolation_mode": "STRICT_EXTERNAL_MOCK_ONLY",
+    "mock_boundaries": [],
+    "prohibited_mocks": [
+      "OrderAggregate",
+      "OrderValidationEngine",
+      "OrderStateMachine",
+      "PostgresOrderRepository"
+    ]
+  },
+  "given": {
+    "state_token": "ORDER_DRAFTED",
+    "entity_states": [
+      {
+        "entity_name": "Order",
+        "entity_id": "ord_1002",
+        "attributes": {
+          "customer_id": "cust_452",
+          "item_count": 0,
+          "subtotal_cents": 0,
+          "tax_cents": 0,
+          "total_cents": 0,
+          "currency": "USD"
+        },
+        "unit_precisions": {
+          "total_cents": "integer_cents"
+        }
+      }
+    ],
+    "datastore_state": {
+      "orders": [
+        {
+          "id": "ord_1002",
+          "status": "DRAFT",
+          "customer_id": "cust_452",
+          "total_cents": 0
+        }
+      ]
+    },
+    "fixture_presets": []
+  },
+  "when": {
+    "entrypoint": {
+      "entrypoint_type": "HTTP_HANDLER",
+      "invoked_target": "POST /v1/orders/ord_1002/items",
+      "actor_id": "customer",
+      "action_token": "ADD_ORDER_ITEM",
+      "payload": {
+        "order_id": "ord_1002",
+        "sku": "SKU_WIDGET_99",
+        "quantity": -5,
+        "unit_price_cents": 1200
+      },
+      "headers": {
+        "Content-Type": "application/json"
+      }
+    }
+  },
+  "then": {
+    "state_token": "VALIDATION_REJECTED",
+    "state_assertions": [
+      {
+        "entity_name": "Order",
+        "attribute": "status",
+        "operator": "EQUALS",
+        "expected_value": "DRAFT"
+      },
+      {
+        "entity_name": "Order",
+        "attribute": "item_count",
+        "operator": "EQUALS",
+        "expected_value": 0
+      }
+    ],
+    "observer_projections": [
+      {
+        "observer_id": "customer",
+        "medium": "api_response",
+        "expected_projection": {
+          "status_code": 422,
+          "error_code": "INVALID_QUANTITY_NON_POSITIVE",
+          "error_message": "Item quantity must be a positive integer strictly greater than zero."
+        },
+        "discriminator": "error_code:INVALID_QUANTITY_NON_POSITIVE",
+        "projection_quantities": ["validation_error_code"]
+      }
+    ],
+    "event_emissions": [
+      {
+        "event_name": "OrderValidationFailedAudit",
+        "topic_or_stream": "orders.audit.v1",
+        "payload": {
+          "order_id": "ord_1002",
+          "rejection_reason": "INVALID_QUANTITY_NON_POSITIVE",
+          "rejected_at": "2026-08-30T12:05:00Z"
+        }
+      }
+    ]
+  }
+}

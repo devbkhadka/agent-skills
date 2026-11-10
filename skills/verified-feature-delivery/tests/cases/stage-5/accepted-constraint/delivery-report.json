@@ -1,0 +1,55 @@
+{
+  "schema_version": "1.0.0",
+  "feature_slug": "search-console-web-ui",
+  "delivered_at": "2026-08-22T11:45:00Z",
+  "intent_sections": [
+    {
+      "header": "[Milestone]",
+      "title": "Search Console Query Flow Verified",
+      "summary": "The operator can enter a query, watch the console move from idle to loading, and read a ranked list of matches. Ranking order and the states the operator can tell apart were each verified against a captured artifact.",
+      "milestone_refs": ["M1_PURE_FILTER", "M3_UI_QUERY_FLOW"]
+    },
+    {
+      "header": "[Accepted Constraint]",
+      "title": "Narrow Viewport Floor Is Not Evidenceable In This Harness",
+      "summary": "The declared verification harness renders the console without a layout engine, so it measures no element geometry at all and reports the same tree at every viewport width. Whether the result list stays inside a 360 pixel floor without overflowing was therefore not verified in the automated run.",
+      "alternative_verification": "The result list was opened once by hand in a real browser at a 360 pixel width and read for overflow, and a browser based visual check is queued for the next slice so this stops being manual.",
+      "discharged_claim_ids": ["claim:layout:narrow_viewport_floor"]
+    },
+    {
+      "header": "[Risk]",
+      "title": "Search Boundary Latency Above the Client Guard",
+      "summary": "A search that takes longer than three seconds trips the client timeout guard and the console returns to idle rather than hanging. The boundary itself is not rate limited, so a slow index is the only way this fires.",
+      "mitigation": "The timeout guard is the invariant under watch. If the boundary starts to exceed it in normal use, the deadline belongs in the scenario matrix as a branch rather than as a guard."
+    }
+  ],
+  "milestone_evidence_records": [
+    {
+      "milestone_id": "M1_PURE_FILTER",
+      "slice_id": "slice_1_query_entry",
+      "artifact_path": "evidence/m1_pure_filter_run.json",
+      "claims_evaluated": [
+        {
+          "claim_id": "claim:logic:flat_and_filter_composition",
+          "claim_kind": "value_correctness"
+        }
+      ]
+    },
+    {
+      "milestone_id": "M3_UI_QUERY_FLOW",
+      "slice_id": "slice_1_query_entry",
+      "artifact_path": "evidence/m3_ui_query_snapshot.json",
+      "claims_evaluated": [
+        {
+          "claim_id": "claim:ui:observable_projections_distinct",
+          "claim_kind": "state_observable_and_distinct",
+          "evidence_key": "state:RESULTS_POPULATED"
+        },
+        {
+          "claim_id": "claim:layout:narrow_viewport_floor",
+          "claim_kind": "layout_viewport_floor_overflow"
+        }
+      ]
+    }
+  ]
+}

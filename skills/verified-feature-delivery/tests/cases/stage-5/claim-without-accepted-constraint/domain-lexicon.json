@@ -1,0 +1,69 @@
+{
+  "schema_version": "1.0.0",
+  "feature_slug": "search-console-web-ui",
+  "bounded_context": "search_console",
+  "entities": [
+    {
+      "name": "SearchChunk",
+      "description": "Indexed search chunk.",
+      "provenance": "FEATURE_INTRODUCED",
+      "repo_reference": null,
+      "glossary_visibility": "INCLUDE",
+      "plain_language_summary": "Indexed search chunk.",
+      "attributes": [
+        { "name": "id", "type": "string" },
+        { "name": "count", "type": "int64", "unit_ref": "chunk_count" }
+      ]
+    },
+    {
+      "name": "SearchSummary",
+      "description": "Search summary.",
+      "provenance": "FEATURE_INTRODUCED",
+      "repo_reference": null,
+      "glossary_visibility": "INCLUDE",
+      "plain_language_summary": "Search summary.",
+      "attributes": [
+        { "name": "total_count", "type": "int64", "unit_ref": "chunk_count" }
+      ]
+    }
+  ],
+  "unit_precisions": [
+    {
+      "id": "chunk_count",
+      "quantity_type": "NUMERIC",
+      "base_unit": "count",
+      "numeric_type": "INTEGER",
+      "representation": "INTEGER",
+      "rounding_mode": "ROUND_HALF_UP"
+    }
+  ],
+  "projection_bindings": [
+    {
+      "projection_id": "search_total_count",
+      "quantity_or_label": "Search Total Count",
+      "observer_id": "SearchObserver",
+      "source_type": "PURE_EXPRESSION",
+      "source_reference": "SearchSummary.total_count",
+      "derivation_expression": "sum(SearchChunk.count)"
+    },
+    {
+      "projection_id": "chunk_count_badge",
+      "quantity_or_label": "Chunk Count Badge",
+      "observer_id": "SearchObserver",
+      "source_type": "CONTRACT_FIELD",
+      "source_reference": "SearchChunk.count",
+      "derivation_expression": "SearchChunk.count"
+    }
+  ],
+  "value_authorities": [
+    {
+      "value_name": "search_total_count",
+      "authority_model": "LOCAL_AUTHORITATIVE",
+      "upstream_boundary": null,
+      "local_computation": "sum(SearchChunk.count)",
+      "tolerance_epsilon": 0.001,
+      "divergence_action": "REJECT",
+      "rationale": "Total count is the sum of chunk counts."
+    }
+  ]
+}

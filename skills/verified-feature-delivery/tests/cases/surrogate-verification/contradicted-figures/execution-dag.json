@@ -1,0 +1,18 @@
+{
+  "schema_version": "1.0.0",
+  "feature_slug": "monthly-timelog-viewer",
+  "slices": [
+    {
+      "slice_id": "SLICE_2_MONTH_SELECTOR_SWITCH",
+      "milestones": [
+        {
+          "milestone_id": "MS_MONTH_SWITCH_VIEW",
+          "verification_medium": "rendered_ui",
+          "claims": [
+            "CLAIM_SWITCH_MONTH_TIMELOG_DISPLAY"
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,27 @@
+{
+  "schema_version": "1.0.0",
+  "feature_slug": "search-console-web-ui",
+  "generated_at": "2026-08-22T12:05:00Z",
+  "milestones": [
+    {
+      "milestone_id": "M1_QUERY_PANE_RENDERS",
+      "slice_id": "slice_1_query_entry",
+      "verification_medium": "rendered_ui",
+      "executed_command": "vitest run tests/idle.test.tsx",
+      "evidence_key": "state:IDLE",
+      "observer_id": "operator",
+      "captured_evidence": "<section class=\"pane\" data-testid=\"idle-pane\"><h2>No results found for \"database\"</h2><button aria-label=\"Clear filters\">Clear</button></section>",
+      "recorded_fixture_values": ["database"]
+    },
+    {
+      "milestone_id": "M3_EMPTY_RESULTS_RENDER",
+      "slice_id": "slice_1_query_entry",
+      "verification_medium": "rendered_ui",
+      "executed_command": "vitest run tests/emptyResults.test.tsx",
+      "evidence_key": "state:RESULTS_EMPTY",
+      "observer_id": "operator",
+      "captured_evidence": "<div class=\"results-pane results-pane--empty\" data-testid=\"results\"><h2 class=\"hdr\">No results found for \"database\"</h2><button class=\"btn\" aria-label=\"Clear filters\">Clear</button></div>",
+      "recorded_fixture_values": ["database"]
+    }
+  ]
+}

@@ -1,0 +1,133 @@
+{
+  "schema_version": "1.0.0",
+  "feature_slug": "search-console-web-ui",
+  "updated_at": "2026-08-22T10:45:00Z",
+  "boundary_classes": [
+    {
+      "class_name": "SUBPROCESS_CLI",
+      "verdict": "NOT_PRESENT",
+      "absence_reason": "Browser-based client application executes entirely within browser sandbox with no local child processes."
+    },
+    {
+      "class_name": "NETWORK_API",
+      "verdict": "PRESENT",
+      "probe_path": "phases/1-contract-probing/probes/network_api.py",
+      "properties": [
+        {
+          "property_name": "status_codes",
+          "verdict": "PROBED",
+          "fixture_ref": "network_api-search_endpoint.json"
+        },
+        {
+          "property_name": "error_envelope_shapes",
+          "verdict": "PROBED",
+          "fixture_ref": "network_api-search_endpoint.json"
+        },
+        {
+          "property_name": "rate_limit_headers",
+          "verdict": "NOT_PRESENT",
+          "reason_if_not_present": "Search API backend does not emit 429 rate limits or Retry-After headers for internal cluster traffic."
+        },
+        {
+          "property_name": "auth_expiry",
+          "verdict": "NOT_PRESENT",
+          "reason_if_not_present": "Static mTLS authentication configured at service mesh gateway level."
+        },
+        {
+          "property_name": "credential_rotation",
+          "verdict": "NOT_PRESENT",
+          "reason_if_not_present": "Internal service communication uses static bearer tokens managed at gateway level."
+        },
+        {
+          "property_name": "authorization_asymmetry",
+          "verdict": "NOT_PRESENT",
+          "reason_if_not_present": "Single-tenant internal operator UI with uniform cluster permissions."
+        },
+        {
+          "property_name": "redirect_proxy_interposition",
+          "verdict": "PROBED",
+          "fixture_ref": "network_api-search_endpoint.json"
+        }
+      ]
+    },
+    {
+      "class_name": "FRAMEWORK_MIDDLEWARE",
+      "verdict": "NOT_PRESENT",
+      "absence_reason": "Single-page React client has no server-side middleware or raw buffer handling."
+    },
+    {
+      "class_name": "DATASTORE",
+      "verdict": "NOT_PRESENT",
+      "absence_reason": "Client maintains no local indexedDB, SQLite, or persistent local storage."
+    },
+    {
+      "class_name": "MESSAGE_TRANSPORT",
+      "verdict": "NOT_PRESENT",
+      "absence_reason": "No background queue, AMQP broker, MQTT, or push notification transport used."
+    },
+    {
+      "class_name": "DEVICE_IO",
+      "verdict": "NOT_PRESENT",
+      "absence_reason": "Standard desktop browser without hardware sensors, BLE, or serial peripherals."
+    },
+    {
+      "class_name": "MODEL_ENDPOINT",
+      "verdict": "NOT_PRESENT",
+      "absence_reason": "Retrieval scoring and embedding generation occur opaque to client behind REST API."
+    },
+    {
+      "class_name": "UI_RUNTIME",
+      "verdict": "PRESENT",
+      "probe_path": "phases/1-contract-probing/probes/ui_runtime.ts",
+      "properties": [
+        {
+          "property_name": "render_and_teardown_lifecycle",
+          "verdict": "PROBED",
+          "fixture_ref": "ui_runtime-react_lifecycle.json"
+        },
+        {
+          "property_name": "overlay_portal_mounting",
+          "verdict": "PROBED",
+          "fixture_ref": "ui_runtime-react_lifecycle.json"
+        },
+        {
+          "property_name": "platform_permission_dialogs",
+          "verdict": "NOT_PRESENT",
+          "reason_if_not_present": "No geolocation, camera, or notification browser permission prompts requested."
+        },
+        {
+          "property_name": "background_low_memory_eviction",
+          "verdict": "NOT_PRESENT",
+          "reason_if_not_present": "Desktop browser target; mobile background freeze lifecycle not in scope."
+        }
+      ]
+    },
+    {
+      "class_name": "VERIFICATION_HARNESS",
+      "verdict": "PRESENT",
+      "probe_path": "phases/1-contract-probing/probes/verification_harness.ts",
+      "properties": [
+        {
+          "property_name": "fake_clock_flush_semantics",
+          "verdict": "PROBED",
+          "fixture_ref": "verification_harness-vitest_jsdom.json"
+        },
+        {
+          "property_name": "query_scope",
+          "verdict": "PROBED",
+          "fixture_ref": "verification_harness-vitest_jsdom.json"
+        },
+        {
+          "property_name": "differential_parity_against_live",
+          "verdict": "PROBED",
+          "fixture_ref": "verification_harness-vitest_jsdom.json"
+        }
+      ]
+    },
+    {
+      "class_name": "OTHER",
+      "verdict": "NOT_PRESENT",
+      "absence_reason": "No unclassified boundaries detected outside the 9 standard classes."
+    }
+  ]
+}

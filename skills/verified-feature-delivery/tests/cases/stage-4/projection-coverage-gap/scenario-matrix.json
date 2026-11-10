@@ -1,0 +1,52 @@
+{
+  "schema_version": "1.0.0",
+  "feature_slug": "search-console-web-ui",
+  "updated_at": "2026-08-22T11:50:00Z",
+  "observers": [
+    {"observer_id": "operator", "medium": "rendered_ui", "modality": "browser_dom"}
+  ],
+  "states": [
+    {
+      "state_id": "IDLE",
+      "evidence_key": "state:IDLE",
+      "is_initial": true,
+      "is_terminal": false,
+      "description": "Console mounted with no query executed yet.",
+      "observable_projections": [
+        {
+          "observer_id": "operator",
+          "medium": "rendered_ui",
+          "discriminator": {"region": "search_pane", "atom": "prompt_to_run_search"}
+        }
+      ]
+    },
+    {
+      "state_id": "RESULTS_POPULATED",
+      "evidence_key": "state:RESULTS_POPULATED",
+      "is_initial": false,
+      "is_terminal": false,
+      "description": "Query settled with matching result cards and a total count header.",
+      "observable_projections": [
+        {
+          "observer_id": "operator",
+          "medium": "rendered_ui",
+          "discriminator": {"region": "results_pane", "atom": "result_cards_with_count"}
+        }
+      ]
+    },
+    {
+      "state_id": "ERROR_SHOWN",
+      "evidence_key": "state:ERROR_SHOWN",
+      "is_initial": false,
+      "is_terminal": false,
+      "description": "A bad gateway or validation envelope surfaced as an error alert over the pane.",
+      "observable_projections": [
+        {
+          "observer_id": "operator",
+          "medium": "rendered_ui",
+          "discriminator": {"region": "alert_portal", "atom": "error_alert_with_retry"}
+        }
+      ]
+    }
+  ]
+}

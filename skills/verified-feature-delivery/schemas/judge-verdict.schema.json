@@ -1,0 +1,26 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "JudgeVerdict",
+  "description": "Structured output from judging agent: CONFIRMED, REFUTED, or COLLABORATE.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "claim_id",
+    "verdict",
+    "blocking",
+    "evidence_examined"
+  ],
+  "properties": {
+    "claim_id": { "type": "string" },
+    "verdict": {
+      "type": "string",
+      "enum": ["CONFIRMED", "REFUTED", "COLLABORATE"]
+    },
+    "blocking": { "type": "boolean" },
+    "minimal_fix": { "type": ["string", "null"] },
+    "evidence_examined": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  }
+}

@@ -1,0 +1,230 @@
+{
+  "schema_version": "1.0.0",
+  "feature_slug": "stripe-subscription-downgrade",
+  "bounded_context": "billing_and_entitlements",
+  "entities": [
+    {
+      "name": "Subscription",
+      "description": "Customer recurring billing contract with Stripe.",
+      "attributes": [
+        { "name": "id", "type": "string", "description": "Internal UUID primary key." },
+        { "name": "stripe_subscription_id", "type": "string", "description": "Upstream Stripe subscription ID (sub_xxx)." },
+        { "name": "tier", "type": "enum", "enum_ref": "SubscriptionTier" },
+        { "name": "status", "type": "enum", "enum_ref": "SubscriptionStatus", "default": "PENDING_APPROVAL" },
+        { "name": "last_stripe_event_created", "type": "int64", "unit_ref": "unix_epoch_seconds" }
+      ]
+    },
+    {
+      "name": "Organization",
+      "description": "Tenant entity containing members and resource limits.",
+      "attributes": [
+        { "name": "id", "type": "string", "description": "Internal organization UUID." },
+        { "name": "quota_status", "type": "enum", "enum_ref": "QuotaStatus" },
+        { "name": "seat_limit", "type": "int32", "unit_ref": "seat_count" }
+      ]
+    }
+  ],
+  "value_objects": [
+    {
+      "name": "ProrationInvoice",
+      "description": "Calculated invoice balance adjustment for mid-cycle tier changes.",
+      "attributes": [
+        { "name": "amount_due", "type": "int64", "unit_ref": "integer_cents" },
+        { "name": "currency", "type": "string", "description": "ISO-4217 three-letter currency code." }
+      ]
+    }
+  ],
+  "actions": [
+    {
+      "name": "DowngradeSubscription",
+      "description": "Schedule a downgrade of subscription tier at period end.",
+      "target_entity": "Subscription",
+      "source_state": "ACTIVE",
+      "target_state": "ACTIVE"
+    }
+  ],
+  "state_enums": [
+    {
+      "name": "SubscriptionStatus",
+      "tokens": ["ACTIVE", "PAST_DUE", "CANCELED"],
+      "terminal_tokens": ["CANCELED"]
+    },
+    {
+      "name": "SubscriptionTier",
+      "tokens": ["FREE", "PRO", "ENTERPRISE"],
+      "terminal_tokens": []
+    },
+    {
+      "name": "QuotaStatus",
+      "tokens": ["NORMAL", "QUOTA_EXCEEDED"],
+      "terminal_tokens": []
+    }
+  ],
+  "monotonic_clocks": [
+    {
+      "name": "StripeEventClock",
+      "source_boundary": "NETWORK_API",
+      "source_field": "event.created",
+      "unit_ref": "unix_epoch_seconds",
+      "comparison_rule": "STRICTLY_GREATER_THAN"
+    }
+  ],
+  "unit_precisions": [
+    {
+      "id": "integer_cents",
+      "quantity_type": "CURRENCY_AMOUNT",
+      "base_unit": "cents",
+      "numeric_type": "int64",
+      "representation": "Integer cents (e.g. $14.99 = 1499), zero floating point math.",
+      "rounding_mode": "BANKERS_ROUNDING"
+    },
+    {
+      "id": "unix_epoch_seconds",
+      "quantity_type": "TIMESTAMP",
+      "base_unit": "seconds",
+      "numeric_type": "int64",
+      "representation": "Unix epoch timestamp in integer seconds.",
+      "rounding_mode": "TRUNCATE"
+    },
+    {
+      "id": "iso8601_datetime_ms",
+      "quantity_type": "TIMESTAMP",
+      "base_unit": "milliseconds",
+      "numeric_type": "string",
+      "representation": "ISO-8601 UTC timestamp string with millisecond precision (YYYY-MM-DDTHH:mm:ss.sssZ).",
+      "rounding_mode": "EXACT"
+    },
+    {
+      "id": "seat_count",
+      "quantity_type": "CARDINALITY",
+      "base_unit": "seats",
+      "numeric_type": "int32",
+      "representation": "Positive integer count of licensed organization members.",
+      "rounding_mode": "EXACT"
+    }
+  ],
+  "actors_and_observers": {
+    "actors": [
+      {
+        "id": "StripeWebhookDispatcher",
+        "kind": "TRIGGER",
+        "modality": "NETWORK_API",
+        "description": "Upstream Stripe event delivery service."
+      },
+      {
+        "id": "OrgAdmin",
+        "kind": "TRIGGER",
+        "modality": "rendered_ui",
+        "description": "Tenant administrator managing billing plans."
+      },
+      {
+        "id": "BullMQWorker",
+        "kind": "EXECUTION",
+        "modality": "process_exit",
+        "description": "Asynchronous background worker executing downgrade logic."
+      }
+    ],
+    "observers": [
+      {
+        "id": "OrgAdmin",
+        "kind": "ACTIVE",
+        "channels": ["rendered_ui"],
+        "description": "Tenant administrator observing billing status on web dashboard."
+      },
+      {
+        "id": "OrgMember",
+        "kind": "PASSIVE",
+        "channels": ["rendered_ui"],
+        "description": "Regular organization member perceiving seat lock and write permission alerts."
+      },
+      {
+        "id": "SystemMonitor",
+        "kind": "MONITOR",
+        "channels": ["datastore_state", "process_exit"],
+        "description": "Infrastructure telemetry observing queue lag, error rates, and dead-letter queues."
+      }
+    ]
+  },
+  "alias_pairs": [
+    {
+      "canonical_concept": "CustomerIdentifier",
+      "left": {
+        "boundary_class": "DATASTORE",
+        "token": "stripeCustomerId"
+      },
+      "right": {
+        "boundary_class": "NETWORK_API",
+        "token": "customer"
+      },
+      "mapping_notes": "Prisma model camelCase maps to Stripe API snake_case string customer ID."
+    },
+    {
+      "canonical_concept": "SubscriptionIdentifier",
+      "left": {
+        "boundary_class": "DATASTORE",
+        "token": "stripeSubscriptionId"
+      },
+      "right": {
+        "boundary_class": "NETWORK_API",
+        "token": "subscription.id"
+      },
+      "mapping_notes": "Prisma subscription foreign key maps to Stripe object subscription id."
+    }
+  ],
+  "projection_bindings": [
+    {
+      "projection_id": "quota_warning_banner",
+      "quantity_or_label": "Quota Exceeded Banner Status",
+      "observer_id": "OrgAdmin",
+      "source_type": "CONTRACT_FIELD",
+      "source_reference": "Organization.quota_status",
+      "derivation_expression": "Organization.quota_status === 'QUOTA_EXCEEDED' ? 'VISIBLE' : 'HIDDEN'"
+    },
+    {
+      "projection_id": "surplus_seat_count",
+      "quantity_or_label": "Locked Surplus Seat Count",
+      "observer_id": "OrgAdmin",
+      "source_type": "PURE_EXPRESSION",
+      "source_reference": "reconcileEntitlements",
+      "derivation_expression": "max(0, activeMemberCount - Organization.seat_limit)"
+    },
+    {
+      "projection_id": "member_access_alert",
+      "quantity_or_label": "Member Access Permission Alert",
+      "observer_id": "OrgMember",
+      "source_type": "CONTRACT_FIELD",
+      "source_reference": "Organization.quota_status",
+      "derivation_expression": "Organization.quota_status === 'QUOTA_EXCEEDED' ? 'LOCKED' : 'UNLOCKED'"
+    },
+    {
+      "projection_id": "system_event_stream",
+      "quantity_or_label": "Stripe Event Processing State",
+      "observer_id": "SystemMonitor",
+      "source_type": "CONTRACT_FIELD",
+      "source_reference": "Subscription.status",
+      "derivation_expression": "Subscription.status"
+    }
+  ],
+  "value_authorities": [
+    {
+      "value_name": "proration_amount",
+      "authority_model": "UPSTREAM_AUTHORITATIVE",
+      "upstream_boundary": "NETWORK_API (Stripe)",
+      "local_computation": null,
+      "tolerance_epsilon": null,
+      "divergence_action": "INGEST_VERBATIM_NEVER_OVERWRITE",
+      "rationale": "Stripe performs second-level proration with banker's rounding and tax calculations; local backend never re-asserts."
+    }
+  ],
+  "fact_precedences": [
+    {
+      "fact_name": "subscription_cancellation_status",
+      "primary_boundary": "NETWORK_API (Stripe Webhook)",
+      "secondary_boundary": "DATASTORE (Local Database)",
+      "precedence_rule": "PRIMARY_WINS_ON_MONOTONIC_TIMESTAMP",
+      "reconciliation_check": "Compare event.created > Subscription.last_stripe_event_created; update local record if primary is newer."
+    }
+  ],
+  "dual_computed_values": ["proration_amount"],
+  "dual_boundary_facts": ["subscription_cancellation_status"]
+}

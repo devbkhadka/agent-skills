@@ -1,0 +1,23 @@
+{
+  "schema_version": "1.0.0",
+  "feature_slug": "dimension-unresolved-feature",
+  "locked_dimensions": {
+    "1_slicing_topology": {
+      "strategy": "SINGLE_TRACER_BULLET_FIRST",
+      "slice_1_anchor": "query_anchor",
+      "bootstrap_floor": ["index.html"]
+    },
+    "2_execution_semantics": {
+      "mode": "SYNC_REQUEST_RESPONSE"
+    },
+    "3_state_and_lifecycle": {
+      "persistence_model": "EPHEMERAL"
+    },
+    "4_idempotency_and_ordering": {
+      "strategy": "GENERATION_SEQUENCING"
+    },
+    "5_external_boundaries": {
+      "boundary_fixtures": ["contract-fixtures/api.json"]
+    }
+  }
+}

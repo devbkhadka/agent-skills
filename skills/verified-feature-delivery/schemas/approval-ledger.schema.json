@@ -1,0 +1,50 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ApprovalLedger",
+  "description": "Approval ledger storing milestone approval records pinned by content digests.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "feature_slug",
+    "approvals"
+  ],
+  "properties": {
+    "schema_version": { "type": "string" },
+    "feature_slug": { "type": "string" },
+    "approvals": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/ApprovalRecord"
+      }
+    }
+  },
+  "definitions": {
+    "ApprovalRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "milestone_id",
+        "artifact_path",
+        "approved_digest",
+        "digest_scope",
+        "status",
+        "decided_by",
+        "decided_at"
+      ],
+      "properties": {
+        "milestone_id": { "type": "string" },
+        "artifact_path": { "type": "string" },
+        "approved_digest": { "type": "string" },
+        "digest_scope": { "type": "string" },
+        "status": {
+          "type": "string",
+          "enum": ["APPROVED", "STALE"]
+        },
+        "decided_by": { "type": "string" },
+        "decided_at": { "type": "string" },
+        "notes": { "type": "string" }
+      }
+    }
+  }
+}

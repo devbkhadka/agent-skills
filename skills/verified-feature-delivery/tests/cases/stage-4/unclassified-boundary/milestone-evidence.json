@@ -1,0 +1,18 @@
+{
+  "schema_version": "1.0.0",
+  "feature_slug": "unclassified-boundary-test",
+  "rollback_evaluation": {
+    "cause": "UNCLASSIFIED_BOUNDARY",
+    "boundary": "React 19 StrictMode Effect Lifecycle",
+    "description": "Development double-invocation of useEffect on mount"
+  },
+  "milestones": [
+    {
+      "milestone_id": "M1_UI_RENDER",
+      "slice_id": "slice_1",
+      "verification_medium": "rendered_ui",
+      "status": "FAILED",
+      "exit_code": 1
+    }
+  ]
+}

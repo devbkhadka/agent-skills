@@ -1,0 +1,861 @@
+#!/usr/bin/env python3
+"""Stage 0 Exit Gate Validator: validate-lexicon.
+
+Owner: stage-0
+Purpose: Validates domain-lexicon.json for entity/value-object uniqueness, invariant naming,
+forbidden ambiguous synonyms, declared aliases, value authority models, and projection bindings.
+
+Exit Codes:
+- 0: Lexicon validated clean (prints LEXICON_VALIDATED_CLEAN)
+- Non-zero: Emits bare error code token on stderr/stdout
+
+Supported Error Codes:
+- EMPTY_OBSERVER_REGISTER
+- LEXICON_TOKEN_COLLISION
+- LEXICON_TOKEN_COLLISION_CROSS_REGISTER
+- MISSING_FACT_PRECEDENCE
+- MISSING_UNIT_PRECISION
+- MISSING_VALUE_AUTHORITY
+- UNBOUND_PROJECTION_QUANTITY
+- UNDECLARED_ALIAS
+- UNDEFINED_STATE_TOKEN
+"""
+
+import argparse
+import json
+import os
+from pathlib import Path
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from lib.primitives import collect_tokens, is_vacuous_container, is_reason_meaningful, check_closed_key_set
+
+
+def find_first_duplicate(items):
+    """Return the first duplicated element in items, or None."""
+    seen = set()
+    for item in items:
+        if item in seen:
+            return item
+        seen.add(item)
+    return None
+
+
+def validate_lexicon_dict(data, file_path=None):
+    """Validate a domain lexicon dictionary against Stage 0 exit-gate specifications.
+    
+    Returns (is_valid: bool, error_code: str or None, message: str).
+    """
+    if not isinstance(data, dict):
+        return False, "LEXICON_INVALID_SCHEMA", "Root must be a JSON object"
+
+    # Required top-level fields per Stage 0 spec
+    req_keys = [
+        "schema_version",
+        "feature_slug",
+        "bounded_context",
+        "entities",
+        "value_objects",
+        "state_enums",
+        "unit_precisions",
+        "actors_and_observers",
+        "alias_pairs",
+        "projection_bindings",
+        "value_authorities",
+        "fact_precedences",
+    ]
+    for k in req_keys:
+        if k not in data:
+            return False, "LEXICON_INVALID_SCHEMA", f"Missing required top-level key: {k}"
+
+    entities = data.get("entities", [])
+    value_objects = data.get("value_objects", [])
+    state_enums = data.get("state_enums", [])
+    monotonic_clocks = data.get("monotonic_clocks", [])
+    unit_precisions = data.get("unit_precisions", [])
+    actors_and_observers = data.get("actors_and_observers", {})
+    alias_pairs = data.get("alias_pairs", [])
+    projection_bindings = data.get("projection_bindings", [])
+    value_authorities = data.get("value_authorities", [])
+    fact_precedences = data.get("fact_precedences", [])
+    actions = data.get("actions", [])
+
+    # -------------------------------------------------------------
+    # 1. Check: LEXICON_TOKEN_COLLISION & LEXICON_TOKEN_COLLISION_CROSS_REGISTER
+    # -------------------------------------------------------------
+    # Duplicate entity names
+    entity_names = [e.get("name") for e in entities if isinstance(e, dict) and e.get("name")]
+    dup_ent = find_first_duplicate(entity_names)
+    if dup_ent:
+        return False, "LEXICON_TOKEN_COLLISION", f"Duplicate entity name: '{dup_ent}'"
+
+    # Duplicate value object names
+    vo_names = [v.get("name") for v in value_objects if isinstance(v, dict) and v.get("name")]
+    dup_vo = find_first_duplicate(vo_names)
+    if dup_vo:
+        return False, "LEXICON_TOKEN_COLLISION", f"Duplicate value object name: '{dup_vo}'"
+
+    # Duplicate action names
+    action_names = [a.get("name") for a in actions if isinstance(a, dict) and a.get("name")]
+    dup_act = find_first_duplicate(action_names)
+    if dup_act:
+        return False, "LEXICON_TOKEN_COLLISION", f"Duplicate action name: '{dup_act}'"
+
+    # Duplicate monotonic clock names
+    clock_names = [c.get("name") for c in monotonic_clocks if isinstance(c, dict) and c.get("name")]
+    dup_clock = find_first_duplicate(clock_names)
+    if dup_clock:
+        return False, "LEXICON_TOKEN_COLLISION", f"Duplicate monotonic clock name: '{dup_clock}'"
+
+    # Duplicate attribute names within any entity
+    for e in entities:
+        if isinstance(e, dict):
+            attrs = [a.get("name") for a in e.get("attributes", []) if isinstance(a, dict) and a.get("name")]
+            dup_attr = find_first_duplicate(attrs)
+            if dup_attr:
+                return False, "LEXICON_TOKEN_COLLISION", f"Duplicate attribute '{dup_attr}' in entity '{e.get('name')}'"
+
+    # Duplicate attribute names within any value object
+    for v in value_objects:
+        if isinstance(v, dict):
+            attrs = [a.get("name") for a in v.get("attributes", []) if isinstance(a, dict) and a.get("name")]
+            dup_attr = find_first_duplicate(attrs)
+            if dup_attr:
+                return False, "LEXICON_TOKEN_COLLISION", f"Duplicate attribute '{dup_attr}' in value object '{v.get('name')}'"
+
+    # Duplicate state enum names
+    enum_names = [se.get("name") for se in state_enums if isinstance(se, dict) and se.get("name")]
+    dup_enum = find_first_duplicate(enum_names)
+    if dup_enum:
+        return False, "LEXICON_TOKEN_COLLISION", f"Duplicate state enum name: '{dup_enum}'"
+
+    # Duplicate tokens within state enums
+    all_enum_tokens = []
+    for se in state_enums:
+        if isinstance(se, dict):
+            tokens = se.get("tokens", [])
+            dup_tok = find_first_duplicate(tokens)
+            if dup_tok:
+                return False, "LEXICON_TOKEN_COLLISION", f"Duplicate token '{dup_tok}' in state enum '{se.get('name')}'"
+            all_enum_tokens.extend([t for t in tokens if t])
+
+    dup_enum_tok = find_first_duplicate(all_enum_tokens)
+    if dup_enum_tok:
+        return False, "LEXICON_TOKEN_COLLISION", f"Duplicate state enum token '{dup_enum_tok}' across state enums"
+
+    # Duplicate unit precision IDs
+    up_ids = [up.get("id") for up in unit_precisions if isinstance(up, dict) and up.get("id")]
+    dup_up = find_first_duplicate(up_ids)
+    if dup_up:
+        return False, "LEXICON_TOKEN_COLLISION", f"Duplicate unit precision ID: '{dup_up}'"
+
+    # Duplicate projection IDs in projection bindings
+    proj_ids = [pb.get("projection_id") for pb in projection_bindings if isinstance(pb, dict) and pb.get("projection_id")]
+    dup_proj = find_first_duplicate(proj_ids)
+    if dup_proj:
+        return False, "LEXICON_TOKEN_COLLISION", f"Duplicate projection ID: '{dup_proj}'"
+
+    # Actors and Observers extraction & intra-register duplicate check
+    actors = []
+    observers = []
+    if isinstance(actors_and_observers, dict):
+        actors = actors_and_observers.get("actors", [])
+        observers = actors_and_observers.get("observers", [])
+    elif isinstance(data.get("observers"), list):
+        observers = data.get("observers")
+        actors = data.get("actors", [])
+
+    actor_ids = [a.get("id") for a in actors if isinstance(a, dict) and a.get("id")]
+    dup_actor = find_first_duplicate(actor_ids)
+    if dup_actor:
+        return False, "LEXICON_TOKEN_COLLISION", f"Duplicate actor ID: '{dup_actor}'"
+
+    observer_ids = [o.get("id") for o in observers if isinstance(o, dict) and o.get("id")]
+    dup_obs = find_first_duplicate(observer_ids)
+    if dup_obs:
+        return False, "LEXICON_TOKEN_COLLISION", f"Duplicate observer ID: '{dup_obs}'"
+
+    # Cross-register token collision check across ONE global namespace
+    # Registers: entities, value_objects, actions, state_enums, monotonic_clocks, actors, observers
+    # Note: Actors and observers may share an identity (e.g. OrgAdmin is both actor and observer),
+    # but collision between any other register pair is refused.
+    declared_registers = [
+        ("entities", set(entity_names)),
+        ("value_objects", set(vo_names)),
+        ("actions", set(action_names)),
+        ("state_enums", set(enum_names) | set(all_enum_tokens)),
+        ("monotonic_clocks", set(clock_names)),
+        ("actors", set(actor_ids)),
+        ("observers", set(observer_ids)),
+    ]
+
+    _, collisions = collect_tokens(
+        declared_registers,
+        allowed_overlaps={("actors", "observers")},
+    )
+    if collisions:
+        tok, reg1_name, reg2_name = collisions[0]
+        return (
+            False,
+            "LEXICON_TOKEN_COLLISION_CROSS_REGISTER",
+            f"Token collision across registers: '{tok}' declared in both '{reg1_name}' and '{reg2_name}'",
+        )
+
+    # -------------------------------------------------------------
+    # 2. Check: EMPTY_OBSERVER_REGISTER
+    # -------------------------------------------------------------
+    if not isinstance(observers, list) or len(observers) == 0:
+        return False, "EMPTY_OBSERVER_REGISTER", "Stage 0 exit gate requires a non-empty observer register in actors_and_observers.observers"
+
+    if not isinstance(actors, list) or len(actors) == 0:
+        return False, "EMPTY_OBSERVER_REGISTER", "Stage 0 exit gate requires registered actors in actors_and_observers.actors"
+
+    # -------------------------------------------------------------
+    # 3. Check: UNDEFINED_STATE_TOKEN
+    # -------------------------------------------------------------
+    enum_map = {}
+    for se in state_enums:
+        if isinstance(se, dict) and se.get("name"):
+            enum_map[se["name"]] = set(se.get("tokens", []))
+
+    all_defined_tokens = set().union(*enum_map.values()) if enum_map else set()
+
+    # Check terminal tokens in state enums
+    for se in state_enums:
+        if isinstance(se, dict):
+            enum_name = se.get("name")
+            valid_toks = enum_map.get(enum_name, set())
+            for tt in se.get("terminal_tokens", []):
+                if tt not in valid_toks:
+                    return False, "UNDEFINED_STATE_TOKEN", f"Terminal token '{tt}' in enum '{enum_name}' is not in defined tokens: {sorted(valid_toks)}"
+
+    # Check attributes in entities and value objects
+    for container_type, container_list in [("entity", entities), ("value object", value_objects)]:
+        for item in container_list:
+            if not isinstance(item, dict):
+                continue
+            item_name = item.get("name")
+            for attr in item.get("attributes", []):
+                if not isinstance(attr, dict):
+                    continue
+                attr_name = attr.get("name")
+                atype = attr.get("type")
+                enum_ref = attr.get("enum_ref")
+                if atype == "enum" or enum_ref:
+                    if not enum_ref or enum_ref not in enum_map:
+                        return False, "UNDEFINED_STATE_TOKEN", f"Attribute '{attr_name}' in {container_type} '{item_name}' references undefined enum '{enum_ref}'"
+                    default_val = attr.get("default")
+                    if default_val is not None and default_val not in enum_map[enum_ref]:
+                        return False, "UNDEFINED_STATE_TOKEN", f"Attribute '{attr_name}' default value '{default_val}' is not in enum '{enum_ref}' tokens"
+                    for val in attr.get("allowed_values", []):
+                        if val not in enum_map[enum_ref]:
+                            return False, "UNDEFINED_STATE_TOKEN", f"Attribute '{attr_name}' allowed value '{val}' is not in enum '{enum_ref}' tokens"
+
+    # Check actions (if present)
+    for act in actions:
+        if not isinstance(act, dict):
+            continue
+        act_name = act.get("name")
+        src = act.get("source_state")
+        if src:
+            src_list = src if isinstance(src, list) else [src]
+            for s in src_list:
+                if s not in all_defined_tokens:
+                    return False, "UNDEFINED_STATE_TOKEN", f"Action '{act_name}' source state '{s}' is not a defined state token"
+        tgt = act.get("target_state")
+        if tgt and tgt not in all_defined_tokens:
+            return False, "UNDEFINED_STATE_TOKEN", f"Action '{act_name}' target state '{tgt}' is not a defined state token"
+
+    # Check top-level terminal_states list
+    for tt in data.get("terminal_states", []):
+        if tt not in all_defined_tokens:
+            return False, "UNDEFINED_STATE_TOKEN", f"Terminal state '{tt}' is not in defined state tokens"
+
+    # -------------------------------------------------------------
+    # 4. Check: MISSING_UNIT_PRECISION
+    # -------------------------------------------------------------
+    NUMERIC_TYPES = {
+        "integer", "int", "int8", "int16", "int32", "int64", "int128", "int256",
+        "uint", "uint8", "uint16", "uint32", "uint64", "uint128", "uint256",
+        "number", "numeric", "float", "float32", "float64", "double", "decimal", "real", "bigint",
+        "currency", "timestamp", "duration", "cardinality", "quantity",
+    }
+
+    precision_map = {}
+    for up in unit_precisions:
+        if isinstance(up, dict) and up.get("id"):
+            precision_map[up["id"]] = up
+            # Check required fields
+            for rf in ["quantity_type", "base_unit", "numeric_type", "rounding_mode"]:
+                if not up.get(rf):
+                    return False, "MISSING_UNIT_PRECISION", f"Unit precision '{up['id']}' missing required field '{rf}'"
+
+    # Check entity and value object attributes
+    for container_type, container_list in [("entity", entities), ("value object", value_objects)]:
+        for item in container_list:
+            if not isinstance(item, dict):
+                continue
+            item_name = item.get("name")
+            for attr in item.get("attributes", []):
+                if not isinstance(attr, dict):
+                    continue
+                attr_name = attr.get("name")
+                unit_ref = attr.get("unit_ref")
+                atype = str(attr.get("type", "")).lower().strip()
+                is_numeric = atype in NUMERIC_TYPES or attr.get("is_quantity") is True
+                is_dimensionless = (
+                    attr.get("dimensionless") is True
+                    or attr.get("is_dimensionless") is True
+                    or unit_ref == "dimensionless"
+                )
+
+                if is_numeric:
+                    if not is_dimensionless:
+                        if unit_ref is None:
+                            return (
+                                False,
+                                "MISSING_UNIT_PRECISION",
+                                f"Numeric attribute '{attr_name}' in {container_type} '{item_name}' lacks explicit unit precision lock (dimensionless attributes must be explicitly annotated)",
+                            )
+                        if unit_ref not in precision_map:
+                            return (
+                                False,
+                                "MISSING_UNIT_PRECISION",
+                                f"Attribute '{attr_name}' in {container_type} '{item_name}' references undefined unit precision '{unit_ref}'",
+                            )
+                    else:
+                        if unit_ref is not None and unit_ref != "dimensionless" and unit_ref not in precision_map:
+                            return (
+                                False,
+                                "MISSING_UNIT_PRECISION",
+                                f"Attribute '{attr_name}' in {container_type} '{item_name}' references undefined unit precision '{unit_ref}'",
+                            )
+                else:
+                    if unit_ref is not None and unit_ref != "dimensionless":
+                        if unit_ref not in precision_map:
+                            return (
+                                False,
+                                "MISSING_UNIT_PRECISION",
+                                f"Attribute '{attr_name}' in {container_type} '{item_name}' references undefined unit precision '{unit_ref}'",
+                            )
+
+    # Check monotonic clocks
+    for clock in monotonic_clocks:
+        if isinstance(clock, dict):
+            clock_name = clock.get("name")
+            unit_ref = clock.get("unit_ref")
+            if not unit_ref or unit_ref not in precision_map:
+                return False, "MISSING_UNIT_PRECISION", f"Monotonic clock '{clock_name}' references undefined unit precision '{unit_ref}'"
+
+    # -------------------------------------------------------------
+    # 5. Check: UNDECLARED_ALIAS
+    # -------------------------------------------------------------
+    declared_alias_pairs = set()
+    for ap in alias_pairs:
+        if not isinstance(ap, dict):
+            continue
+        left_tok = ap.get("left", {}).get("token")
+        right_tok = ap.get("right", {}).get("token")
+        if left_tok and right_tok:
+            declared_alias_pairs.add((left_tok, right_tok))
+            declared_alias_pairs.add((right_tok, left_tok))
+
+    def has_declared_alias(tok_a, tok_b):
+        return (tok_a, tok_b) in declared_alias_pairs or tok_a == tok_b
+
+    # Check attributes across entities and value objects
+    for container_type, container_list in [("entity", entities), ("value object", value_objects)]:
+        for item in container_list:
+            if not isinstance(item, dict):
+                continue
+            item_name = item.get("name")
+            for attr in item.get("attributes", []):
+                if not isinstance(attr, dict):
+                    continue
+                attr_name = attr.get("name")
+                bt = attr.get("boundary_tokens")
+                if isinstance(bt, dict) and len(bt) > 1:
+                    tokens = list(bt.values())
+                    for i in range(len(tokens)):
+                        for j in range(i + 1, len(tokens)):
+                            t1, t2 = tokens[i], tokens[j]
+                            if t1 != t2 and not has_declared_alias(t1, t2):
+                                return False, "UNDECLARED_ALIAS", f"Undeclared alias pair between boundary tokens '{t1}' and '{t2}' for attribute '{attr_name}' in {container_type} '{item_name}'"
+
+                bm = attr.get("boundary_mappings")
+                if isinstance(bm, list) and len(bm) > 1:
+                    tokens = [m.get("token") for m in bm if isinstance(m, dict) and m.get("token")]
+                    for i in range(len(tokens)):
+                        for j in range(i + 1, len(tokens)):
+                            t1, t2 = tokens[i], tokens[j]
+                            if t1 != t2 and not has_declared_alias(t1, t2):
+                                return False, "UNDECLARED_ALIAS", f"Undeclared alias pair between '{t1}' and '{t2}' in attribute '{attr_name}'"
+
+    # -------------------------------------------------------------
+    # 6. Check: UNBOUND_PROJECTION_QUANTITY
+    # -------------------------------------------------------------
+    known_obs_ids = set(observer_ids)
+    bound_projection_identifiers = set()
+    bound_observers = set()
+
+    for pb in projection_bindings:
+        if not isinstance(pb, dict):
+            continue
+        pid = pb.get("projection_id")
+        ql = pb.get("quantity_or_label")
+        obs_id = pb.get("observer_id")
+        stype = pb.get("source_type")
+        sref = pb.get("source_reference")
+        dexpr = pb.get("derivation_expression")
+
+        if not pid:
+            return False, "UNBOUND_PROJECTION_QUANTITY", "Projection binding missing projection_id"
+        if not ql:
+            return False, "UNBOUND_PROJECTION_QUANTITY", f"Projection binding '{pid}' missing quantity_or_label"
+        if not obs_id or obs_id not in known_obs_ids:
+            return False, "UNBOUND_PROJECTION_QUANTITY", f"Projection binding '{pid}' references unknown observer '{obs_id}'"
+        if stype not in ["CONTRACT_FIELD", "PURE_EXPRESSION"]:
+            return False, "UNBOUND_PROJECTION_QUANTITY", f"Projection binding '{pid}' has invalid source_type '{stype}'; must be CONTRACT_FIELD or PURE_EXPRESSION"
+        if sref is None or str(sref).strip() == "":
+            return False, "UNBOUND_PROJECTION_QUANTITY", f"Projection binding '{pid}' missing source_reference"
+        if dexpr is None or str(dexpr).strip() == "":
+            return False, "UNBOUND_PROJECTION_QUANTITY", f"Projection binding '{pid}' missing derivation_expression"
+
+        bound_projection_identifiers.add(pid)
+        bound_projection_identifiers.add(ql)
+        bound_observers.add(obs_id)
+
+    # Check that every registered observer perceives at least one projection
+    for obs in observers:
+        if not isinstance(obs, dict):
+            continue
+        obs_id = obs.get("id")
+        if not obs_id:
+            continue
+        if obs_id not in bound_observers:
+            return (
+                False,
+                "UNBOUND_PROJECTION_QUANTITY",
+                f"Observer '{obs_id}' has zero projection bindings in projection_bindings; every registered observer must perceive at least one projection",
+            )
+
+        # Check explicitly listed observable quantities / facts / projections
+        quants = obs.get("observable_quantities", []) + obs.get("observable_facts", []) + obs.get("projections", [])
+        for q in quants:
+            qname = q if isinstance(q, str) else q.get("name") or q.get("projection_id") or q.get("quantity_or_label")
+            if qname and qname not in bound_projection_identifiers:
+                return False, "UNBOUND_PROJECTION_QUANTITY", f"Observable quantity '{qname}' for observer '{obs_id}' is not bound in projection_bindings"
+
+    # Check entity and value object attributes marked as observable/projection
+    for container_type, container_list in [("entity", entities), ("value object", value_objects)]:
+        for item in container_list:
+            if not isinstance(item, dict):
+                continue
+            item_name = item.get("name")
+            for attr in item.get("attributes", []):
+                if not isinstance(attr, dict):
+                    continue
+                if attr.get("observable") or attr.get("observer_facing") or attr.get("is_projection"):
+                    target_key = attr.get("projection_id") or attr.get("name")
+                    if target_key not in bound_projection_identifiers:
+                        return False, "UNBOUND_PROJECTION_QUANTITY", f"Observer-facing attribute '{attr.get('name')}' in {container_type} '{item_name}' is not bound in projection_bindings"
+
+    # Check top-level observable_quantities
+    for q in data.get("observable_quantities", []) + data.get("observable_facts", []):
+        qname = q if isinstance(q, str) else q.get("name") or q.get("projection_id") or q.get("quantity_or_label")
+        if qname and qname not in bound_projection_identifiers:
+            return False, "UNBOUND_PROJECTION_QUANTITY", f"Observable quantity '{qname}' is not bound in projection_bindings"
+
+    # -------------------------------------------------------------
+    # 7. Check: MISSING_VALUE_AUTHORITY
+    # -------------------------------------------------------------
+    declared_authorities = {}
+    for va in value_authorities:
+        if not isinstance(va, dict):
+            continue
+        vname = va.get("value_name")
+        model = va.get("authority_model")
+        if not vname:
+            return False, "MISSING_VALUE_AUTHORITY", f"Value authority entry missing value_name: {va}"
+        if model not in ["UPSTREAM_AUTHORITATIVE", "LOCAL_AUTHORITATIVE", "SHADOW_RECONCILED"]:
+            return False, "MISSING_VALUE_AUTHORITY", f"Value authority '{vname}' has invalid authority_model '{model}'"
+        if model == "SHADOW_RECONCILED":
+            eps = va.get("tolerance_epsilon")
+            if eps is None or str(eps).strip() == "":
+                return False, "MISSING_VALUE_AUTHORITY", f"Value authority '{vname}' with SHADOW_RECONCILED requires non-null tolerance_epsilon"
+        declared_authorities[vname] = va
+
+    # Check dual-computed values declared across the lexicon
+    for item in data.get("dual_computed_values", []):
+        vname = item if isinstance(item, str) else item.get("value_name") or item.get("name")
+        if vname and vname not in declared_authorities:
+            return False, "MISSING_VALUE_AUTHORITY", f"Dual-computed value '{vname}' missing authority model declaration in value_authorities"
+
+    for container_type, container_list in [("entity", entities), ("value object", value_objects)]:
+        for item in container_list:
+            if not isinstance(item, dict):
+                continue
+            item_name = item.get("name")
+            if item.get("dual_computed") or item.get("dual_boundary_computation"):
+                if item_name not in declared_authorities:
+                    return False, "MISSING_VALUE_AUTHORITY", f"Dual-computed {container_type} '{item_name}' missing entry in value_authorities"
+            for attr in item.get("attributes", []):
+                if not isinstance(attr, dict):
+                    continue
+                if attr.get("dual_computed") or attr.get("dual_boundary_computation"):
+                    attr_target = attr.get("value_name") or attr.get("name")
+                    if attr_target not in declared_authorities:
+                        return False, "MISSING_VALUE_AUTHORITY", f"Dual-computed attribute '{attr.get('name')}' in {container_type} '{item_name}' missing entry in value_authorities"
+
+    # -------------------------------------------------------------
+    # 8. Check: MISSING_FACT_PRECEDENCE
+    # -------------------------------------------------------------
+    declared_fact_precedences = {}
+    for fp in fact_precedences:
+        if not isinstance(fp, dict):
+            continue
+        fname = fp.get("fact_name")
+        pri = fp.get("primary_boundary")
+        sec = fp.get("secondary_boundary")
+        rule = fp.get("precedence_rule")
+        recon = fp.get("reconciliation_check")
+        if not fname:
+            return False, "MISSING_FACT_PRECEDENCE", f"Fact precedence missing fact_name: {fp}"
+        if not pri or not sec:
+            return False, "MISSING_FACT_PRECEDENCE", f"Fact precedence '{fname}' missing primary_boundary or secondary_boundary"
+        if not rule or str(rule).strip() == "":
+            return False, "MISSING_FACT_PRECEDENCE", f"Fact precedence '{fname}' missing precedence_rule"
+        if not recon or str(recon).strip() == "":
+            return False, "MISSING_FACT_PRECEDENCE", f"Fact precedence '{fname}' missing reconciliation_check"
+        declared_fact_precedences[fname] = fp
+
+    # Check dual-boundary facts declared across the lexicon
+    for item in data.get("dual_boundary_facts", []):
+        fname = item if isinstance(item, str) else item.get("fact_name") or item.get("name")
+        if fname and fname not in declared_fact_precedences:
+            return False, "MISSING_FACT_PRECEDENCE", f"Dual-boundary fact '{fname}' missing precedence declaration in fact_precedences"
+
+    for container_type, container_list in [("entity", entities), ("value object", value_objects)]:
+        for item in container_list:
+            if not isinstance(item, dict):
+                continue
+            item_name = item.get("name")
+            if item.get("dual_boundary"):
+                if item_name not in declared_fact_precedences:
+                    return False, "MISSING_FACT_PRECEDENCE", f"Dual-boundary {container_type} '{item_name}' missing entry in fact_precedences"
+            for attr in item.get("attributes", []):
+                if not isinstance(attr, dict):
+                    continue
+                if attr.get("dual_boundary"):
+                    attr_target = attr.get("fact_name") or attr.get("name")
+                    if attr_target not in declared_fact_precedences:
+                        return False, "MISSING_FACT_PRECEDENCE", f"Dual-boundary attribute '{attr.get('name')}' in {container_type} '{item_name}' missing entry in fact_precedences"
+
+    # -------------------------------------------------------------
+    # 9. Round 2 Checks: Provenance, Repo Reference, Visibility, Summaries,
+    #    Relationships, Boundaries, and Simulated Dependencies
+    # -------------------------------------------------------------
+    ALLOWED_PROVENANCE = {"BORROWED_FROM_REPO", "FEATURE_INTRODUCED"}
+    ALLOWED_VISIBILITY = {"INCLUDE", "ASSUMED_COMMON"}
+
+    entity_names_set = set(entity_names)
+
+    # Collect all terms across vocabularies
+    # Tuple of (term_name, term_dict, category)
+    all_terms = []
+    for e in entities:
+        if isinstance(e, dict):
+            all_terms.append((e.get("name"), e, "Entity"))
+    for v in value_objects:
+        if isinstance(v, dict):
+            all_terms.append((v.get("name"), v, "ValueObject"))
+    for a in actions:
+        if isinstance(a, dict):
+            all_terms.append((a.get("name"), a, "Action"))
+    for s in state_enums:
+        if isinstance(s, dict):
+            all_terms.append((s.get("name"), s, "StateEnum"))
+    for act in actors:
+        if isinstance(act, dict):
+            all_terms.append((act.get("id"), act, "Actor"))
+    for obs in observers:
+        if isinstance(obs, dict):
+            all_terms.append((obs.get("id"), obs, "Observer"))
+
+    # Search for companion scenario matrix to discover references from flows / steps / transitions
+    companion_references = set()
+    for a in actions:
+        if isinstance(a, dict):
+            if a.get("target_entity"):
+                companion_references.add(a["target_entity"])
+            if a.get("actor_ref"):
+                companion_references.add(a["actor_ref"])
+            src = a.get("source_state")
+            if isinstance(src, list):
+                companion_references.update(src)
+            elif src:
+                companion_references.add(src)
+            if a.get("target_state"):
+                companion_references.add(a["target_state"])
+
+    for rel in data.get("entity_relationships", []):
+        if isinstance(rel, dict):
+            if rel.get("from_entity"):
+                companion_references.add(rel["from_entity"])
+            if rel.get("to_entity"):
+                companion_references.add(rel["to_entity"])
+
+    # If file_path or search locations have companion matrix
+    search_dirs = []
+    if file_path:
+        p = Path(file_path).resolve()
+        if p.is_file():
+            search_dirs.append(p.parent)
+            if p.parent.parent.is_dir():
+                search_dirs.append(p.parent.parent)
+
+    feature_slug = data.get("feature_slug")
+    if feature_slug:
+        cwd = Path.cwd()
+        search_dirs.append(cwd / ".verified-feature-delivery" / feature_slug)
+        search_dirs.append(cwd / feature_slug)
+    search_dirs.append(Path.cwd())
+
+    for sdir in search_dirs:
+        if not sdir.is_dir():
+            continue
+        for fname in ["scenario-matrix.json", "flow-simulation-matrix.json"]:
+            cand = sdir / fname
+            if cand.is_file():
+                try:
+                    with open(cand, "r", encoding="utf-8") as f:
+                        mdata = json.load(f)
+                    if isinstance(mdata, dict):
+                        for flow in mdata.get("flows", []):
+                            if isinstance(flow, dict):
+                                if flow.get("actor_id"):
+                                    companion_references.add(flow["actor_id"])
+                                for st in flow.get("steps", []):
+                                    if isinstance(st, dict):
+                                        if st.get("action"):
+                                            companion_references.add(st["action"])
+                                        if st.get("actor_id"):
+                                            companion_references.add(st["actor_id"])
+                                        if st.get("transition_ref"):
+                                            companion_references.add(st["transition_ref"])
+                        for tr in mdata.get("transitions", []):
+                            if isinstance(tr, dict):
+                                if tr.get("from_state"):
+                                    companion_references.add(tr["from_state"])
+                                if tr.get("to_state"):
+                                    companion_references.add(tr["to_state"])
+                                if tr.get("trigger_ref"):
+                                    companion_references.add(tr["trigger_ref"])
+                                if tr.get("transition_id"):
+                                    companion_references.add(tr["transition_id"])
+                except Exception:
+                    pass
+
+    for tname, term, category in all_terms:
+        # Check Provenance
+        prov = term.get("provenance")
+        if prov is None:
+            return False, "MISSING_PROVENANCE", f"{category} '{tname}' missing provenance declaration"
+        if prov not in ALLOWED_PROVENANCE:
+            return False, "INVALID_PROVENANCE", f"{category} '{tname}' has invalid provenance '{prov}'; allowed values are {sorted(list(ALLOWED_PROVENANCE))}"
+
+        # If BORROWED_FROM_REPO, check repo_reference
+        if prov == "BORROWED_FROM_REPO":
+            repo_ref = term.get("repo_reference")
+            if not isinstance(repo_ref, dict):
+                return False, "BORROWED_WITHOUT_REPO_REFERENCE", f"BORROWED_FROM_REPO {category} '{tname}' missing repo_reference object"
+            rpath = repo_ref.get("path")
+            rsymbol = repo_ref.get("symbol")
+            if not rpath or not rsymbol or is_vacuous_container(rpath) or is_vacuous_container(rsymbol):
+                return False, "BORROWED_WITHOUT_REPO_REFERENCE", f"BORROWED_FROM_REPO {category} '{tname}' repo_reference requires path and symbol"
+            # Verify path on disk
+            found_path = False
+            cand_paths = [Path(rpath), Path.cwd() / rpath]
+            if file_path:
+                cand_paths.append(Path(file_path).parent / rpath)
+                cand_paths.append(Path(file_path).parent.parent / rpath)
+            for cp in cand_paths:
+                if cp.exists():
+                    found_path = True
+                    break
+            if not found_path:
+                return False, "BORROWED_WITHOUT_REPO_REFERENCE", f"BORROWED_FROM_REPO {category} '{tname}' repo_reference path '{rpath}' does not exist on disk"
+
+        # Check Glossary Visibility
+        gvis = term.get("glossary_visibility")
+        if gvis is None:
+            return False, "MISSING_GLOSSARY_VISIBILITY", f"{category} '{tname}' missing glossary_visibility"
+        if gvis not in ALLOWED_VISIBILITY:
+            return False, "MISSING_GLOSSARY_VISIBILITY", f"{category} '{tname}' has invalid glossary_visibility '{gvis}'"
+
+        if prov == "FEATURE_INTRODUCED" and gvis == "ASSUMED_COMMON":
+            return False, "FEATURE_TERM_ASSUMED_COMMON", f"FEATURE_INTRODUCED {category} '{tname}' cannot be ASSUMED_COMMON"
+
+        if gvis == "ASSUMED_COMMON":
+            if tname in companion_references:
+                return False, "COMMON_TERM_IN_USE", f"ASSUMED_COMMON term '{tname}' is referenced in actions, relationships, transitions, or flow steps; must be INCLUDE"
+
+        # Check Plain Language Summary for all glossary-included terms
+        if gvis == "INCLUDE" or category in ["Entity", "Action"]:
+            pls = term.get("plain_language_summary")
+            if not pls or not isinstance(pls, str) or is_vacuous_container(pls):
+                return False, "MISSING_PLAIN_LANGUAGE_SUMMARY", f"{category} '{tname}' missing plain_language_summary"
+
+    # Check entity_relationships
+    for rel in data.get("entity_relationships", []):
+        if isinstance(rel, dict):
+            from_e = rel.get("from_entity")
+            to_e = rel.get("to_entity")
+            if from_e not in entity_names_set:
+                return False, "UNKNOWN_ENTITY_IN_RELATIONSHIP", f"entity_relationships from_entity '{from_e}' is not declared in entities[]"
+            if to_e not in entity_names_set:
+                return False, "UNKNOWN_ENTITY_IN_RELATIONSHIP", f"entity_relationships to_entity '{to_e}' is not declared in entities[]"
+
+    # Check entity_boundaries
+    boundaries = data.get("entity_boundaries", [])
+    if entities:
+        if not boundaries:
+            return False, "ENTITY_OUTSIDE_EVERY_BOUNDARY", "Entities exist but entity_boundaries is empty"
+        covered_entities = set()
+        boundary_ids = set()
+        for b in boundaries:
+            if isinstance(b, dict):
+                bid = b.get("boundary_id")
+                if bid:
+                    boundary_ids.add(bid)
+                for ent in b.get("entities", []):
+                    covered_entities.add(ent)
+
+        for e in entities:
+            ename = e.get("name") if isinstance(e, dict) else None
+            if ename and ename not in covered_entities:
+                return False, "ENTITY_OUTSIDE_EVERY_BOUNDARY", f"Entity '{ename}' is not contained in any declared boundary in entity_boundaries"
+
+        # Check interfaces in boundaries
+        for b in boundaries:
+            if isinstance(b, dict):
+                bid = b.get("boundary_id", "unnamed")
+                for iface in b.get("interfaces", []):
+                    if isinstance(iface, dict):
+                        peer = iface.get("peer")
+                        cref = iface.get("contract_ref")
+                        if not peer or is_vacuous_container(peer) or not cref or is_vacuous_container(cref):
+                            return False, "BOUNDARY_INTERFACE_UNBOUND", f"Interface in boundary '{bid}' missing valid peer or contract_ref"
+                        if peer not in boundary_ids and peer not in ["EXTERNAL", "CLIENT", "GATEWAY", "UPSTREAM", "DOWNSTREAM"]:
+                            return False, "BOUNDARY_INTERFACE_UNBOUND", f"Interface peer '{peer}' in boundary '{bid}' does not resolve to a declared boundary"
+
+    # Check simulated_dependencies
+    for sim in data.get("simulated_dependencies", []):
+        if isinstance(sim, dict):
+            fref = sim.get("fixture_ref")
+            if not fref or is_vacuous_container(fref):
+                return False, "SIMULATION_WITHOUT_FIXTURE_REF", f"Simulated dependency for boundary class '{sim.get('boundary_class')}' missing fixture_ref"
+
+    return True, None, "LEXICON_VALIDATED_CLEAN"
+
+
+def resolve_file_path(path_str, feature_slug=None, dir_override=None, root_override=None):
+    """Resolve target lexicon file path robustly."""
+    if path_str:
+        p = Path(path_str)
+        if p.is_file():
+            return p.resolve()
+
+        # Try relative to cwd
+        p_cwd = Path.cwd() / path_str
+        if p_cwd.is_file():
+            return p_cwd.resolve()
+
+        # Try relative to script root
+        script_dir = Path(__file__).resolve().parent
+        skill_root = script_dir.parent
+        p_skill = skill_root / path_str
+        if p_skill.is_file():
+            return p_skill.resolve()
+
+        # Try stripping skills/verified-feature-delivery if cwd is already skill dir
+        if path_str.startswith("skills/verified-feature-delivery/"):
+            stripped = path_str[len("skills/verified-feature-delivery/"):]
+            if (skill_root / stripped).is_file():
+                return (skill_root / stripped).resolve()
+            if (Path.cwd() / stripped).is_file():
+                return (Path.cwd() / stripped).resolve()
+
+        return p_cwd
+
+    if dir_override:
+        p = Path(dir_override) / "domain-lexicon.json"
+        return p.resolve()
+
+    if feature_slug:
+        root = Path(root_override).resolve() if root_override else Path.cwd()
+        candidate = root / ".verified-feature-delivery" / feature_slug / "domain-lexicon.json"
+        if candidate.is_file():
+            return candidate.resolve()
+        candidate2 = root / feature_slug / "domain-lexicon.json"
+        if candidate2.is_file():
+            return candidate2.resolve()
+        return candidate
+
+    candidate_default = Path.cwd() / "domain-lexicon.json"
+    return candidate_default
+
+
+def build_parser():
+    parser = argparse.ArgumentParser(
+        description="Verified Feature Delivery - Stage 0 Domain Lexicon Validator",
+        prog="validate-lexicon",
+    )
+    parser.add_argument("path", nargs="?", help="Path to domain-lexicon.json")
+    parser.add_argument("--file", "-f", help="Explicit path to domain-lexicon.json")
+    parser.add_argument("--feature", "-s", help="Feature slug")
+    parser.add_argument("--dir", "-d", help="Feature plan directory")
+    parser.add_argument("--root", help="Target project root directory")
+    return parser
+
+
+def main():
+    parser = build_parser()
+    args = parser.parse_args()
+
+    target_path_str = args.file or args.path
+    resolved_path = resolve_file_path(target_path_str, args.feature, args.dir, args.root)
+
+    if not resolved_path or not resolved_path.is_file():
+        sys.stderr.write(f"File not found: {resolved_path}\n")
+        print("MISSING_GATE_ARTIFACT")
+        return 1
+
+    try:
+        with open(resolved_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except json.JSONDecodeError as e:
+        sys.stderr.write(f"Invalid JSON in {resolved_path}: {e}\n")
+        print("LEXICON_TOKEN_COLLISION")
+        return 1
+    except Exception as e:
+        sys.stderr.write(f"Error reading {resolved_path}: {e}\n")
+        return 1
+
+    is_valid, error_code, msg = validate_lexicon_dict(data, resolved_path)
+
+    if is_valid:
+        feature_slug = data.get("feature_slug", "unknown")
+        bounded_context = data.get("bounded_context", "default")
+        print(f"LEXICON_VALIDATED_CLEAN: {feature_slug} ({bounded_context})")
+        return 0
+    else:
+        # Print bare error token to stdout
+        print(error_code)
+        sys.stderr.write(f"{error_code}: {msg}\n")
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

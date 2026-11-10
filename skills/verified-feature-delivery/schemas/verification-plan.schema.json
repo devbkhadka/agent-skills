@@ -1,0 +1,129 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "VerificationPlan",
+  "description": "Structured, deterministic risk- and impact-based verification plan defining 3-tier execution selection, skipped check audits, and conservative escalation triggers.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "feature_slug",
+    "escalation_tier",
+    "selected_checks",
+    "skipped_checks",
+    "diff_files",
+    "warnings",
+    "mandatory_gatekeeper",
+    "generated_at"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "description": "Semantic schema version string (e.g. 1.0.0)"
+    },
+    "feature_slug": {
+      "type": "string",
+      "description": "Unique slug identifier for the feature under plan"
+    },
+    "slice_id": {
+      "type": ["string", "null"],
+      "description": "Target vertical slice identifier if scoped to a slice"
+    },
+    "phase": {
+      "type": ["string", "null"],
+      "description": "Current lifecycle phase identifier"
+    },
+    "escalation_tier": {
+      "type": "string",
+      "enum": ["TIER_1", "TIER_2", "TIER_3"],
+      "description": "Determined execution tier: TIER_1 (Slice-Local), TIER_2 (Affected-Feature), or TIER_3 (Full-Suite & Gatekeeper)"
+    },
+    "diff_files": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Array of modified file paths evaluated against the trigger matrix"
+    },
+    "selected_checks": {
+      "type": "array",
+      "description": "Array of verification checks and commands selected for execution",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["command", "rationale", "rationale_token", "category"],
+        "properties": {
+          "command": {
+            "type": "string",
+            "description": "Executable shell command or test invocation"
+          },
+          "rationale": {
+            "type": "string",
+            "description": "Substantive rationale explaining why this check is required"
+          },
+          "rationale_token": {
+            "type": "string",
+            "description": "Classification token for the check rationale"
+          },
+          "category": {
+            "type": "string",
+            "enum": [
+              "unit_test",
+              "bdd_scenario",
+              "linter",
+              "render_check",
+              "browser_snapshot",
+              "stage_validator",
+              "projection_verifier",
+              "regression_suite",
+              "adversarial_check",
+              "ui_observation",
+              "gatekeeper"
+            ],
+            "description": "Functional category of the verification check"
+          }
+        }
+      }
+    },
+    "skipped_checks": {
+      "type": "array",
+      "description": "Audit array of skipped check suites with mandatory rule citations and substantive justification",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["suite_name", "reason_code", "reason_description"],
+        "properties": {
+          "suite_name": {
+            "type": "string",
+            "description": "Name or identifier of the bypassed test suite"
+          },
+          "reason_code": {
+            "type": "string",
+            "enum": [
+              "SKIP_UI_ONLY",
+              "SKIP_SLICE_LOCAL_SUFFICIENT",
+              "SKIP_FEATURE_SCOPED",
+              "SKIP_NON_OBSERVABLE",
+              "SKIP_NOT_APPLICABLE"
+            ],
+            "description": "Standardized reason code citing the bypass rule"
+          },
+          "reason_description": {
+            "type": "string",
+            "description": "Substantive justification prose explaining why bypassing is safe and compliant with policy"
+          }
+        }
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Array of warnings emitted during evaluation (e.g. unmapped diff conservative escalation warnings)"
+    },
+    "mandatory_gatekeeper": {
+      "type": "boolean",
+      "description": "Whether Tier 3 execution is mandatory due to Stage 5 delivery exit gating"
+    },
+    "generated_at": {
+      "type": "string",
+      "description": "ISO-8601 UTC timestamp of plan generation"
+    }
+  }
+}

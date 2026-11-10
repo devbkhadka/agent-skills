@@ -1,0 +1,17 @@
+{
+  "schema_version": "1.0.0",
+  "feature_slug": "self-approved-milestone",
+  "approvals": [
+    {
+      "milestone_id": "UI_LAYOUT",
+      "slice_id": "SLICE_1_CORE_TIMELOG_VIEW",
+      "artifact_path": "execution-dag.json",
+      "approved_digest": "0caff07774e6f1f5fc2ba788765de687457764e5d9326ffe39a2aeea6dae2665",
+      "digest_scope": "ui_layout",
+      "status": "APPROVED",
+      "decided_by": "devkhadka",
+      "decided_at": "2026-08-23T12:00:00Z",
+      "notes": "UI layout for Slice 1 self-approved by agent without external corroboration"
+    }
+  ]
+}

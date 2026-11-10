@@ -1,0 +1,113 @@
+---
+name: agent-desk
+description: Report progress to the user and get decisions from them through the Agent Desk page with the `agent-desk` shell CLI. Use at the start of every coding task (start a Session), to post a one-line Update at each milestone, and to raise an Ask (a question, or a risk before anything destructive or irreversible) instead of guessing; the call waits for the user's Reply. Works the same from Claude Code, Codex and AGY.
+---
+
+# Agent Desk
+
+The user watches every agent on one local page (`http://127.0.0.1:4318`). You talk to it only
+through the `agent-desk` shell command. It never prompts: it prints one plain-text block to stdout
+and exits with a code that tells you what to do next.
+
+Words have one meaning here: a **Workstream** is the unit of work (usually `<repo>:<branch>`), a
+**Session** is your run, an **Update** is a one-line progress note, an **Ask** is something that needs
+the user (kind `question` or `risk`), a **Reply** is the user's response (`answer` or `clarify`), and a
+**Detail** is text you add to the same Ask after a `clarify`.
+
+## Commands
+
+```bash
+agent-desk start --agent claude|codex|agy --title "short title of the task" [--workstream NAME]
+agent-desk update "one-line status" [--body TEXT]
+agent-desk ask "question" [--risk] [--choices a,b,c] [--no-wait]
+agent-desk detail <ask-id> "more detail"
+agent-desk wait <ask-id>
+agent-desk inbox
+agent-desk withdraw <ask-id...>
+agent-desk withdraw --all
+agent-desk end [--summary TEXT]
+```
+
+Every command except `start` also takes `--session ID`.
+
+## 1. Start a Session
+
+Run `agent-desk start` once, before any other call. Pass `--agent` for the harness you are in. On
+`main`/`master` or outside git, pass `--workstream <short-name>` from your task; otherwise the
+Workstream is `<repo>:<branch>`.
+
+`start` prints the Session id (`ses_<n>`), then the Workstream line, then any **open Asks left by
+earlier Sessions** of this Workstream (`ask_<n> (kind): text`). Any Session of the Workstream may
+pick one up: run `agent-desk wait <ask-id>` when its answer matters to your task, or
+`agent-desk withdraw <ask-id>` when it is no longer needed.
+
+**Which Session a call speaks for:** `--session ID` > `$AGENT_DESK_SESSION` > the agent's own session
+id variable (`CLAUDE_CODE_SESSION_ID`, `CODEX_THREAD_ID`, `ANTIGRAVITY_CONVERSATION_ID`), which
+`start` maps to your Session. So later calls normally need no flag. If `start` prints
+`No agent session id in this shell: pass --session ses_<n> ...`, pass `--session ses_<n>` on every
+later call: `export` does not survive between your shell calls.
+
+## 2. Post an Update
+
+`agent-desk update "Tests green; starting the migration"`: one line, at each milestone (phase
+started or done, blocker hit, work handed off). Put longer text in `--body`. An Update never gets
+a Reply. Don't wait after it.
+
+## 3. Raise an Ask
+
+Ask instead of guessing when only the user can decide and the choice changes the outcome:
+
+- `agent-desk ask "JWT or session cookies?" --choices jwt,cookies` for a **question**.
+- `agent-desk ask --risk "Dropping table orders_old deletes 2 GB of data. Go ahead?"` before anything
+  destructive or irreversible, or when you find a **risk** the user must know about. The user can
+  answer a risk with **Accept**, **Stop** or free text.
+
+The call waits for the Reply (up to 9 minutes) and then exits. Act on its exit code:
+
+| Exit | Meaning | Next step |
+| :-- | :-- | :-- |
+| `0` | answered | stdout is the answer. Act on it. (`start`, `update`, `inbox`, `withdraw`, `end` and `ask --no-wait` also exit 0 on success.) |
+| `1` | error | Read the message. `Unknown session` → run `agent-desk start` (or pass `--session`). Server not reachable → tell the user the desk is down and carry on without it; do not retry in a loop. `a newer agent-desk wait <ask-id> took over this wait` → another call now holds that Ask; do not re-run this one. |
+| `2` | timed out, still waiting | The Ask stays open. Run `agent-desk wait <ask-id>` again right away (the id is in the message). Never re-ask the same thing. |
+| `3` | clarify | stdout is the user's clarify text. Answer it on the same Ask: `agent-desk detail <ask-id> "..."`, which waits again. Loop on its exit code. |
+| `4` | withdrawn or closed | The Ask was withdrawn, or the user closed its Workstream. No answer is coming. Don't re-ask; continue without it or stop that line of work. |
+
+## 4. Long-running commands, per agent
+
+`ask`, `wait` and `detail` block for up to 9 minutes (540 s), below every agent's shell limit.
+
+- **Claude Code:** run them with the Bash tool parameter `timeout: 600000`. Without it the Bash tool
+  moves the command to the background after 120 s; you are then notified when it completes, and you
+  read the stdout and exit code from that notice.
+- **Codex:** `exec_command` yields while the command runs. Keep polling the same process (empty
+  `write_stdin`, `yield_time_ms` up to 300000) until it exits, then read stdout and the exit code. Do
+  not start a second `wait` for the same Ask meanwhile: it takes over and the first exits 1.
+- **AGY:** `run_command` goes to the background. Do other work or end the turn; you are notified
+  when the task completes. Read stdout and the exit code from the completion notice or task log.
+  Headless AGY (`agy -p`) needs a persisted allow rule for the `agent-desk` command.
+
+**Long waits.** If you have other useful work, raise the Ask with `--no-wait`: it prints the
+`ask-id` and exits 0 at once. Carry on, then run `agent-desk inbox` (or `agent-desk wait <ask-id>`)
+later. `inbox` prints every answer in your Workstream not yet received, whichever Session raised the
+Ask, and marks each received.
+
+## 5. Withdraw Asks you no longer need
+
+- `agent-desk withdraw ask_3 ask_4` withdraws those Asks.
+- `agent-desk withdraw --all` withdraws every open Ask in your Workstream. Use it only when the user
+  asks for it.
+
+It prints `Withdrawn: <ids>` and one `Skipped <id> (<status>)` line per Ask that was already
+answered, received or withdrawn, and exits 0. Any call still waiting on a withdrawn Ask exits 4.
+
+## 6. End the Session
+
+`agent-desk end --summary "Migrated orders; 2 follow-ups in PR"` when your task is done. Open Asks
+stay open on the desk for a later Session to `wait` on or `withdraw`. Later calls for an ended
+Session exit 1; `agent-desk start` makes a new one.
+
+## Setup (once per machine)
+
+- Server and CLI live in `~/projects/tools/agent-desk`: `npm run build`, `npm start` (port 4318;
+  `AGENT_DESK_PORT`, `AGENT_DESK_DB`), and `npm link` to put `agent-desk` on `PATH`.
+- A desk on another address: set `AGENT_DESK_URL` for the CLI.

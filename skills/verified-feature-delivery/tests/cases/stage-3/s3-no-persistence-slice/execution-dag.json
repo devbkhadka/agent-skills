@@ -1,0 +1,37 @@
+{
+  "schema_version": "1.0.0",
+  "feature_slug": "no-persistence-feature",
+  "bootstrap_floor": ["src/main.ts"],
+  "pure_modules": ["src/core/evaluator.ts"],
+  "slices": [
+    {
+      "slice_id": "slice_pure_evaluator",
+      "name": "Slice Pure Evaluator",
+      "dependencies": [],
+      "slice_level": "FLOW",
+      "user_visible_outcome": "Evaluates pure expression and outputs result",
+      "legs": {
+        "trigger": {
+          "type": "CLI_ARGS",
+          "description": "User invokes CLI with expression"
+        },
+        "core_pure_logic": {
+          "pure_module_files": ["src/core/evaluator.ts"],
+          "assertable_without_rendering": true
+        },
+        "adapter_persistence": {
+          "optional_leg_present": false
+        },
+        "output_verification": {
+          "verification_medium": "process_exit",
+          "verification_script": "tests/slices/slice_eval_verify.sh"
+        }
+      },
+      "files_touched": [
+        "src/main.ts",
+        "src/core/evaluator.ts",
+        "tests/slices/slice_eval_verify.sh"
+      ]
+    }
+  ]
+}

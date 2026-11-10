@@ -1,0 +1,223 @@
+#!/usr/bin/env python3
+"""Records a human milestone approval as a recomputed content digest.
+
+Improvement plan §5.1 / design rule R3: an approval is a digest over the exact
+artifact content a human approved, not a stored flag. This executable is
+deliberately separate from bin/planner-state -- the agent that advances the
+pipeline must not also be the agent that approves it, and the state machine's
+`advance` command refuses to leave an awaiting-approval state on its own.
+
+record-approval only writes the ledger record. It does not touch state.json;
+bin/planner-state advance is the only place that recomputes the digest at the
+point of use and decides whether the awaiting-approval gate may be left.
+"""
+
+from datetime import datetime, timezone
+import argparse
+import hashlib
+import json
+import sys
+from pathlib import Path
+
+# Kept in step with the identical table in bin/planner-state. Both scripts
+# read this from the same lease and are small enough that the duplication is
+# cheaper than a shared import across two independently-invoked executables.
+MILESTONES = {
+    "FLOW_SIMULATION": {
+        "awaiting_state": "AWAITING_FLOW_SIMULATION_APPROVAL",
+        "artifact_path": "flow-simulation-matrix.json",
+        "digest_scope": ["flows", "flow_groups", "states", "transitions"],
+    },
+    "ENTITY_BOUNDARIES": {
+        "awaiting_state": "AWAITING_ENTITY_BOUNDARIES_APPROVAL",
+        "artifact_path": "flow-simulation-matrix.json",
+        "digest_scope": ["entity_boundaries", "entity_relationships", "simulated_dependencies"],
+    },
+    "UI_LAYOUT": {
+        "awaiting_state": "AWAITING_UI_LAYOUT_APPROVAL",
+        "artifact_path": "execution-dag.json",
+        "digest_scope": ["ui_layout"],
+    },
+}
+
+
+def now_iso_utc():
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def resolve_feature_dir(feature, dir_override):
+    if dir_override:
+        return Path(dir_override).resolve()
+    return (Path.cwd() / ".verified-feature-delivery" / feature).resolve()
+
+
+def load_state(feature_dir):
+    p = feature_dir / "state.json"
+    if not p.is_file():
+        return None
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def load_artifact(feature_dir, rel_path):
+    p = feature_dir / rel_path
+    if not p.is_file():
+        return None
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def canonical_digest(artifact, scope_keys):
+    """sha256 over the sorted-key, whitespace-free JSON of the named subtrees."""
+    scoped = {k: artifact[k] for k in scope_keys if k in artifact}
+    blob = json.dumps(scoped, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+
+
+def slice_ui_layout_digest(artifact, slice_id):
+    """sha256 over the sorted-key, whitespace-free JSON of one slice's own ui_layout -- UI_LAYOUT
+    approves one slice at a time (improvement plan §5.2), not the whole artifact."""
+    for sl in (artifact or {}).get("slices", []) or []:
+        if isinstance(sl, dict) and sl.get("slice_id") == slice_id:
+            blob = json.dumps(
+                {"ui_layout": sl.get("ui_layout")},
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=True,
+            )
+            return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+    return None
+
+
+def load_ledger(feature_dir, feature_slug):
+    p = feature_dir / "approvals.json"
+    if p.is_file():
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+            if isinstance(data, dict) and isinstance(data.get("approvals"), list):
+                return data
+        except Exception:
+            pass
+    return {"schema_version": "1.0.0", "feature_slug": feature_slug, "approvals": []}
+
+
+def save_ledger(feature_dir, ledger_data):
+    p = feature_dir / "approvals.json"
+    p.write_text(json.dumps(ledger_data, indent=2) + "\n", encoding="utf-8")
+
+
+def build_parser():
+    parser = argparse.ArgumentParser(
+        prog="record-approval",
+        description="Record a human milestone approval as a recomputed content digest.",
+    )
+    parser.add_argument("--feature", required=True, help="Feature slug identifier")
+    parser.add_argument("--dir", dest="dir_override", help="Explicit target directory for state files")
+    parser.add_argument("--milestone", required=True, choices=sorted(MILESTONES.keys()))
+    parser.add_argument("--slice", dest="slice_id", help="slice_id; required for the per-slice UI_LAYOUT milestone, invalid for any other")
+    parser.add_argument("--decided-by", required=True, dest="decided_by", help="Human identifier deciding this approval")
+    parser.add_argument("--notes", help="Optional free-text notes")
+    return parser
+
+
+def main():
+    args = build_parser().parse_args()
+    feature_dir = resolve_feature_dir(args.feature, args.dir_override)
+    meta = MILESTONES[args.milestone]
+
+    state_data = load_state(feature_dir)
+    if not state_data:
+        sys.stderr.write("Feature state not found: %s\n" % (feature_dir / "state.json"))
+        return 1
+
+    current_state = state_data.get("current_state")
+    if current_state != meta["awaiting_state"]:
+        print("NOT_AWAITING_APPROVAL")
+        sys.stderr.write(
+            "NOT_AWAITING_APPROVAL: feature is at %r, not %s; milestone %s can only be approved "
+            "while the pipeline is sitting at its own gate\n"
+            % (current_state, meta["awaiting_state"], args.milestone)
+        )
+        return 1
+
+    is_ui_layout = args.milestone == "UI_LAYOUT"
+    if is_ui_layout and not args.slice_id:
+        print("MISSING_SLICE_ID")
+        sys.stderr.write(
+            "MISSING_SLICE_ID: milestone UI_LAYOUT approves one slice's ui_layout at a time "
+            "(improvement plan §5.2); pass --slice <slice_id>\n"
+        )
+        return 1
+    if not is_ui_layout and args.slice_id:
+        print("SLICE_SCOPED_MILESTONE_MISMATCH")
+        sys.stderr.write(
+            "SLICE_SCOPED_MILESTONE_MISMATCH: --slice only applies to milestone UI_LAYOUT; %s "
+            "approves the whole declared scope for the feature, not one slice\n" % args.milestone
+        )
+        return 1
+
+    artifact = load_artifact(feature_dir, meta["artifact_path"])
+    if artifact is None:
+        print("MISSING_ARTIFACT")
+        sys.stderr.write(
+            "MISSING_ARTIFACT: %s not found under %s\n" % (meta["artifact_path"], feature_dir)
+        )
+        return 1
+
+    if is_ui_layout:
+        digest = slice_ui_layout_digest(artifact, args.slice_id)
+        if digest is None:
+            print("SLICE_NOT_FOUND")
+            sys.stderr.write(
+                "SLICE_NOT_FOUND: no slice %r in %s\n" % (args.slice_id, meta["artifact_path"])
+            )
+            return 1
+    else:
+        digest = canonical_digest(artifact, meta["digest_scope"])
+
+    ledger_data = load_ledger(feature_dir, args.feature)
+    records = ledger_data.setdefault("approvals", [])
+    record = None
+    for r in records:
+        if not isinstance(r, dict) or r.get("milestone_id") != args.milestone:
+            continue
+        if is_ui_layout:
+            if r.get("slice_id") == args.slice_id:
+                record = r
+                break
+        else:
+            record = r
+            break
+    if record is None:
+        record = {"milestone_id": args.milestone}
+        if is_ui_layout:
+            record["slice_id"] = args.slice_id
+        records.append(record)
+
+    record["artifact_path"] = meta["artifact_path"]
+    record["approved_digest"] = digest
+    record["digest_scope"] = "ui_layout" if is_ui_layout else ",".join(meta["digest_scope"])
+    record["status"] = "APPROVED"
+    record["decided_by"] = args.decided_by
+    record["decided_at"] = now_iso_utc()
+    if args.notes:
+        record["notes"] = args.notes
+    elif "notes" in record:
+        del record["notes"]
+
+    feature_dir.mkdir(parents=True, exist_ok=True)
+    save_ledger(feature_dir, ledger_data)
+
+    print(
+        "APPROVED: feature=%s milestone=%s%s digest=%s"
+        % (args.feature, args.milestone, (" slice=%s" % args.slice_id) if args.slice_id else "", digest)
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

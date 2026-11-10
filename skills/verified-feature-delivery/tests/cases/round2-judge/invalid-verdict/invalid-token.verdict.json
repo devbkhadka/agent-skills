@@ -1,0 +1,8 @@
+{
+  "schema_version": "1.0.0",
+  "claim_id": "claim:ui:observable_projections_distinct",
+  "verdict": "NEEDS_WORK",
+  "blocking": false,
+  "minimal_fix": "tighten the assertion",
+  "evidence_examined": ["evidence/m3_ui_query_capture.json"]
+}

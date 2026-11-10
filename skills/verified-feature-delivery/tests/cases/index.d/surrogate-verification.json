@@ -1,0 +1,149 @@
+{
+  "cases": [
+    {
+      "id": "sv-arithmetic-impossible-capture",
+      "stage": "surrogate-verification",
+      "expect": "error",
+      "code": "ARITHMETIC_INCONSISTENCY",
+      "argv": [
+        "bin/verify-evidence",
+        "check-all",
+        "skills/verified-feature-delivery/tests/cases/surrogate-verification/arithmetic-impossible/delivery-report.json",
+        "skills/verified-feature-delivery/tests/cases/surrogate-verification/arithmetic-impossible/execution-dag.json"
+      ],
+      "why": "SURROGATE MEASUREMENT (CAUGHT): bin/verify-evidence checks arithmetic invariants before normalisation masking, rejecting 8.00 hrs badge over 4.00 hrs ticket."
+    },
+    {
+      "id": "sv-arithmetic-lexicon-missing",
+      "stage": "surrogate-verification",
+      "expect": "error",
+      "code": "MISSING_GATE_ARTIFACT",
+      "argv": [
+        "bin/verify-evidence",
+        "check-all",
+        "skills/verified-feature-delivery/tests/cases/surrogate-verification/arithmetic-lexicon-missing/delivery-report.json",
+        "skills/verified-feature-delivery/tests/cases/surrogate-verification/arithmetic-lexicon-missing/execution-dag.json"
+      ],
+      "why": "SURROGATE MEASUREMENT (CAUGHT): bin/verify-evidence refuses missing domain lexicon rather than silently passing arithmetic verification."
+    },
+    {
+      "id": "sv-arithmetic-undeclared-parts-binding",
+      "stage": "surrogate-verification",
+      "expect": "error",
+      "code": "UNDECLARED_ARITHMETIC_RELATION",
+      "argv": [
+        "bin/verify-evidence",
+        "check-all",
+        "skills/verified-feature-delivery/tests/cases/surrogate-verification/arithmetic-undeclared-parts/delivery-report.json",
+        "skills/verified-feature-delivery/tests/cases/surrogate-verification/arithmetic-undeclared-parts/execution-dag.json"
+      ],
+      "why": "SURROGATE MEASUREMENT (CAUGHT): bin/verify-evidence refuses aggregate whose parts binding is undeclared rather than silently passing."
+    },
+    {
+      "id": "sv-template-drift-containers-missing",
+      "stage": "surrogate-verification",
+      "expect": "ok",
+      "code": null,
+      "argv": [
+        "bin/verify-evidence",
+        "check-all",
+        "skills/verified-feature-delivery/tests/cases/surrogate-verification/template-drift/delivery-report.json",
+        "skills/verified-feature-delivery/tests/cases/surrogate-verification/template-drift/execution-dag.json"
+      ],
+      "why": "SURROGATE MEASUREMENT (MISSED): bin/verify-evidence strips classes and transparent tags, accepting a captured DOM that omits template attributes and containers emitted by code."
+    },
+    {
+      "id": "sv-contradicted-figures-vs-ground-truth",
+      "stage": "surrogate-verification",
+      "expect": "error",
+      "code": "GROUND_TRUTH_CONTRADICTED",
+      "argv": [
+        "bin/verify-evidence",
+        "check-all",
+        "skills/verified-feature-delivery/tests/cases/surrogate-verification/contradicted-figures/delivery-report.json",
+        "skills/verified-feature-delivery/tests/cases/surrogate-verification/contradicted-figures/execution-dag.json"
+      ],
+      "why": "SURROGATE MEASUREMENT (CAUGHT): bin/verify-evidence resolves UPSTREAM_AUTHORITATIVE month figures to the recorded contract fixture for their declared boundary and rejects the discrepancy between claimed and recorded month totals/day counts."
+    },
+    {
+      "id": "sv-ground-truth-untraceable-local-computation",
+      "stage": "surrogate-verification",
+      "expect": "error",
+      "code": "GROUND_TRUTH_UNTRACEABLE",
+      "argv": [
+        "bin/verify-evidence",
+        "check-all",
+        "skills/verified-feature-delivery/tests/cases/surrogate-verification/ground-truth-untraceable-local-computation/delivery-report.json",
+        "skills/verified-feature-delivery/tests/cases/surrogate-verification/ground-truth-untraceable-local-computation/execution-dag.json"
+      ],
+      "why": "SURROGATE MEASUREMENT (CAUGHT): bin/verify-evidence refuses a LOCAL_AUTHORITATIVE aggregate that is arithmetic-consistent with its rendered parts but sums a part carrying no value_authority of its own, so local self-consistency alone is not accepted as ground truth."
+    },
+    {
+      "id": "sv-hollow-provenance-containers-vacuous",
+      "stage": "surrogate-verification",
+      "expect": "ok",
+      "code": null,
+      "argv": [
+        "bin/verify-evidence",
+        "check-all",
+        "skills/verified-feature-delivery/tests/cases/surrogate-verification/hollow-provenance/delivery-report.json",
+        "skills/verified-feature-delivery/tests/cases/surrogate-verification/hollow-provenance/execution-dag.json"
+      ],
+      "why": "SURROGATE MEASUREMENT (MISSED): bin/verify-evidence only requires evidence_key and normalised projection for state_observable_and_distinct, accepting empty/null provenance records."
+    },
+    {
+      "id": "sv-self-approved-milestone-digest",
+      "stage": "surrogate-verification",
+      "expect": "ok",
+      "code": null,
+      "argv": [
+        "bin/planner-state",
+        "advance",
+        "--feature",
+        "self-approved-milestone",
+        "--dir",
+        "skills/verified-feature-delivery/tests/cases/surrogate-verification/self-approved-milestone",
+        "--to",
+        "STAGE_4_MILESTONE_EXECUTION"
+      ],
+      "why": "SURROGATE MEASUREMENT (MISSED): bin/planner-state advance accepts an approvals.json entry written by the agent itself with local OS username without external authentication or corroboration."
+    },
+    {
+      "id": "sv-unrenderable-raw-typescript-client",
+      "stage": "surrogate-verification",
+      "expect": "ok",
+      "code": null,
+      "argv": [
+        "bin/verify-evidence",
+        "check-all",
+        "skills/verified-feature-delivery/tests/cases/surrogate-verification/unrenderable-but-claimed/delivery-report.json",
+        "skills/verified-feature-delivery/tests/cases/surrogate-verification/unrenderable-but-claimed/execution-dag.json"
+      ],
+      "why": "SURROGATE MEASUREMENT (MISSED): bin/verify-evidence normalises static HTML strings without verifying JavaScript/module execution in a browser runtime, accepting unrenderable TypeScript client markup."
+    },
+    {
+      "id": "sv-fabricated-reprobe-milestone-discharge",
+      "stage": "surrogate-verification",
+      "expect": "error",
+      "code": "PINNED_REPROBE_MILESTONE_UNDECLARED",
+      "argv": [
+        "bin/milestone-harness",
+        "--dry-run",
+        "skills/verified-feature-delivery/tests/cases/surrogate-verification/fabricated-reprobe-milestone"
+      ],
+      "why": "SURROGATE MEASUREMENT (CAUGHT): the real monthly-timelog-viewer run's own artifacts, reproduced verbatim — bin/milestone-harness refuses because the pinned re-probe milestones M1_BACKEND_CONTRACT and M2_UI_INTEGRATION name no milestone the run's execution-dag.json declares, even though same-named executions.json records exited zero."
+    },
+    {
+      "id": "sv-unresolvable-reprobe-pin",
+      "stage": "surrogate-verification",
+      "expect": "error",
+      "code": "PINNED_REPROBE_MILESTONE_UNDECLARED",
+      "argv": [
+        "bin/milestone-harness",
+        "--dry-run",
+        "skills/verified-feature-delivery/tests/cases/surrogate-verification/unresolvable-pin"
+      ],
+      "why": "SURROGATE MEASUREMENT (CAUGHT): a minimal fixture isolating the DAG-membership check from boundary attribution — GHOST_REPROBE_MILESTONE ran, exited zero, and correctly attributed its capture to the fixture's boundary_identifier, yet is still refused because the execution DAG never declared it."
+    }
+  ]
+}

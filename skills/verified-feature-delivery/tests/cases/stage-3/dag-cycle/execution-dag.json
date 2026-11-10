@@ -1,0 +1,36 @@
+{
+  "schema_version": "1.0.0",
+  "feature_slug": "dag-cycle-feature",
+  "bootstrap_floor": ["src/main.ts"],
+  "pure_modules": [],
+  "slices": [
+    {
+      "slice_id": "slice_a",
+      "name": "Slice A",
+      "dependencies": ["slice_b"],
+      "legs": {
+        "trigger": { "type": "CLI_INVOKE", "description": "Trigger A" },
+        "core_pure_logic": { "pure_module_files": [] },
+        "adapter_persistence": { "optional_leg_present": false },
+        "output_verification": {
+          "verification_medium": "process_exit",
+          "verification_script": "tests/slices/verify_a.sh"
+        }
+      }
+    },
+    {
+      "slice_id": "slice_b",
+      "name": "Slice B",
+      "dependencies": ["slice_a"],
+      "legs": {
+        "trigger": { "type": "CLI_INVOKE", "description": "Trigger B" },
+        "core_pure_logic": { "pure_module_files": [] },
+        "adapter_persistence": { "optional_leg_present": false },
+        "output_verification": {
+          "verification_medium": "process_exit",
+          "verification_script": "tests/slices/verify_b.sh"
+        }
+      }
+    }
+  ]
+}

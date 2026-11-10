@@ -1,0 +1,21 @@
+{
+  "schema_version": "1.0.0",
+  "feature_slug": "search-console-web-ui",
+  "updated_at": "2026-08-22T11:45:00Z",
+  "boundary_classes": [
+    {
+      "class_name": "NETWORK_API",
+      "verdict": "PRESENT",
+      "probe_path": "phases/1-contract-probing/probes/network_api.py",
+      "properties": [
+        {"property_name": "status_codes", "verdict": "PROBED", "fixture_ref": "network_api-search_endpoint.json"},
+        {"property_name": "error_envelope_shapes", "verdict": "PROBED", "fixture_ref": "network_api-search_endpoint.json"}
+      ]
+    },
+    {
+      "class_name": "OTHER",
+      "verdict": "NOT_PRESENT",
+      "absence_reason": "Probing met no boundary outside the nine classes the register already names."
+    }
+  ]
+}

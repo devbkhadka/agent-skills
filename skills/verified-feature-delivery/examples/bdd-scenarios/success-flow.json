@@ -1,0 +1,144 @@
+{
+  "schema_version": "1.0.0",
+  "feature_slug": "order-fulfillment-pipeline",
+  "scenario_id": "scenario_order_placement_success",
+  "slice_id": "slice_order_creation",
+  "description": "Customer successfully places an order with valid payment authorization replay and order state transition to ORDER_CONFIRMED.",
+  "derived_from": {
+    "state_id": "ORDER_DRAFTED",
+    "transition_id": "TRANS_SUBMIT_PAYMENT_AUTHORIZED",
+    "branch_coverage_class": "EVENT_ORDERING_AND_MONOTONIC_SEQUENCE_CLOCKS"
+  },
+  "mock_boundary_contract": {
+    "isolation_mode": "STRICT_EXTERNAL_MOCK_ONLY",
+    "mock_boundaries": [
+      {
+        "boundary_identifier": "POST /v1/payment/authorizations",
+        "boundary_class": "NETWORK_API",
+        "fixture_ref": {
+          "fixture_path": "contract-fixtures/payment-gateway/manifest.json",
+          "sample_id": "sample_auth_200_success",
+          "fixture_status": "PROBED_LIVE"
+        },
+        "is_external": true
+      }
+    ],
+    "prohibited_mocks": [
+      "OrderAggregate",
+      "OrderValidationEngine",
+      "OrderStateMachine",
+      "PostgresOrderRepository"
+    ]
+  },
+  "given": {
+    "state_token": "ORDER_DRAFTED",
+    "entity_states": [
+      {
+        "entity_name": "Order",
+        "entity_id": "ord_1001",
+        "attributes": {
+          "customer_id": "cust_452",
+          "item_count": 2,
+          "subtotal_cents": 4500,
+          "tax_cents": 450,
+          "total_cents": 4950,
+          "currency": "USD"
+        },
+        "unit_precisions": {
+          "total_cents": "integer_cents"
+        }
+      }
+    ],
+    "datastore_state": {
+      "orders": [
+        {
+          "id": "ord_1001",
+          "status": "DRAFT",
+          "customer_id": "cust_452",
+          "total_cents": 4950
+        }
+      ]
+    },
+    "fixture_presets": [
+      {
+        "boundary_identifier": "POST /v1/payment/authorizations",
+        "sample_id": "sample_auth_200_success",
+        "fixture_path": "contract-fixtures/payment-gateway/manifest.json"
+      }
+    ]
+  },
+  "when": {
+    "entrypoint": {
+      "entrypoint_type": "HTTP_HANDLER",
+      "invoked_target": "POST /v1/orders/ord_1001/checkout",
+      "actor_id": "customer",
+      "action_token": "SUBMIT_ORDER_CHECKOUT",
+      "payload": {
+        "order_id": "ord_1001",
+        "payment_method_token": "tok_visa_valid_4242",
+        "client_timestamp": "2026-08-30T12:00:00Z"
+      },
+      "headers": {
+        "Content-Type": "application/json",
+        "Idempotency-Key": "idem_ord_1001_chk_01"
+      }
+    }
+  },
+  "then": {
+    "state_token": "ORDER_CONFIRMED",
+    "state_assertions": [
+      {
+        "entity_name": "Order",
+        "attribute": "status",
+        "operator": "EQUALS",
+        "expected_value": "CONFIRMED"
+      },
+      {
+        "entity_name": "Order",
+        "attribute": "payment_authorization_id",
+        "operator": "EQUALS",
+        "expected_value": "auth_live_987654"
+      },
+      {
+        "entity_name": "Order",
+        "attribute": "total_cents",
+        "operator": "EQUALS",
+        "expected_value": 4950,
+        "unit_ref": "integer_cents"
+      }
+    ],
+    "observer_projections": [
+      {
+        "observer_id": "customer",
+        "medium": "api_response",
+        "expected_projection": {
+          "status_code": 200,
+          "order_id": "ord_1001",
+          "order_status": "CONFIRMED",
+          "total_formatted": "$49.50"
+        },
+        "discriminator": "order_status:CONFIRMED",
+        "projection_quantities": ["order_total", "order_status"]
+      },
+      {
+        "observer_id": "operator",
+        "medium": "rendered_ui",
+        "expected_projection": "<div data-order-id=\"ord_1001\"><span class=\"badge-confirmed\">Confirmed</span><span class=\"amount\">$49.50</span></div>",
+        "discriminator": "badge:confirmed",
+        "projection_quantities": ["order_status", "order_total"]
+      }
+    ],
+    "event_emissions": [
+      {
+        "event_name": "OrderConfirmedEvent",
+        "topic_or_stream": "orders.lifecycle.v1",
+        "payload": {
+          "order_id": "ord_1001",
+          "customer_id": "cust_452",
+          "total_cents": 4950,
+          "occurred_at": "2026-08-30T12:00:01Z"
+        }
+      }
+    ]
+  }
+}

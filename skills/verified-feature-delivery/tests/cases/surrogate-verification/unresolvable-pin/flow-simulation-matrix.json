@@ -1,0 +1,23 @@
+{
+  "schema_version": "1.0.0",
+  "feature_slug": "unresolvable-pin-feature",
+  "observers": [
+    {"observer_id": "operator", "medium": "rendered_ui", "modality": "browser_dom"}
+  ],
+  "states": [
+    {
+      "state_id": "IDLE",
+      "evidence_key": "state:IDLE",
+      "is_initial": true,
+      "is_terminal": false,
+      "description": "Chat pane mounted with no message sent yet.",
+      "observable_projections": [
+        {
+          "observer_id": "operator",
+          "medium": "rendered_ui",
+          "discriminator": {"region": "chat_pane", "atom": "prompt_to_send_message"}
+        }
+      ]
+    }
+  ]
+}

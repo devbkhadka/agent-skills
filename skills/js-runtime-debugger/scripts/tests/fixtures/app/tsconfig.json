@@ -1,0 +1,13 @@
+{
+  "//": "Regenerate dist/: npx tsc -p . (outputs are committed; tests never need typescript)",
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "commonjs",
+    "rootDir": "src",
+    "outDir": "dist",
+    "sourceMap": true,
+    "strict": true,
+    "types": []
+  },
+  "include": ["src/**/*.ts"]
+}

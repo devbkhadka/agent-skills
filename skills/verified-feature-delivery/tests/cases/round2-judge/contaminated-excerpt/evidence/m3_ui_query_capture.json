@@ -1,0 +1,10 @@
+{
+  "schema_version": "1.0.0",
+  "evidence_key": "state:RESULTS_POPULATED",
+  "observer_id": "operator",
+  "verification_medium": "rendered_ui",
+  "captured_artifact": "<div class=\"results-pane\"><h2>Found 10 matches for \"database\"</h2></div>",
+  "observation_target": {
+    "entry_point": "evidence/m3_ui_query_capture.html"
+  }
+}

@@ -1,0 +1,288 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ExecutionDAG",
+  "description": "Stage 3 Execution DAG Schema. Owned by stage-3. Defines vertical tracer-bullet slices, dependency edges, verification_medium, bootstrap_floor, pure_modules, actor_modality constraints, attention-return edges, concurrency budgets, and transaction boundaries.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "feature_slug",
+    "slices"
+  ],
+  "properties": {
+    "schema_version": { "type": "string" },
+    "feature_slug": { "type": "string" },
+    "bootstrap_floor": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "pure_modules": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "concurrency_budget": {
+      "type": "object",
+      "properties": {
+        "declared_worker_concurrency": { "type": "integer" },
+        "worker_concurrency": { "type": "integer" },
+        "probed_boundary_capacity": { "type": "integer" },
+        "probed_pool_capacity": { "type": "integer" },
+        "reserved_headroom": { "type": "integer" }
+      }
+    },
+    "transaction_boundaries": {
+      "type": "object",
+      "properties": {
+        "split_across_slices": { "type": "boolean" },
+        "atomic_mutations": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "has_atomic_step": { "type": "boolean" },
+        "has_compensation_step": { "type": "boolean" },
+        "atomic_transaction_boundary": { "type": ["string", "null"] },
+        "compensation_step": { "type": ["string", "null"] }
+      }
+    },
+    "slices": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "slice_id",
+          "dependencies"
+        ],
+        "properties": {
+          "slice_id": { "type": "string" },
+          "name": { "type": "string" },
+          "dependencies": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "is_slice_1": { "type": "boolean" },
+          "legs": {
+            "type": "object",
+            "properties": {
+              "trigger": {
+                "type": "object",
+                "properties": {
+                  "type": { "type": "string" },
+                  "description": { "type": "string" },
+                  "entry_point": { "type": "string" },
+                  "actor_id": { "type": "string" },
+                  "is_actor_repeatable": { "type": "boolean" }
+                }
+              },
+              "core_pure_logic": {
+                "type": "object",
+                "properties": {
+                  "pure_module_files": {
+                    "type": "array",
+                    "items": { "type": "string" }
+                  },
+                  "assertable_without_rendering": { "type": "boolean" },
+                  "test_file": { "type": "string" },
+                  "description": { "type": "string" }
+                }
+              },
+              "adapter_persistence": {
+                "type": "object",
+                "properties": {
+                  "optional_leg_present": { "type": "boolean" },
+                  "adapter_files": {
+                    "type": "array",
+                    "items": { "type": "string" }
+                  },
+                  "boundary_class": { "type": "string" },
+                  "description": { "type": "string" }
+                }
+              },
+              "output_verification": {
+                "type": "object",
+                "required": [
+                  "verification_medium",
+                  "verification_script"
+                ],
+                "properties": {
+                  "verification_medium": {
+                    "type": "string",
+                    "enum": [
+                      "rendered_ui",
+                      "api_response",
+                      "process_exit",
+                      "datastore_state",
+                      "device_actuation",
+                      "agent_transcript"
+                    ]
+                  },
+                  "evidence_keys_covered": {
+                    "type": "array",
+                    "items": { "type": "string" }
+                  },
+                  "verification_script": { "type": "string" },
+                  "description": { "type": "string" }
+                }
+              }
+            }
+          },
+          "verification_medium": {
+            "type": "string",
+            "enum": [
+              "rendered_ui",
+              "api_response",
+              "process_exit",
+              "datastore_state",
+              "device_actuation",
+              "agent_transcript"
+            ]
+          },
+          "verification_script": { "type": "string" },
+          "actor_modality": {
+            "type": "object",
+            "properties": {
+              "observers": {
+                "type": "array",
+                "items": { "type": "string" }
+              },
+              "input_modalities": {
+                "type": "array",
+                "items": { "type": "string" }
+              },
+              "environment_floor": { "type": "string" },
+              "attention_return": {
+                "type": "object",
+                "required": [
+                  "source_slice",
+                  "destination_slice",
+                  "focus_target"
+                ],
+                "properties": {
+                  "source_slice": { "type": "string" },
+                  "destination_slice": { "type": "string" },
+                  "focus_target": { "type": "string" }
+                }
+              },
+              "headless_fallback": {
+                "type": "object",
+                "properties": {
+                  "supported": { "type": "boolean" },
+                  "reason": { "type": "string" },
+                  "policy": { "type": "string" }
+                }
+              }
+            }
+          },
+          "files_touched": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "files_read": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "files_written": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "slice_level": {
+            "type": "string",
+            "enum": ["FLOW", "SUBTASK"]
+          },
+          "user_visible_outcome": {
+            "type": "string"
+          },
+          "flow_refs": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "milestones": {
+            "type": "array",
+            "description": "Planned milestones per slice defining verification medium and claims evaluated",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "milestone_id",
+                "verification_medium",
+                "claims"
+              ],
+              "properties": {
+                "milestone_id": { "type": "string" },
+                "verification_medium": {
+                  "type": "string",
+                  "enum": [
+                    "rendered_ui",
+                    "api_response",
+                    "process_exit",
+                    "datastore_state",
+                    "device_actuation",
+                    "agent_transcript"
+                  ]
+                },
+                "claims": {
+                  "type": "array",
+                  "items": { "type": "string" }
+                }
+              }
+            }
+          },
+          "ui_layout": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "layout_status": { "type": "string" },
+              "source": {
+                "type": "string",
+                "enum": ["FIGMA", "SCREENSHOT", "AGENT_MOCKUP"]
+              },
+              "figma_node_refs": {
+                "type": "array",
+                "items": { "type": "string" }
+              },
+              "layout_template": { "type": "string" },
+              "layout_tree": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "region": { "type": "string" },
+                  "role": { "type": "string" },
+                  "component": { "type": "string" },
+                  "children": {
+                    "type": "array",
+                    "items": { "type": "object" }
+                  }
+                }
+              },
+              "mockup_ref": { "type": "string" },
+              "approval": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "milestone_id",
+                  "artifact_path",
+                  "approved_digest",
+                  "digest_scope",
+                  "status",
+                  "decided_by",
+                  "decided_at"
+                ],
+                "properties": {
+                  "milestone_id": { "type": "string" },
+                  "artifact_path": { "type": "string" },
+                  "approved_digest": { "type": "string" },
+                  "digest_scope": { "type": "string" },
+                  "status": {
+                    "type": "string",
+                    "enum": ["APPROVED", "STALE"]
+                  },
+                  "decided_by": { "type": "string" },
+                  "decided_at": { "type": "string" },
+                  "notes": { "type": "string" }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

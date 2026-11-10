@@ -1,0 +1,717 @@
+#!/usr/bin/env python3
+"""Stage 2 Gate Validator: validate-scenario-matrix.
+
+Owner: stage-2
+Purpose: Validates scenario simulation matrix for graph egress coverage, branch groups A and B,
+materialised supersession states, evidence keys, structured discriminators, and closed object vocabularies.
+
+Exit Codes:
+- 0: Matrix validated clean (prints SCENARIO_MATRIX_VALIDATED_CLEAN)
+- Non-zero: Emits bare error code token on stderr/stdout
+
+Supported Error Codes:
+- BRANCH_CLASS_UNADDRESSED
+- BRANCH_INAPPLICABLE_UNREASONED
+- DANGLING_TRANSITION_TARGET
+- GROUP_B_REQUIRED_ON_REPEATABLE_TRIGGER
+- HANGING_STATE
+- INVALID_BRANCH_STATUS_TOKEN
+- MISSING_DISCRIMINATOR
+- MISSING_EVIDENCE_KEY
+- SELF_LOOP_ONLY_EGRESS
+- SUPERSESSION_NOT_MATERIALISED
+- TERMINAL_STATE_HAS_EGRESS
+- UNKNOWN_ACTOR_ATTRIBUTE
+- UNKNOWN_STATE_ATTRIBUTE
+"""
+
+import argparse
+import json
+import os
+from pathlib import Path
+import sys
+from typing import Any, Dict, List, Optional, Set, Tuple
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from lib.primitives import (
+    check_closed_key_set,
+    is_reason_meaningful,
+    is_vacuous_container,
+)
+
+CANONICAL_GROUP_A_CLASSES = [
+    "ORPHANED_DELETED_TARGET_STATES",
+    "RESOURCE_LEAK_AND_TERMINATION_INVARIANTS",
+    "EVENT_ORDERING_AND_MONOTONIC_SEQUENCE_CLOCKS",
+    "INGRESS_HANDOFF_DURABILITY",
+    "TEMPORAL_EGRESS_FROM_FINITE_LIFESPAN_STATES",
+    "COMPOUND_PUBLICATION_ORDERING",
+    "OPERATIONAL_EDGE_CASES",
+]
+
+CANONICAL_GROUP_B_CLASSES = [
+    "REPEAT_TRIGGER_OUT_OF_ORDER_SETTLEMENT",
+    "DUPLICATE_TRIGGER",
+    "OBSERVER_TEARDOWN_MID_FLIGHT",
+    "STALE_OUTPUT_SUPERSESSION",
+    "SEMANTIC_CONTRADICTION",
+]
+
+ALLOWED_BRANCH_STATUSES = {
+    "ADDRESSED",
+    "NOT_APPLICABLE",
+    "INAPPLICABLE",
+}
+
+ALLOWED_STATE_KEYS = {
+    "state_id",
+    "evidence_key",
+    "observable_projections",
+    "is_initial",
+    "is_terminal",
+    "terminal_classification",
+    "description",
+}
+
+KNOWN_SUPERSESSION_ATTRS = {
+    "stale_output_resolution",
+    "supersession_resolution",
+    "supersession",
+    "stale_resolution",
+    "stale_output_mode",
+    "resolution",
+}
+
+ALLOWED_TRANSITION_KEYS = {
+    "transition_id",
+    "from_state",
+    "to_state",
+    "trigger_ref",
+    "guard",
+    "description",
+}
+
+ALLOWED_PROJECTION_KEYS = {
+    "observer_id",
+    "medium",
+    "discriminator",
+    "modality",
+    "description",
+}
+
+ALLOWED_ACTOR_KEYS = {
+    "actor_id",
+    "description",
+}
+
+ALLOWED_OBSERVER_KEYS = {
+    "observer_id",
+    "medium",
+    "modality",
+    "description",
+}
+
+ALLOWED_TRIGGER_KEYS = {
+    "trigger_id",
+    "actor_id",
+    "is_actor_repeatable",
+    "description",
+}
+
+ALLOWED_GROUP_A_KEYS = {
+    "class_name",
+    "status",
+    "inapplicable_reason",
+    "handling_description",
+    "related_states",
+}
+
+ALLOWED_GROUP_B_KEYS = {
+    "class_name",
+    "status",
+    "inapplicable_reason",
+    "handling_description",
+    "resolution",
+    "state_split_applied",
+    "materialized_states",
+    "related_states",
+}
+
+
+def normalize_token(name: str) -> str:
+    """Normalize class or property name for matching."""
+    if not name:
+        return ""
+    s = str(name).lower()
+    for drop in ["_and_", "_or_", "_for_", "_with_", "_from_"]:
+        s = s.replace(drop, "_")
+    return s.replace("_", "").replace("-", "").replace(" ", "")
+
+
+def validate_scenario_matrix_dict(data: dict) -> Tuple[bool, Optional[str], str]:
+    """Validate scenario matrix against Stage 2 specification.
+
+    Returns (is_valid: bool, error_code: Optional[str], message: str).
+    """
+    if not isinstance(data, dict):
+        return False, "INVALID_SCENARIO_MATRIX_SCHEMA", "Matrix root must be a JSON object"
+
+    # Required top-level fields per Stage 2 spec
+    for k in ["schema_version", "feature_slug", "states", "transitions", "branch_coverage"]:
+        if k not in data:
+            return False, "INVALID_SCENARIO_MATRIX_SCHEMA", f"Missing required top-level key: {k}"
+
+    states = data.get("states", [])
+    if not isinstance(states, list):
+        return False, "INVALID_SCENARIO_MATRIX_SCHEMA", "states must be an array"
+
+    transitions = data.get("transitions", [])
+    if not isinstance(transitions, list):
+        return False, "INVALID_SCENARIO_MATRIX_SCHEMA", "transitions must be an array"
+
+    branch_coverage = data.get("branch_coverage", {})
+    if not isinstance(branch_coverage, dict):
+        return False, "INVALID_SCENARIO_MATRIX_SCHEMA", "branch_coverage must be an object"
+
+    actors = data.get("actors", [])
+    observers = data.get("observers", [])
+    triggers = data.get("triggers", [])
+
+    # -------------------------------------------------------------
+    # 1. Check Actors & Observers Closed Key Sets
+    # -------------------------------------------------------------
+    if isinstance(actors, list):
+        for actor in actors:
+            aid = actor.get("actor_id", "unnamed") if isinstance(actor, dict) else "unnamed"
+            res = check_closed_key_set(actor, ALLOWED_ACTOR_KEYS, f"Actor '{aid}'")
+            if not res.is_valid:
+                return (
+                    False,
+                    "UNKNOWN_ACTOR_ATTRIBUTE",
+                    f"Actor '{aid}' contains unknown attribute(s): {sorted(list(res.unexpected))}; allowed actor attributes are: {sorted(list(res.allowed))}",
+                )
+
+    if isinstance(observers, list):
+        for obs in observers:
+            oid = obs.get("observer_id", "unnamed") if isinstance(obs, dict) else "unnamed"
+            res = check_closed_key_set(obs, ALLOWED_OBSERVER_KEYS, f"Observer '{oid}'")
+            if not res.is_valid:
+                return False, "INVALID_SCENARIO_MATRIX_SCHEMA", res.message
+
+    if isinstance(triggers, list):
+        for trig in triggers:
+            trig_id = trig.get("trigger_id", "unnamed") if isinstance(trig, dict) else "unnamed"
+            res = check_closed_key_set(trig, ALLOWED_TRIGGER_KEYS, f"Trigger '{trig_id}'")
+            if not res.is_valid:
+                return False, "INVALID_SCENARIO_MATRIX_SCHEMA", res.message
+
+    # -------------------------------------------------------------
+    # 2. Check States: Closed Key Set, MISSING_EVIDENCE_KEY,
+    #    MISSING_DISCRIMINATOR, and SUPERSESSION_NOT_MATERIALISED
+    # -------------------------------------------------------------
+    state_ids = set()
+    for state in states:
+        if not isinstance(state, dict):
+            return False, "INVALID_SCENARIO_MATRIX_SCHEMA", "State item must be a JSON object"
+
+        sid = state.get("state_id")
+        if not sid or not isinstance(sid, str):
+            return False, "INVALID_SCENARIO_MATRIX_SCHEMA", "State item missing valid state_id"
+        state_ids.add(sid)
+
+        # Closed key set enforcement for state object
+        res = check_closed_key_set(state, ALLOWED_STATE_KEYS, f"State '{sid}'")
+        if not res.is_valid:
+            supersession_hits = res.unexpected & KNOWN_SUPERSESSION_ATTRS
+            if supersession_hits:
+                hit = sorted(list(supersession_hits))[0]
+                return (
+                    False,
+                    "SUPERSESSION_NOT_MATERIALISED",
+                    f"State '{sid}' records supersession as in-place attribute '{hit}'; supersession must split states",
+                )
+            return (
+                False,
+                "UNKNOWN_STATE_ATTRIBUTE",
+                f"State '{sid}' contains unknown attribute(s): {sorted(list(res.unexpected))}; allowed state attributes are: {sorted(list(res.allowed))}",
+            )
+
+        # Check: MISSING_EVIDENCE_KEY
+        ev_key = state.get("evidence_key")
+        if ev_key is None or not isinstance(ev_key, str) or not ev_key.strip():
+            return False, "MISSING_EVIDENCE_KEY", f"State '{sid}' lacks required non-empty evidence_key"
+
+        # Check: MISSING_DISCRIMINATOR
+        projs = state.get("observable_projections")
+        if not isinstance(projs, list) or len(projs) == 0 or is_vacuous_container(projs):
+            return False, "MISSING_DISCRIMINATOR", f"State '{sid}' lacks observable_projections"
+
+        for p in projs:
+            if not isinstance(p, dict) or is_vacuous_container(p):
+                return False, "MISSING_DISCRIMINATOR", f"State '{sid}' has invalid or vacuous projection object"
+            res_p = check_closed_key_set(p, ALLOWED_PROJECTION_KEYS, f"Observable projection in state '{sid}'")
+            if not res_p.is_valid:
+                return False, "INVALID_SCENARIO_MATRIX_SCHEMA", res_p.message
+
+            disc = p.get("discriminator")
+            if disc is None or not isinstance(disc, dict) or len(disc) == 0 or is_vacuous_container(disc):
+                return (
+                    False,
+                    "MISSING_DISCRIMINATOR",
+                    f"State '{sid}' observer '{p.get('observer_id')}' lacks structured discriminator object or discriminator is vacuous",
+                )
+
+    # -------------------------------------------------------------
+    # 3. Check Transitions Closed Key Set & Referential Integrity
+    # -------------------------------------------------------------
+    for t in transitions:
+        if not isinstance(t, dict):
+            return False, "INVALID_SCENARIO_MATRIX_SCHEMA", "Transition must be a JSON object"
+        tid = t.get("transition_id", "unnamed")
+        res_t = check_closed_key_set(t, ALLOWED_TRANSITION_KEYS, f"Transition '{tid}'")
+        if not res_t.is_valid:
+            return False, "INVALID_SCENARIO_MATRIX_SCHEMA", res_t.message
+
+        from_state = t.get("from_state")
+        to_state = t.get("to_state")
+        if not from_state or from_state not in state_ids:
+            return (
+                False,
+                "DANGLING_TRANSITION_TARGET",
+                f"Transition '{tid}' from_state '{from_state}' is not in declared states[]",
+            )
+        if not to_state or to_state not in state_ids:
+            return (
+                False,
+                "DANGLING_TRANSITION_TARGET",
+                f"Transition '{tid}' to_state '{to_state}' is not in declared states[]",
+            )
+
+    # -------------------------------------------------------------
+    # 4. Check Triggers & GROUP_B_REQUIRED_ON_REPEATABLE_TRIGGER
+    # -------------------------------------------------------------
+    has_repeatable_trigger = False
+    if isinstance(triggers, list):
+        for trig in triggers:
+            if isinstance(trig, dict) and trig.get("is_actor_repeatable") is True:
+                has_repeatable_trigger = True
+                break
+
+    group_a = branch_coverage.get("group_a_resource_and_state", [])
+    group_b = branch_coverage.get("group_b_trigger_and_observation", [])
+
+    if has_repeatable_trigger:
+        if not isinstance(group_b, list) or len(group_b) == 0:
+            return (
+                False,
+                "GROUP_B_REQUIRED_ON_REPEATABLE_TRIGGER",
+                "Branch Class Group B is mandatory when any trigger is actor-repeatable",
+            )
+
+        # Check that all 5 Group B classes are covered and none is NOT_APPLICABLE
+        b_classes_present = {}
+        for row in group_b:
+            if isinstance(row, dict) and row.get("class_name"):
+                norm = normalize_token(row["class_name"])
+                b_classes_present[norm] = row
+
+        for canon_b in CANONICAL_GROUP_B_CLASSES:
+            norm_canon = normalize_token(canon_b)
+            matched_row = None
+            for k, row in b_classes_present.items():
+                if k == norm_canon or k.startswith(norm_canon) or norm_canon.startswith(k):
+                    matched_row = row
+                    break
+            if not matched_row:
+                return (
+                    False,
+                    "GROUP_B_REQUIRED_ON_REPEATABLE_TRIGGER",
+                    f"Repeatable trigger mandates Branch Group B class '{canon_b}'",
+                )
+
+            st = matched_row.get("status")
+            if st in ["NOT_APPLICABLE", "INAPPLICABLE"]:
+                return (
+                    False,
+                    "GROUP_B_REQUIRED_ON_REPEATABLE_TRIGGER",
+                    f"Branch Group B class '{canon_b}' cannot be marked NOT_APPLICABLE on a repeatable trigger",
+                )
+
+    # -------------------------------------------------------------
+    # 5. Check Branch Coverage Status Tokens & Closed Key Sets
+    # -------------------------------------------------------------
+    if not isinstance(group_a, list) or len(group_a) == 0:
+        return False, "BRANCH_CLASS_UNADDRESSED", "Branch Class Group A is missing from branch_coverage"
+
+    for row in group_a:
+        if isinstance(row, dict):
+            res_ga = check_closed_key_set(row, ALLOWED_GROUP_A_KEYS, f"Group A row '{row.get('class_name')}'")
+            if not res_ga.is_valid:
+                return False, "INVALID_SCENARIO_MATRIX_SCHEMA", res_ga.message
+            st = row.get("status")
+            if st not in ALLOWED_BRANCH_STATUSES:
+                return (
+                    False,
+                    "INVALID_BRANCH_STATUS_TOKEN",
+                    f"Group A class '{row.get('class_name')}' carries invalid status token '{st}'; allowed status tokens are: {sorted(list(ALLOWED_BRANCH_STATUSES))}",
+                )
+
+    if isinstance(group_b, list):
+        for row in group_b:
+            if isinstance(row, dict):
+                res_gb = check_closed_key_set(row, ALLOWED_GROUP_B_KEYS, f"Group B row '{row.get('class_name')}'")
+                if not res_gb.is_valid:
+                    return False, "INVALID_SCENARIO_MATRIX_SCHEMA", res_gb.message
+                st = row.get("status")
+                if st not in ALLOWED_BRANCH_STATUSES:
+                    return (
+                        False,
+                        "INVALID_BRANCH_STATUS_TOKEN",
+                        f"Group B class '{row.get('class_name')}' carries invalid status token '{st}'; allowed status tokens are: {sorted(list(ALLOWED_BRANCH_STATUSES))}",
+                    )
+
+    # -------------------------------------------------------------
+    # 6. Check Branch Class Group A Coverage & Inapplicability Reasons
+    # -------------------------------------------------------------
+    a_classes_present = {}
+    for row in group_a:
+        if isinstance(row, dict) and row.get("class_name"):
+            norm = normalize_token(row["class_name"])
+            a_classes_present[norm] = row
+
+    for canon_a in CANONICAL_GROUP_A_CLASSES:
+        norm_canon = normalize_token(canon_a)
+        matched_row = None
+        for k, row in a_classes_present.items():
+            if k == norm_canon or k.startswith(norm_canon) or norm_canon.startswith(k):
+                matched_row = row
+                break
+        if not matched_row:
+            return False, "BRANCH_CLASS_UNADDRESSED", f"Branch Class Group A missing canonical class: '{canon_a}'"
+
+    for canon_a in CANONICAL_GROUP_A_CLASSES:
+        norm_canon = normalize_token(canon_a)
+        matched_row = None
+        for k, row in a_classes_present.items():
+            if k == norm_canon or k.startswith(norm_canon) or norm_canon.startswith(k):
+                matched_row = row
+                break
+        if matched_row:
+            st = matched_row.get("status")
+            if st in ["NOT_APPLICABLE", "INAPPLICABLE"]:
+                reason = matched_row.get("inapplicable_reason") or matched_row.get("absence_reason") or matched_row.get("reason")
+                if not is_reason_meaningful(reason):
+                    return (
+                        False,
+                        "BRANCH_INAPPLICABLE_UNREASONED",
+                        f"Group A class '{canon_a}' marked NOT_APPLICABLE lacks meaningful inapplicable_reason (requires prose justification of at least 3 words, predominantly letters), got: {reason!r}",
+                    )
+
+    # Check Group B entries for unreasoned inapplicability when not repeatable
+    if isinstance(group_b, list):
+        for row in group_b:
+            if not isinstance(row, dict):
+                continue
+            st = row.get("status")
+            if st in ["NOT_APPLICABLE", "INAPPLICABLE"]:
+                reason = row.get("inapplicable_reason") or row.get("absence_reason") or row.get("reason")
+                if not is_reason_meaningful(reason):
+                    return (
+                        False,
+                        "BRANCH_INAPPLICABLE_UNREASONED",
+                        f"Group B class '{row.get('class_name')}' marked NOT_APPLICABLE lacks meaningful inapplicable_reason (requires prose justification of at least 3 words, predominantly letters), got: {reason!r}",
+                    )
+
+    # -------------------------------------------------------------
+    # 7. Check Stale Output Supersession: SUPERSESSION_NOT_MATERIALISED
+    # -------------------------------------------------------------
+    if isinstance(group_b, list):
+        for row in group_b:
+            if not isinstance(row, dict):
+                continue
+            norm_name = normalize_token(row.get("class_name", ""))
+            if "staleoutputsupersession" in norm_name:
+                res = row.get("resolution")
+                if res and res != "CLEARED":
+                    mat_states = row.get("materialized_states") or row.get("related_states")
+                    if not isinstance(mat_states, list) or len(mat_states) < 2:
+                        return (
+                            False,
+                            "SUPERSESSION_NOT_MATERIALISED",
+                            f"Stale output supersession resolution '{res}' requires >= 2 materialized_states in states[]",
+                        )
+                    for ms in mat_states:
+                        if ms not in state_ids:
+                            return (
+                                False,
+                                "SUPERSESSION_NOT_MATERIALISED",
+                                f"Materialized state '{ms}' for supersession not found in declared states[]",
+                            )
+
+    # -------------------------------------------------------------
+    # 8. Check Graph Egress: HANGING_STATE, SELF_LOOP_ONLY_EGRESS,
+    #    and TERMINAL_STATE_HAS_EGRESS
+    # -------------------------------------------------------------
+    for state in states:
+        sid = state.get("state_id")
+        is_terminal = state.get("is_terminal", False)
+        outbound = [t for t in transitions if isinstance(t, dict) and t.get("from_state") == sid]
+
+        if is_terminal:
+            if len(outbound) > 0:
+                return (
+                    False,
+                    "TERMINAL_STATE_HAS_EGRESS",
+                    f"State '{sid}' is marked terminal (is_terminal=True) but has outbound transition(s) in transitions[]; terminal states cannot have egress",
+                )
+        else:
+            if len(outbound) == 0:
+                return (
+                    False,
+                    "HANGING_STATE",
+                    f"State '{sid}' is non-terminal and has no outbound transition in transitions[]",
+                )
+            if all(t.get("to_state") == sid for t in outbound):
+                return (
+                    False,
+                    "SELF_LOOP_ONLY_EGRESS",
+                    f"State '{sid}' has only self-loop outbound transitions and no egress to a distinct state",
+                )
+
+    # -------------------------------------------------------------
+    # 9. Round 2 Checks: flow_groups and flows validation
+    # -------------------------------------------------------------
+    flow_groups = data.get("flow_groups")
+    flows = data.get("flows")
+
+    transition_map = {t.get("transition_id"): t for t in transitions if isinstance(t, dict) and t.get("transition_id")}
+
+    if flow_groups is not None:
+        if not isinstance(flow_groups, list) or len(flow_groups) == 0:
+            return False, "EMPTY_FLOW_GROUP", "flow_groups must be a non-empty array"
+
+        flows_list = flows if isinstance(flows, list) else []
+        flow_group_ids = {f.get("group_id") for f in flows_list if isinstance(f, dict)}
+
+        for grp in flow_groups:
+            if isinstance(grp, dict):
+                gid = grp.get("group_id")
+                if not gid or gid not in flow_group_ids:
+                    return False, "EMPTY_FLOW_GROUP", f"Flow group '{gid}' has no flows in flows[]"
+
+    if flows is not None:
+        if not isinstance(flows, list) or len(flows) == 0:
+            return False, "STATE_NOT_COVERED_BY_FLOW", "flows must be a non-empty array"
+
+        # Check: PRECONDITION_DUPLICATED_FROM_GROUP
+        groups_map = {g.get("group_id"): g for g in (flow_groups or []) if isinstance(g, dict) and g.get("group_id")}
+        for flow in flows:
+            if isinstance(flow, dict):
+                gid = flow.get("group_id")
+                group = groups_map.get(gid)
+                if group:
+                    shared_preconds = set(group.get("shared_preconditions", []))
+                    flow_preconds = flow.get("preconditions", [])
+                    for fp in flow_preconds:
+                        if fp in shared_preconds:
+                            return (
+                                False,
+                                "PRECONDITION_DUPLICATED_FROM_GROUP",
+                                f"Flow '{flow.get('flow_id')}' duplicates shared precondition '{fp}' from group '{gid}'",
+                            )
+
+        # Check: FLOW_STEPS_DISCONTINUOUS and FLOW_OUTCOME_EVIDENCE_UNDECLARED
+        covered_states = set()
+        CANONICAL_MEDIA = {
+            "rendered_ui",
+            "api_response",
+            "process_exit",
+            "datastore_state",
+            "device_actuation",
+            "agent_transcript",
+        }
+
+        for flow in flows:
+            if not isinstance(flow, dict):
+                continue
+            fid = flow.get("flow_id", "unnamed")
+            steps = flow.get("steps", [])
+            if not isinstance(steps, list) or len(steps) == 0:
+                return False, "FLOW_STEPS_DISCONTINUOUS", f"Flow '{fid}' has zero steps"
+
+            sorted_steps = sorted(steps, key=lambda s: s.get("step_no", 0) if isinstance(s, dict) else 0)
+
+            for i in range(len(sorted_steps)):
+                st = sorted_steps[i]
+                if not isinstance(st, dict):
+                    return False, "FLOW_STEPS_DISCONTINUOUS", f"Flow '{fid}' step {i+1} is not an object"
+                t_ref = st.get("transition_ref")
+                if not t_ref or t_ref not in transition_map:
+                    return False, "FLOW_STEPS_DISCONTINUOUS", f"Flow '{fid}' step {i+1} references unknown transition '{t_ref}'"
+
+                curr_t = transition_map[t_ref]
+                from_s = curr_t.get("from_state")
+                to_s = curr_t.get("to_state")
+                if from_s:
+                    covered_states.add(from_s)
+                if to_s:
+                    covered_states.add(to_s)
+
+                if i < len(sorted_steps) - 1:
+                    next_st = sorted_steps[i + 1]
+                    if not isinstance(next_st, dict):
+                        return False, "FLOW_STEPS_DISCONTINUOUS", f"Flow '{fid}' step {i+2} is not an object"
+                    next_t_ref = next_st.get("transition_ref")
+                    if not next_t_ref or next_t_ref not in transition_map:
+                        return False, "FLOW_STEPS_DISCONTINUOUS", f"Flow '{fid}' step {i+2} references unknown transition '{next_t_ref}'"
+                    next_t = transition_map[next_t_ref]
+                    if to_s != next_t.get("from_state"):
+                        return (
+                            False,
+                            "FLOW_STEPS_DISCONTINUOUS",
+                            f"Flow '{fid}' steps are discontinuous: transition '{t_ref}' ends at '{to_s}' but transition '{next_t_ref}' starts at '{next_t.get('from_state')}'",
+                        )
+
+            # Check expected_outcome
+            outcome = flow.get("expected_outcome")
+            if not isinstance(outcome, dict) or is_vacuous_container(outcome):
+                return False, "FLOW_OUTCOME_EVIDENCE_UNDECLARED", f"Flow '{fid}' missing expected_outcome"
+
+            ev_key = outcome.get("evidence_key")
+            med = outcome.get("medium")
+            if not med or med not in CANONICAL_MEDIA:
+                return (
+                    False,
+                    "FLOW_OUTCOME_EVIDENCE_UNDECLARED",
+                    f"Flow '{fid}' expected_outcome medium '{med}' is not one of canonical media: {sorted(list(CANONICAL_MEDIA))}",
+                )
+
+            last_step = sorted_steps[-1]
+            last_t = transition_map[last_step.get("transition_ref")]
+            term_state_id = last_t.get("to_state")
+            term_state = next((s for s in states if isinstance(s, dict) and s.get("state_id") == term_state_id), None)
+            if not term_state:
+                return False, "FLOW_OUTCOME_EVIDENCE_UNDECLARED", f"Terminal state '{term_state_id}' for flow '{fid}' not found in states[]"
+
+            if term_state.get("evidence_key") != ev_key:
+                return (
+                    False,
+                    "FLOW_OUTCOME_EVIDENCE_UNDECLARED",
+                    f"Flow '{fid}' outcome evidence_key '{ev_key}' does not match terminal state '{term_state_id}' evidence_key '{term_state.get('evidence_key')}'",
+                )
+
+        # Check: STATE_NOT_COVERED_BY_FLOW
+        for sid in state_ids:
+            if sid not in covered_states:
+                return False, "STATE_NOT_COVERED_BY_FLOW", f"State '{sid}' is not covered by any flow in flows[]"
+
+    return True, None, "SCENARIO_MATRIX_VALIDATED_CLEAN"
+
+
+def resolve_matrix_path(
+    path_str: Optional[str],
+    feature_slug: Optional[str] = None,
+    dir_override: Optional[str] = None,
+    root_override: Optional[str] = None,
+) -> Optional[Path]:
+    """Resolve target scenario matrix path robustly."""
+    if path_str:
+        p = Path(path_str)
+        if p.is_file():
+            return p.resolve()
+
+        p_cwd = Path.cwd() / path_str
+        if p_cwd.is_file():
+            return p_cwd.resolve()
+
+        script_dir = Path(__file__).resolve().parent
+        skill_root = script_dir.parent
+        p_skill = skill_root / path_str
+        if p_skill.is_file():
+            return p_skill.resolve()
+
+        if path_str.startswith("skills/verified-feature-delivery/"):
+            stripped = path_str[len("skills/verified-feature-delivery/") :]
+            if (skill_root / stripped).is_file():
+                return (skill_root / stripped).resolve()
+            if (Path.cwd() / stripped).is_file():
+                return (Path.cwd() / stripped).resolve()
+
+        return p_cwd
+
+    if dir_override:
+        p = Path(dir_override)
+        for fname in ["scenario-matrix.json", "flow-simulation-matrix.json"]:
+            if (p / fname).is_file():
+                return (p / fname).resolve()
+        return (p / "scenario-matrix.json").resolve()
+
+    if feature_slug:
+        root = Path(root_override).resolve() if root_override else Path.cwd()
+        for fname in ["scenario-matrix.json", "flow-simulation-matrix.json"]:
+            cand = root / ".verified-feature-delivery" / feature_slug / fname
+            if cand.is_file():
+                return cand.resolve()
+            cand2 = root / feature_slug / fname
+            if cand2.is_file():
+                return cand2.resolve()
+        return root / ".verified-feature-delivery" / feature_slug / "scenario-matrix.json"
+
+    for fname in ["scenario-matrix.json", "flow-simulation-matrix.json"]:
+        cand = Path.cwd() / fname
+        if cand.is_file():
+            return cand.resolve()
+    return Path.cwd() / "scenario-matrix.json"
+
+
+def build_parser():
+    parser = argparse.ArgumentParser(
+        description="Verified Feature Delivery - Stage 2 Scenario Matrix Validator",
+        prog="validate-scenario-matrix",
+    )
+    parser.add_argument("path", nargs="?", help="Path to scenario matrix JSON")
+    parser.add_argument("--file", "-f", help="Explicit path to scenario matrix JSON")
+    parser.add_argument("--feature", "-s", help="Feature slug")
+    parser.add_argument("--dir", "-d", help="Directory containing scenario matrix JSON")
+    parser.add_argument("--root", help="Target project root directory")
+    return parser
+
+
+def main():
+    parser = build_parser()
+    args = parser.parse_args()
+
+    target_path_str = args.file or args.path
+    resolved_path = resolve_matrix_path(target_path_str, args.feature, args.dir, args.root)
+
+    if not resolved_path or not resolved_path.is_file():
+        sys.stderr.write(f"Scenario matrix file not found: {resolved_path}\n")
+        print("MISSING_GATE_ARTIFACT")
+        return 1
+
+    try:
+        with open(resolved_path, "r", encoding="utf-8") as f:
+            matrix_data = json.load(f)
+    except json.JSONDecodeError as e:
+        sys.stderr.write(f"Invalid JSON in {resolved_path}: {e}\n")
+        print("BRANCH_CLASS_UNADDRESSED")
+        return 1
+    except Exception as e:
+        sys.stderr.write(f"Error reading {resolved_path}: {e}\n")
+        return 1
+
+    is_valid, error_code, msg = validate_scenario_matrix_dict(matrix_data)
+
+    if is_valid:
+        feature_slug = matrix_data.get("feature_slug", "unknown")
+        print(f"SCENARIO_MATRIX_VALIDATED_CLEAN: {feature_slug}")
+        return 0
+    else:
+        print(error_code)
+        sys.stderr.write(f"{error_code}: {msg}\n")
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

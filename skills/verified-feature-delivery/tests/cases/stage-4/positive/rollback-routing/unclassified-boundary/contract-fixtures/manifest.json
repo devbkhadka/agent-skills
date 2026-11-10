@@ -1,0 +1,21 @@
+{
+  "schema_version": "1.0.0",
+  "feature_slug": "search-console-web-ui",
+  "updated_at": "2026-08-22T11:45:00Z",
+  "boundary_classes": [
+    {
+      "class_name": "UI_RUNTIME",
+      "verdict": "PRESENT",
+      "probe_path": "phases/1-contract-probing/probes/ui_runtime.ts",
+      "properties": [
+        {"property_name": "render_and_teardown_lifecycle", "verdict": "PROBED", "fixture_ref": "ui_runtime-react_lifecycle.json"},
+        {"property_name": "overlay_portal_mounting", "verdict": "PROBED", "fixture_ref": "ui_runtime-react_lifecycle.json"}
+      ]
+    },
+    {
+      "class_name": "OTHER",
+      "verdict": "NOT_PRESENT",
+      "absence_reason": "Probing met no boundary outside the nine classes the register already names."
+    }
+  ]
+}

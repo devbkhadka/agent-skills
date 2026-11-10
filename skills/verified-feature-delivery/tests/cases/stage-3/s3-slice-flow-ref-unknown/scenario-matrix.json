@@ -1,0 +1,20 @@
+{
+  "schema_version": "1.0.0",
+  "feature_slug": "slice-flow-ref-unknown-feature",
+  "flows": [
+    {
+      "flow_id": "flow_known_id",
+      "group_id": "grp1",
+      "name": "Known Flow",
+      "actor_id": "operator",
+      "preconditions": [],
+      "steps": [],
+      "expected_outcome": {
+        "description": "done",
+        "evidence_key": "ev1",
+        "observer_id": "operator",
+        "medium": "rendered_ui"
+      }
+    }
+  ]
+}

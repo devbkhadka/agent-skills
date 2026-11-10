@@ -1,0 +1,343 @@
+#!/usr/bin/env python3
+"""Stage 0 rendered-document generator: render-entity-map.
+
+Owner: agent-skills-afp-ent-9zl
+Purpose: Renders domain-entity-map.md from a domain-lexicon.json (Stage 0), showing
+entities, entity relationships, entity boundaries and simulated dependencies. Every
+value shown is a declared field already present on the artifact (improvement plan
+§4.1); this executable adds no judgement of its own (rule R2).
+
+Usage:
+    render-entity-map --artifact <path/to/domain-lexicon.json> --out <output-dir>
+
+Exit Codes:
+- 0: Wrote <out>/domain-entity-map.md, mode 0444, and nothing else in that directory.
+- 1: Refused. Prints an uppercase rejection code on stdout and writes no document.
+
+Supported Rejection Codes:
+- MISSING_GATE_ARTIFACT, INVALID_ARTIFACT_JSON
+- MISSING_FEATURE_SLUG, MISSING_BOUNDED_CONTEXT
+- MISSING_ENTITIES, MISSING_ENTITY_NAME, MISSING_PLAIN_LANGUAGE_SUMMARY
+- MISSING_ENTITY_RELATIONSHIPS, MISSING_RELATIONSHIP_FROM_ENTITY,
+  MISSING_RELATIONSHIP_TO_ENTITY, MISSING_RELATIONSHIP_KIND,
+  MISSING_RELATIONSHIP_CARDINALITY, MISSING_RELATIONSHIP_DESCRIPTION
+- MISSING_ENTITY_BOUNDARIES, MISSING_BOUNDARY_ID, MISSING_BOUNDARY_NAME,
+  MISSING_BOUNDARY_ENTITIES, MISSING_OWNED_INVARIANTS, MISSING_BOUNDARY_INTERFACES,
+  MISSING_INTERFACE_ID, MISSING_INTERFACE_DIRECTION, MISSING_INTERFACE_PEER,
+  MISSING_INTERFACE_CONTRACT_REF, MISSING_INTERFACE_DESCRIPTION
+- MISSING_SIMULATED_DEPENDENCIES, MISSING_SIMULATION_BOUNDARY_CLASS,
+  MISSING_SIMULATION_STRATEGY, SIMULATION_WITHOUT_FIXTURE_REF,
+  MISSING_SIMULATION_BUSINESS_LOGIC
+- RENDER_CONTEXT_MISMATCH
+"""
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from lib.primitives import is_vacuous_container
+from lib.render import RenderError, render_document
+
+RENDERER_NAME = "render-entity-map"
+DOC_NAME = "domain-entity-map.md"
+TEMPLATE_NAME = "entity-map.md.tmpl"
+
+
+class Refusal(Exception):
+    """Raised when a field this document displays has no value on the artifact."""
+
+    def __init__(self, code, message):
+        super().__init__(message)
+        self.code = code
+
+
+def require_content(value, code, message):
+    """Require a scalar field to carry real content (not None, not a blank string)."""
+    if is_vacuous_container(value):
+        raise Refusal(code, message)
+    return value
+
+
+def require_present(value, code, message):
+    """Require a collection field to be declared at all; an empty collection is a
+    legitimate declared state and is not refused here."""
+    if value is None:
+        raise Refusal(code, message)
+    return value
+
+
+def render_entities_section(entities):
+    if not entities:
+        return "_No entities declared._"
+    blocks = []
+    for entity in entities:
+        name = require_content(
+            entity.get("name"), "MISSING_ENTITY_NAME", "an entity is missing name"
+        )
+        summary = require_content(
+            entity.get("plain_language_summary"),
+            "MISSING_PLAIN_LANGUAGE_SUMMARY",
+            f"entity '{name}' is missing plain_language_summary",
+        )
+        blocks.append(f"### {name}\n\n{summary}")
+    return "\n\n".join(blocks)
+
+
+def render_relationships_section(relationships):
+    if not relationships:
+        return "_No entity relationships declared._"
+    lines = []
+    for rel in relationships:
+        from_entity = require_content(
+            rel.get("from_entity"),
+            "MISSING_RELATIONSHIP_FROM_ENTITY",
+            "an entity_relationships entry is missing from_entity",
+        )
+        to_entity = require_content(
+            rel.get("to_entity"),
+            "MISSING_RELATIONSHIP_TO_ENTITY",
+            f"entity_relationships entry from '{from_entity}' is missing to_entity",
+        )
+        kind = require_content(
+            rel.get("kind"),
+            "MISSING_RELATIONSHIP_KIND",
+            f"entity_relationships entry '{from_entity}' -> '{to_entity}' is missing kind",
+        )
+        cardinality = require_content(
+            rel.get("cardinality"),
+            "MISSING_RELATIONSHIP_CARDINALITY",
+            f"entity_relationships entry '{from_entity}' -> '{to_entity}' is missing cardinality",
+        )
+        description = require_content(
+            rel.get("description"),
+            "MISSING_RELATIONSHIP_DESCRIPTION",
+            f"entity_relationships entry '{from_entity}' -> '{to_entity}' is missing description",
+        )
+        lines.append(
+            f"- **{from_entity} → {to_entity}** ({kind}, {cardinality}) — {description}"
+        )
+    return "\n".join(lines)
+
+
+def render_boundary_interfaces(interfaces, boundary_id):
+    if interfaces is None:
+        raise Refusal(
+            "MISSING_BOUNDARY_INTERFACES",
+            f"entity boundary '{boundary_id}' is missing interfaces",
+        )
+    if not interfaces:
+        return ["Interfaces: none declared."]
+    lines = ["Interfaces:"]
+    for iface in interfaces:
+        interface_id = require_content(
+            iface.get("interface_id"),
+            "MISSING_INTERFACE_ID",
+            f"an interface in boundary '{boundary_id}' is missing interface_id",
+        )
+        direction = require_content(
+            iface.get("direction"),
+            "MISSING_INTERFACE_DIRECTION",
+            f"interface '{interface_id}' in boundary '{boundary_id}' is missing direction",
+        )
+        peer = require_content(
+            iface.get("peer"),
+            "MISSING_INTERFACE_PEER",
+            f"interface '{interface_id}' in boundary '{boundary_id}' is missing peer",
+        )
+        contract_ref = require_content(
+            iface.get("contract_ref"),
+            "MISSING_INTERFACE_CONTRACT_REF",
+            f"interface '{interface_id}' in boundary '{boundary_id}' is missing contract_ref",
+        )
+        description = require_content(
+            iface.get("description"),
+            "MISSING_INTERFACE_DESCRIPTION",
+            f"interface '{interface_id}' in boundary '{boundary_id}' is missing description",
+        )
+        lines.append(
+            f"- **{interface_id}** ({direction}, peer: {peer}, contract: `{contract_ref}`)"
+            f" — {description}"
+        )
+    return lines
+
+
+def render_boundaries_section(boundaries):
+    if not boundaries:
+        return "_No entity boundaries declared._"
+    blocks = []
+    for boundary in boundaries:
+        boundary_id = require_content(
+            boundary.get("boundary_id"),
+            "MISSING_BOUNDARY_ID",
+            "an entity_boundaries entry is missing boundary_id",
+        )
+        name = require_content(
+            boundary.get("name"),
+            "MISSING_BOUNDARY_NAME",
+            f"entity boundary '{boundary_id}' is missing name",
+        )
+        member_entities = require_present(
+            boundary.get("entities"),
+            "MISSING_BOUNDARY_ENTITIES",
+            f"entity boundary '{boundary_id}' is missing entities",
+        )
+        invariants = require_present(
+            boundary.get("owned_invariants"),
+            "MISSING_OWNED_INVARIANTS",
+            f"entity boundary '{boundary_id}' is missing owned_invariants",
+        )
+
+        lines = [f"### {name} (`{boundary_id}`)", ""]
+        lines.append(
+            "Entities: " + (", ".join(member_entities) if member_entities else "none declared.")
+        )
+        lines.append("")
+        lines.append("Owned invariants:")
+        if invariants:
+            lines.extend(f"- {inv}" for inv in invariants)
+        else:
+            lines.append("- none declared.")
+        lines.append("")
+        lines.extend(render_boundary_interfaces(boundary.get("interfaces"), boundary_id))
+        blocks.append("\n".join(lines))
+    return "\n\n".join(blocks)
+
+
+def render_simulated_dependencies_section(deps):
+    if not deps:
+        return "_No simulated dependencies declared._"
+    lines = []
+    for dep in deps:
+        boundary_class = require_content(
+            dep.get("boundary_class"),
+            "MISSING_SIMULATION_BOUNDARY_CLASS",
+            "a simulated_dependencies entry is missing boundary_class",
+        )
+        strategy = require_content(
+            dep.get("simulation_strategy"),
+            "MISSING_SIMULATION_STRATEGY",
+            f"simulated dependency for '{boundary_class}' is missing simulation_strategy",
+        )
+        fixture_ref = require_content(
+            dep.get("fixture_ref"),
+            "SIMULATION_WITHOUT_FIXTURE_REF",
+            f"simulated dependency for '{boundary_class}' is missing fixture_ref",
+        )
+        business_logic = require_content(
+            dep.get("business_logic_under_test"),
+            "MISSING_SIMULATION_BUSINESS_LOGIC",
+            f"simulated dependency for '{boundary_class}' is missing business_logic_under_test",
+        )
+        lines.append(
+            f"- **{boundary_class}** via {strategy} (fixture: `{fixture_ref}`)"
+            f" — exercises {business_logic}"
+        )
+    return "\n".join(lines)
+
+
+def build_context(data):
+    feature_slug = require_content(
+        data.get("feature_slug"), "MISSING_FEATURE_SLUG", "artifact is missing feature_slug"
+    )
+    bounded_context = require_content(
+        data.get("bounded_context"),
+        "MISSING_BOUNDED_CONTEXT",
+        "artifact is missing bounded_context",
+    )
+
+    entities = require_present(
+        data.get("entities"), "MISSING_ENTITIES", "artifact is missing entities"
+    )
+    entity_relationships = require_present(
+        data.get("entity_relationships"),
+        "MISSING_ENTITY_RELATIONSHIPS",
+        "artifact is missing entity_relationships",
+    )
+    entity_boundaries = require_present(
+        data.get("entity_boundaries"),
+        "MISSING_ENTITY_BOUNDARIES",
+        "artifact is missing entity_boundaries",
+    )
+    simulated_dependencies = require_present(
+        data.get("simulated_dependencies"),
+        "MISSING_SIMULATED_DEPENDENCIES",
+        "artifact is missing simulated_dependencies",
+    )
+
+    body = "\n\n".join(
+        [
+            f"**Bounded context:** `{bounded_context}`",
+            "## Entities",
+            render_entities_section(entities),
+            "## Entity Relationships",
+            render_relationships_section(entity_relationships),
+            "## Entity Boundaries",
+            render_boundaries_section(entity_boundaries),
+            "## Simulated Dependencies",
+            render_simulated_dependencies_section(simulated_dependencies),
+        ]
+    )
+    return {"feature_slug": feature_slug, "body": body}
+
+
+def build_parser():
+    parser = argparse.ArgumentParser(
+        prog=RENDERER_NAME,
+        description="Render domain-entity-map.md from domain-lexicon.json",
+    )
+    parser.add_argument("--artifact", required=True, help="Path to domain-lexicon.json")
+    parser.add_argument("--out", required=True, help="Output directory for the rendered document")
+    return parser
+
+
+def main():
+    args = build_parser().parse_args()
+
+    artifact_path = Path(args.artifact)
+    if not artifact_path.is_file():
+        sys.stderr.write(f"Artifact not found: {artifact_path}\n")
+        print("MISSING_GATE_ARTIFACT")
+        return 1
+
+    try:
+        with open(artifact_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except json.JSONDecodeError as e:
+        sys.stderr.write(f"Invalid JSON in {artifact_path}: {e}\n")
+        print("INVALID_ARTIFACT_JSON")
+        return 1
+
+    if not isinstance(data, dict):
+        sys.stderr.write("Artifact root must be a JSON object\n")
+        print("INVALID_ARTIFACT_JSON")
+        return 1
+
+    try:
+        context = build_context(data)
+    except Refusal as refusal:
+        print(refusal.code)
+        sys.stderr.write(f"{refusal.code}: {refusal}\n")
+        return 1
+
+    try:
+        render_document(
+            template_name=TEMPLATE_NAME,
+            context=context,
+            out_dir=args.out,
+            doc_name=DOC_NAME,
+            artifact_path=artifact_path.name,
+            renderer_name=RENDERER_NAME,
+        )
+    except RenderError as e:
+        sys.stderr.write(f"RENDER_CONTEXT_MISMATCH: {e}\n")
+        print("RENDER_CONTEXT_MISMATCH")
+        return 1
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

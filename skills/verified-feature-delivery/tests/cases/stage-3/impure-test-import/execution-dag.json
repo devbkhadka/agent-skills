@@ -1,0 +1,26 @@
+{
+  "schema_version": "1.0.0",
+  "feature_slug": "impure-test-import-feature",
+  "bootstrap_floor": ["src/main.ts"],
+  "pure_modules": ["src/core/calc.ts"],
+  "slices": [
+    {
+      "slice_id": "slice_1",
+      "name": "Slice 1",
+      "dependencies": [],
+      "legs": {
+        "trigger": { "type": "USER_ACTION", "description": "Trigger" },
+        "core_pure_logic": {
+          "pure_module_files": ["src/core/calc.ts"],
+          "assertable_without_rendering": true,
+          "test_file": "tests/unit/pure.test.ts"
+        },
+        "adapter_persistence": { "optional_leg_present": false },
+        "output_verification": {
+          "verification_medium": "process_exit",
+          "verification_script": "tests/slices/slice_1_verify.sh"
+        }
+      }
+    }
+  ]
+}

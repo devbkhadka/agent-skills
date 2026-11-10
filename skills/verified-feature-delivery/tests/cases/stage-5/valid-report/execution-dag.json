@@ -1,0 +1,33 @@
+{
+  "schema_version": "1.0.0",
+  "feature_slug": "search-console-web-ui",
+  "slices": [
+    {
+      "slice_id": "slice_1_query_entry",
+      "name": "Slice 1: Query Input to Result List Tracer Bullet",
+      "milestones": [
+        {
+          "milestone_id": "M1_PURE_FILTER",
+          "verification_medium": "process_exit",
+          "claims": ["claim:logic:flat_and_filter_composition"]
+        },
+        {
+          "milestone_id": "M2_API_ADAPTER",
+          "verification_medium": "api_response",
+          "claims": [
+            "claim:contract:failure_envelope_handling",
+            "claim:value:result_total_binding"
+          ]
+        },
+        {
+          "milestone_id": "M3_UI_QUERY_FLOW",
+          "verification_medium": "rendered_ui",
+          "claims": [
+            "claim:ui:observable_projections_distinct",
+            "claim:layout:narrow_viewport_floor"
+          ]
+        }
+      ]
+    }
+  ]
+}

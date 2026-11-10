@@ -1,0 +1,24 @@
+{
+  "schema_version": "1.0.0",
+  "feature_slug": "search-console-web-ui",
+  "updated_at": "2026-08-23T11:50:00Z",
+  "observers": [
+    {"observer_id": "operator", "medium": "rendered_ui", "modality": "browser_dom"}
+  ],
+  "states": [
+    {
+      "state_id": "IDLE",
+      "evidence_key": "state:IDLE",
+      "is_initial": true,
+      "is_terminal": false,
+      "description": "Console mounted with an empty query box and no executed search.",
+      "observable_projections": [
+        {
+          "observer_id": "operator",
+          "medium": "rendered_ui",
+          "discriminator": {"region": "search_pane", "atom": "prompt_to_run_search"}
+        }
+      ]
+    }
+  ]
+}

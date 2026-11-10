@@ -1,0 +1,18 @@
+{
+  "schema_version": "1.0.0",
+  "feature_slug": "monthly-timelog-viewer",
+  "slices": [
+    {
+      "slice_id": "SLICE_1_CORE_TIMELOG_VIEW",
+      "milestones": [
+        {
+          "milestone_id": "MS_CORE_TIMELOG_VIEW",
+          "verification_medium": "rendered_ui",
+          "claims": [
+            "CLAIM_CURRENT_MONTH_TIMELOG_DISPLAY"
+          ]
+        }
+      ]
+    }
+  ]
+}

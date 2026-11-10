@@ -1,0 +1,30 @@
+{
+  "schema_version": "1.0.0",
+  "boundary_class": "VERIFICATION_HARNESS",
+  "boundary_identifier": "vitest_jsdom_harness",
+  "fixture_status": "PROBED_LIVE",
+  "pinned_reprobe_milestone": null,
+  "contract_reference": "tests/setup.ts",
+  "parity_target_class": "UI_RUNTIME",
+  "differential_parity_audit": {
+    "live_boundary_failure_envelope": "DOMException AbortError on unmount",
+    "harness_observed_response": "DOMException AbortError on unmount",
+    "error_code": null,
+    "mitigation_notes": "JSDOM environment correctly propagates AbortSignal cancellation matching real browser DOM."
+  },
+  "success_samples": [
+    {
+      "sample_id": "vitest_jsdom_pass",
+      "payload": { "test_runner": "vitest", "dom_environment": "jsdom", "passed": true }
+    }
+  ],
+  "failure_envelope_census": [
+    {
+      "envelope_id": "jsdom_unhandled_rejection",
+      "error_class": "UnhandledPromiseRejection",
+      "payload_type": "Error",
+      "payload": { "message": "Async effect failed without catch handler." },
+      "description": "Unhandled async error in fake timer flush."
+    }
+  ]
+}

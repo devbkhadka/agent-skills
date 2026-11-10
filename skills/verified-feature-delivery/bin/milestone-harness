@@ -1,0 +1,1073 @@
+#!/usr/bin/env python3
+"""Stage 4 milestone harness: grade a slice run against the evidence it captured.
+
+Owner: stage-4.
+
+The harness reads the execution records a slice's verification suite produced, captures the
+medium-appropriate evidence each one carries, computes a projection fingerprint for every
+evidence_key the slice reached, and then enforces the Stage 4 obligations in the order the spec
+states them:
+
+    step 3  every distinct recorded shape of an UNBOUNDED region is exercised by an assertion
+    step 4  every evidence_key the matrix declares has a captured projection, and no two
+            fingerprint alike for one observer
+    step 5  no silent boundary degradation: a zero exit or a 2xx accompanied by a warning class
+            the Stage 1 failure envelope census recorded is a failed milestone
+    step 6  every PROVISIONAL_FROM_SCHEMA fixture is discharged through its pinned re-probe: the
+            pin must name a milestone this run's execution DAG actually declares, and a record
+            that pin's milestone_id ran successfully must attribute its capture to the fixture's
+            own boundary_identifier
+    step 8  the four regression edges, routed through the transition table in bin/planner-state
+
+Nothing here is read as a verdict. There is no key for a fingerprint, for coverage, for a
+degradation finding or for a rollback cause: the fingerprint is computed from the captured
+artifact, coverage by differencing the matrix against what was captured, degradation by checking
+a success signal against the warning classes the census already recorded, and the rollback cause
+by differencing a recorded failure against the artifact that would have had to name it. An
+execution record that carries a key outside its closed set is refused, so a verdict field cannot
+be introduced and then quietly believed.
+
+Exit codes: 0 when the milestone run verifies; non-zero printing one bare token otherwise —
+VARIANCE_SHAPE_UNEXERCISED, PROJECTION_COVERAGE_GAP, FINGERPRINT_COLLISION,
+SILENT_BOUNDARY_DEGRADATION, PINNED_REPROBE_MILESTONE_UNDECLARED, PROVISIONAL_FIXTURE_OUTSTANDING,
+PROVISIONAL_DISCHARGE_UNATTRIBUTED, UNCLASSIFIED_BOUNDARY, CONTRACT_DRIFT,
+DOMAIN_TYPE_PRECISION_MISMATCH, BROKEN_INVARIANT or MISSING_GATE_ARTIFACT.
+"""
+
+import argparse
+from datetime import datetime, timezone
+import json
+from pathlib import Path
+import sys
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from lib.normalisation import (
+    CANONICAL_MEDIA,
+    NormalisationRefused,
+    captured_status_code,
+    capture_projection,
+    census_markers,
+    compute_captured_projections,
+    contract_header_names,
+    coverage_gaps,
+    fingerprint_collisions,
+    matched_warning_classes,
+    matrix_declared_outcomes,
+    matrix_projection_targets,
+    observer_media,
+    refuse_unrecognised_medium,
+    type_signature,
+)
+from lib.primitives import check_closed_key_set, is_vacuous_container
+from lib.rollback import (
+    STAGE_4_STATE,
+    UNCLASSIFIED_BOUNDARY_CAUSE,
+    classify_collision,
+    classify_failure,
+    execute_rollback,
+    record_unclassified_boundary,
+    rollback_edges,
+    route_cause,
+)
+
+PROVISIONAL_STATUS = "PROVISIONAL_FROM_SCHEMA"
+
+# What the run's own artifacts are called when the state file does not say.
+DEFAULT_EXECUTIONS_PATH = "milestones/executions.json"
+DEFAULT_EVIDENCE_PATH = "milestones/evidence-summary.json"
+DEFAULT_PROJECTIONS_PATH = "projections.json"
+DEFAULT_MATRIX_PATHS = ("flow-simulation-matrix.json", "scenario-matrix.json")
+DEFAULT_MANIFEST_PATH = "contract-fixtures/manifest.json"
+DEFAULT_LEXICON_PATH = "domain-lexicon.json"
+DEFAULT_DAG_PATH = "execution-dag.json"
+
+EXECUTIONS_DOC_KEYS = ("schema_version", "feature_slug", "generated_at", "milestones")
+
+# An execution record reports what a suite ran and what it captured. It has no key for an
+# outcome, a fingerprint or a cause, because each of those is computed from the capture.
+MILESTONE_RECORD_KEYS = (
+    "milestone_id",
+    "slice_id",
+    "verification_medium",
+    "executed_command",
+    "captured_evidence",
+    "evidence_key",
+    "observer_id",
+    "boundary_identifier",
+    "asserted_payloads",
+    "recorded_fixture_values",
+    "failure_trace",
+)
+
+
+def now_iso_utc() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+# ---------------------------------------------------------------------------
+# Loading the run's artifacts
+# ---------------------------------------------------------------------------
+
+def load_json(path: Path) -> Tuple[Optional[Any], Optional[str]]:
+    if not path.is_file():
+        return None, "no such file: %s" % path
+    try:
+        return json.loads(path.read_text(encoding="utf-8")), None
+    except ValueError as error:
+        return None, "%s is not valid JSON: %s" % (path, error)
+
+
+def write_json(path: Path, document: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
+
+
+class RunBundle(object):
+    """Every artifact the harness grades a run against, resolved from one feature directory.
+
+    Artifact paths come from the state file's own artifact map when it has one. The map is
+    authoritative: a harness that hunted for a filename of its own choosing would grade a
+    different file from the one the state machine gates on.
+    """
+
+    def __init__(self, feature_dir: Path):
+        self.feature_dir = feature_dir
+        self.problems: List[str] = []
+
+        self.state, _error = load_json(feature_dir / "state.json")
+        artifacts = self.state.get("artifacts") if isinstance(self.state, dict) else None
+        self.artifact_map = artifacts if isinstance(artifacts, dict) else {}
+        self.feature_slug = (
+            str(self.state.get("feature_slug"))
+            if isinstance(self.state, dict) and self.state.get("feature_slug")
+            else feature_dir.name
+        )
+
+        self.executions_path = self._resolve("stage_4_executions", DEFAULT_EXECUTIONS_PATH)
+        self.evidence_path = self._resolve("stage_4_milestone_evidence", DEFAULT_EVIDENCE_PATH)
+        self.manifest_path = self._resolve("stage_1_manifest", DEFAULT_MANIFEST_PATH)
+        self.lexicon_path = self._resolve("stage_0_lexicon", DEFAULT_LEXICON_PATH)
+        self.dag_path = self._resolve("stage_3_execution_dag", DEFAULT_DAG_PATH)
+        self.projections_path = feature_dir / DEFAULT_PROJECTIONS_PATH
+
+        self.matrix_path = self._resolve("stage_2_scenario_matrix", DEFAULT_MATRIX_PATHS[0])
+        if not self.matrix_path.is_file():
+            for name in DEFAULT_MATRIX_PATHS:
+                if (feature_dir / name).is_file():
+                    self.matrix_path = feature_dir / name
+                    break
+
+        self.executions, error = load_json(self.executions_path)
+        if error:
+            self.problems.append("the run recorded no milestone executions (%s)" % error)
+        self.matrix, _error = load_json(self.matrix_path)
+        self.manifest, _error = load_json(self.manifest_path)
+        self.lexicon, _error = load_json(self.lexicon_path)
+        self.dag, _error = load_json(self.dag_path)
+        self.contract_fixtures = self._load_contract_fixtures()
+        self.declared_outcomes = matrix_declared_outcomes(self.matrix)
+        self.milestone_claims = declared_milestone_claims(self.dag)
+
+    def expected_outcome(self, record: Dict[str, Any]) -> Optional[Tuple[str, int]]:
+        """The outcome code the approved plan says this record's capture must show, if any.
+
+        Read from the approved artifacts only: the matrix declares the code for the record's
+        (evidence_key, observer_id) projection, and the execution DAG must have committed the
+        record's milestone to that same projection as a claim. The record contributes nothing
+        but the keys it already carries to say which state it reached; it has no field that can
+        state or override the code. A record whose milestone did not claim the state is graded
+        by the default rule, so relabelling a capture with an error state's evidence_key does
+        not turn a failure into an expected outcome.
+        """
+        evidence_key = str(record.get("evidence_key") or "").strip()
+        observer_id = str(record.get("observer_id") or "").strip()
+        milestone_id = str(record.get("milestone_id") or "").strip()
+        if not evidence_key or not observer_id or not milestone_id:
+            return None
+        declared = self.declared_outcomes.get((evidence_key, observer_id))
+        if declared is None:
+            return None
+        if "%s@%s" % (evidence_key, observer_id) not in self.milestone_claims.get(milestone_id, set()):
+            return None
+        return declared
+
+    def _resolve(self, artifact_key: str, default: str) -> Path:
+        recorded = self.artifact_map.get(artifact_key)
+        return self.feature_dir / (str(recorded) if recorded else default)
+
+    def _load_contract_fixtures(self) -> Dict[str, Any]:
+        fixtures: Dict[str, Any] = {}
+        directory = self.manifest_path.parent
+        if not directory.is_dir():
+            return fixtures
+        for path in sorted(directory.glob("*.json")):
+            if path == self.manifest_path:
+                continue
+            document, _error = load_json(path)
+            if isinstance(document, dict) and "boundary_class" in document:
+                fixtures[str(path.relative_to(self.feature_dir))] = document
+        return fixtures
+
+    def fixtures_by_boundary(self) -> Dict[str, Any]:
+        by_boundary: Dict[str, Any] = {}
+        for fixture in self.contract_fixtures.values():
+            identifier = str(fixture.get("boundary_identifier") or fixture.get("boundary_id") or "").strip()
+            if identifier:
+                by_boundary[identifier] = fixture
+        return by_boundary
+
+    def milestone_records(self) -> Tuple[List[Dict[str, Any]], List[str]]:
+        """The execution records, with every record checked against its closed key set."""
+        problems: List[str] = []
+        if not isinstance(self.executions, dict):
+            return [], ["MISSING_GATE_ARTIFACT: the milestone execution artifact is not an object"]
+
+        closed = check_closed_key_set(self.executions, EXECUTIONS_DOC_KEYS, label="execution artifact")
+        if not closed.is_valid:
+            return [], ["UNKNOWN_EXECUTION_ATTRIBUTE: %s" % closed.message]
+
+        records = self.executions.get("milestones")
+        if is_vacuous_container(records) or not isinstance(records, list):
+            return [], [
+                "MISSING_GATE_ARTIFACT: the run recorded no milestone execution carrying any content"
+            ]
+
+        kept: List[Dict[str, Any]] = []
+        for index, record in enumerate(records):
+            label = "milestones[%d]" % index
+            if not isinstance(record, dict) or is_vacuous_container(record):
+                problems.append("MISSING_GATE_ARTIFACT: %s records nothing" % label)
+                continue
+            closed = check_closed_key_set(record, MILESTONE_RECORD_KEYS, label=label)
+            if not closed.is_valid:
+                problems.append("UNKNOWN_EXECUTION_ATTRIBUTE: %s" % closed.message)
+                continue
+            milestone_id = str(record.get("milestone_id") or "").strip()
+            if not milestone_id:
+                problems.append("MISSING_GATE_ARTIFACT: %s names no milestone" % label)
+                continue
+            try:
+                refuse_unrecognised_medium(
+                    record.get("verification_medium"),
+                    label="verification medium of %s" % milestone_id,
+                )
+            except NormalisationRefused as refused:
+                problems.append("%s: %s" % (refused.code, refused.detail))
+                continue
+            if is_vacuous_container(record.get("captured_evidence")):
+                problems.append(
+                    "MISSING_GATE_ARTIFACT: %s captured no evidence, so its milestone cannot be "
+                    "verified" % milestone_id
+                )
+                continue
+            kept.append(record)
+        return kept, problems
+
+
+# ---------------------------------------------------------------------------
+# Success signal, computed from the capture
+# ---------------------------------------------------------------------------
+
+def _code_field(evidence: Dict[str, Any], key: str) -> Tuple[bool, Optional[int]]:
+    """(present, code): whether the capture recorded `key`, and its integer value if usable.
+
+    A bool is not a code. A key that is present but carries no integer is present and unusable,
+    so the caller fails it rather than falling through to a different field.
+    """
+    if evidence.get(key) is None:
+        return False, None
+    value = evidence[key]
+    if isinstance(value, bool) or not isinstance(value, int):
+        return True, None
+    return True, value
+
+
+def success_signal(
+    record: Dict[str, Any],
+    expected: Optional[Tuple[str, int]] = None,
+) -> Optional[bool]:
+    """Whether the capture reports success, computed from the captured exit code or status.
+
+    `expected` is the (medium, code) the approved plan declares for this record's state — see
+    RunBundle.expected_outcome; it is never read from the record. When one is declared, only
+    that medium's field is graded: a process_exit expectation grades only exit_code, an
+    api_response expectation grades only the status (from a structured capture or raw HTTP
+    text), and success is the observed code equalling the declared one. A field that is present
+    but malformed is a failure, never a fall-through to the other field. A field that is absent
+    gives None: the capture is then one its observer's normaliser refuses at step 4
+    (UNNORMALISABLE_ARTIFACT), which names the real defect, and None never counts as success.
+    With nothing declared, success is a zero exit, or else a 2xx status.
+
+    None when nothing is declared and the medium carries neither, which is not the same as
+    success — there is no exit code or status for the degradation check to pair a warning with.
+    """
+    evidence = record.get("captured_evidence")
+    if expected is not None:
+        medium, declared = expected
+        if medium == "api_response" and not isinstance(evidence, dict):
+            code = captured_status_code(evidence)
+            return None if code is None else code == declared
+        if not isinstance(evidence, dict):
+            return None
+        if medium == "process_exit":
+            present, code = _code_field(evidence, "exit_code")
+        else:
+            present, code = _code_field(evidence, "status_code")
+            if not present:
+                present, code = _code_field(evidence, "status")
+        if not present:
+            return None
+        return code is not None and code == declared
+
+    if not isinstance(evidence, dict):
+        return None
+    present, exit_code = _code_field(evidence, "exit_code")
+    if present:
+        return exit_code == 0
+    present, status = _code_field(evidence, "status_code")
+    if present:
+        return status is not None and 200 <= status < 300
+    _present, status = _code_field(evidence, "status")
+    if status is not None:
+        return 200 <= status < 300
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Step 5: silent boundary degradation
+# ---------------------------------------------------------------------------
+
+def markers_for_record(
+    record: Dict[str, Any],
+    fixtures_by_boundary: Dict[str, Any],
+    all_fixtures: Sequence[Any],
+) -> List[Tuple[str, str]]:
+    """The census markers that apply to a milestone: its boundary's, or every boundary's.
+
+    A milestone that names the boundary it exercised is checked against that boundary's census.
+    One that does not is checked against every census, because an unattributed capture is not a
+    reason to check nothing.
+    """
+    boundary = str(record.get("boundary_identifier") or "").strip()
+    fixtures = (
+        [fixtures_by_boundary[boundary]]
+        if boundary and boundary in fixtures_by_boundary
+        else list(all_fixtures)
+    )
+    markers: List[Tuple[str, str]] = []
+    for fixture in fixtures:
+        for marker in census_markers(fixture):
+            if marker not in markers:
+                markers.append(marker)
+    return markers
+
+
+def warning_classes_in_capture(
+    record: Dict[str, Any],
+    fixtures_by_boundary: Dict[str, Any],
+    all_fixtures: Sequence[Any],
+) -> List[Tuple[str, str]]:
+    """Census warning classes observable in what this milestone captured."""
+    return matched_warning_classes(
+        record.get("captured_evidence"), markers_for_record(record, fixtures_by_boundary, all_fixtures)
+    )
+
+
+# ---------------------------------------------------------------------------
+# Step 3: the variance census, exercised
+# ---------------------------------------------------------------------------
+
+def extract_at_path(value: Any, path: str) -> List[Any]:
+    """Every value a recorded region path reaches, walking `[]` as "each element"."""
+    current = [value]
+    for raw_segment in path.split("."):
+        segment = raw_segment.strip()
+        if not segment:
+            continue
+        iterate = segment.endswith("[]")
+        key = segment[:-2] if iterate else segment
+        following: List[Any] = []
+        for item in current:
+            if key:
+                if not isinstance(item, dict) or key not in item:
+                    continue
+                item = item[key]
+            if iterate:
+                if isinstance(item, list):
+                    following.extend(item)
+            else:
+                following.append(item)
+        current = following
+        if not current:
+            return []
+    return current
+
+
+def recorded_region_shapes(fixture: Any) -> Dict[str, Set[str]]:
+    """The distinct shapes each UNBOUNDED region of a fixture actually took in its samples.
+
+    The shapes are computed from the recorded samples, not read from a list of shape names, so
+    a census cannot claim a shape it never recorded or hide one it did.
+    """
+    shapes: Dict[str, Set[str]] = {}
+    if not isinstance(fixture, dict):
+        return shapes
+    census = fixture.get("variance_census")
+    if not isinstance(census, dict):
+        return shapes
+    regions = census.get("unbounded_regions")
+    if not isinstance(regions, list):
+        return shapes
+    samples = fixture.get("success_samples")
+    if not isinstance(samples, list):
+        return shapes
+    for region in regions:
+        region_path = str(region or "").strip()
+        if not region_path:
+            continue
+        found: Set[str] = set()
+        for sample in samples:
+            for value in extract_at_path(sample, region_path):
+                found.add(type_signature(value))
+        if found:
+            shapes[region_path] = found
+    return shapes
+
+
+def exercised_region_shapes(
+    records: Sequence[Dict[str, Any]],
+    region_paths: Iterable[str],
+) -> Dict[str, Set[str]]:
+    """The shapes the suites' assertions actually reached, computed the same way."""
+    exercised: Dict[str, Set[str]] = {path: set() for path in region_paths}
+    for record in records:
+        payloads = record.get("asserted_payloads")
+        if not isinstance(payloads, list):
+            continue
+        for payload in payloads:
+            if is_vacuous_container(payload):
+                continue
+            rooted = payload if (isinstance(payload, dict) and "payload" in payload) else {"payload": payload}
+            for path in exercised:
+                for value in extract_at_path(rooted, path):
+                    exercised[path].add(type_signature(value))
+    return exercised
+
+
+# ---------------------------------------------------------------------------
+# Step 6: provisional fixtures, discharged
+# ---------------------------------------------------------------------------
+
+def declared_milestone_claims(dag: Any) -> Dict[str, Set[str]]:
+    """Every claim the execution DAG committed each declared milestone_id to verify."""
+    claims: Dict[str, Set[str]] = {}
+    slices = dag.get("slices") if isinstance(dag, dict) else None
+    if not isinstance(slices, list):
+        return claims
+    for slice_entry in slices:
+        milestones = slice_entry.get("milestones") if isinstance(slice_entry, dict) else None
+        if not isinstance(milestones, list):
+            continue
+        for milestone in milestones:
+            if not isinstance(milestone, dict):
+                continue
+            milestone_id = str(milestone.get("milestone_id") or "").strip()
+            raw_claims = milestone.get("claims")
+            if milestone_id and isinstance(raw_claims, list):
+                claims.setdefault(milestone_id, set()).update(
+                    str(claim).strip() for claim in raw_claims if str(claim).strip()
+                )
+    return claims
+
+
+def declared_milestone_ids(dag: Any) -> Set[str]:
+    """Every milestone_id the execution DAG's slices actually declare.
+
+    Read from the DAG, not from what a milestone execution record claims about itself: a pin
+    is only meaningful if it names a unit of work the plan itself committed to, not a string an
+    execution record happens to repeat back.
+    """
+    ids: Set[str] = set()
+    if not isinstance(dag, dict):
+        return ids
+    slices = dag.get("slices")
+    if not isinstance(slices, list):
+        return ids
+    for slice_entry in slices:
+        if not isinstance(slice_entry, dict):
+            continue
+        milestones = slice_entry.get("milestones")
+        if not isinstance(milestones, list):
+            continue
+        for milestone in milestones:
+            if isinstance(milestone, dict):
+                milestone_id = str(milestone.get("milestone_id") or "").strip()
+                if milestone_id:
+                    ids.add(milestone_id)
+    return ids
+
+
+def undeclared_pin_fixtures(
+    contract_fixtures: Dict[str, Any],
+    dag: Any,
+) -> List[Tuple[str, str]]:
+    """Provisional fixtures whose pin names no milestone the execution DAG declares.
+
+    Checked only when the DAG loaded and declares at least one milestone: a run whose DAG
+    artifact is absent or unreadable is not this check's evidence to rule on, and is left to
+    whatever step already refuses on that absence when this run's other obligations need the
+    DAG. When the DAG is present, a pin naming nothing in it can never be discharged by a real
+    re-probe, no matter what a milestone execution record later claims — the pin is unresolvable
+    on its face, so it is refused before asking whether anything ran against it.
+    """
+    declared = declared_milestone_ids(dag)
+    if not declared:
+        return []
+    found: List[Tuple[str, str]] = []
+    for name, fixture in sorted(contract_fixtures.items()):
+        if str(fixture.get("fixture_status") or "") != PROVISIONAL_STATUS:
+            continue
+        pinned = str(fixture.get("pinned_reprobe_milestone") or "").strip()
+        if pinned and pinned not in declared:
+            found.append((
+                name,
+                "its pinned re-probe milestone %r names no milestone this run's execution DAG declares" % pinned,
+            ))
+    return found
+
+
+def outstanding_provisional_fixtures(
+    contract_fixtures: Dict[str, Any],
+    records: Sequence[Dict[str, Any]],
+    bundle: Optional["RunBundle"] = None,
+) -> Tuple[List[Tuple[str, str]], List[Tuple[str, str]]]:
+    """Provisional fixtures whose pinned re-probe did not run, or ran without observing the fixture's boundary.
+
+    A pinned milestone_id exiting zero is not by itself a re-probe of anything: the record it
+    exited from also has to attribute its capture to the fixture's own boundary_identifier, or
+    the "success" it reports could belong to any other milestone that happens to share the pin's
+    name. Returns (outstanding, unattributed) — outstanding for a pin that never ran at all (or
+    was never set), unattributed for one that ran but named no matching boundary.
+    """
+    reprobed_by_id: Dict[str, List[Dict[str, Any]]] = {}
+    for record in records:
+        expected = bundle.expected_outcome(record) if bundle is not None else None
+        if success_signal(record, expected) is True:
+            milestone_id = str(record.get("milestone_id") or "").strip()
+            reprobed_by_id.setdefault(milestone_id, []).append(record)
+
+    outstanding: List[Tuple[str, str]] = []
+    unattributed: List[Tuple[str, str]] = []
+    for name, fixture in sorted(contract_fixtures.items()):
+        if str(fixture.get("fixture_status") or "") != PROVISIONAL_STATUS:
+            continue
+        pinned = str(fixture.get("pinned_reprobe_milestone") or "").strip()
+        if not pinned:
+            outstanding.append((name, "pins no Stage 4 re-probe milestone to be discharged through"))
+            continue
+        discharging_records = reprobed_by_id.get(pinned)
+        if not discharging_records:
+            outstanding.append((
+                name,
+                "its pinned re-probe milestone %r did not run against the live boundary" % pinned,
+            ))
+            continue
+        boundary = str(fixture.get("boundary_identifier") or fixture.get("boundary_id") or "").strip()
+        attributed = bool(boundary) and any(
+            str(record.get("boundary_identifier") or "").strip() == boundary
+            for record in discharging_records
+        )
+        if not attributed:
+            unattributed.append((
+                name,
+                "its pinned re-probe milestone %r ran, but no record attributed its capture to "
+                "boundary_identifier %r" % (pinned, boundary),
+            ))
+    return outstanding, unattributed
+
+
+# ---------------------------------------------------------------------------
+# Projections computed from the milestone captures
+# ---------------------------------------------------------------------------
+
+def capture_records_from_milestones(records: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Turn every milestone that reached an observable state into a projection capture record."""
+    captures: List[Dict[str, Any]] = []
+    for record in records:
+        evidence_key = str(record.get("evidence_key") or "").strip()
+        observer_id = str(record.get("observer_id") or "").strip()
+        if not evidence_key or not observer_id:
+            continue
+        capture = {
+            "evidence_key": evidence_key,
+            "observer_id": observer_id,
+            "captured_artifact": record.get("captured_evidence"),
+            "milestone_id": record.get("milestone_id"),
+        }
+        if record.get("slice_id"):
+            capture["slice_id"] = record["slice_id"]
+        if record.get("recorded_fixture_values"):
+            capture["recorded_fixture_values"] = list(record["recorded_fixture_values"])
+        captures.append(capture)
+    return captures
+
+
+def all_census_markers(fixtures: Iterable[Any]) -> List[Tuple[str, str]]:
+    """Every census marker across the contract fixtures, for the projection's warning classes."""
+    markers: List[Tuple[str, str]] = []
+    for fixture in fixtures:
+        for marker in census_markers(fixture):
+            if marker not in markers:
+                markers.append(marker)
+    return markers
+
+
+# ---------------------------------------------------------------------------
+# The regression router
+# ---------------------------------------------------------------------------
+
+def classify_regressions(
+    bundle: RunBundle,
+    records: Sequence[Dict[str, Any]],
+    computed_projections: Optional[List[Dict[str, Any]]] = None,
+) -> Tuple[List[Any], List[str]]:
+    """Classify every regression this run recorded, in the spec's four causes."""
+    findings: List[Any] = []
+    problems: List[str] = []
+
+    for observer_id, key_a, key_b, fingerprint in fingerprint_collisions(computed_projections or []):
+        findings.append(classify_collision(observer_id, key_a, key_b, fingerprint))
+
+    fixtures_by_boundary = bundle.fixtures_by_boundary()
+    for record in records:
+        trace = record.get("failure_trace")
+        if success_signal(record, bundle.expected_outcome(record)) is not False:
+            continue
+        milestone_id = str(record.get("milestone_id") or "")
+        if trace is None:
+            problems.append(
+                "UNTRACED_FAILURE: milestone %s failed but records nothing about what it touched, "
+                "so no regression edge can be computed for it" % milestone_id
+            )
+            continue
+        finding, trace_problems = classify_failure(
+            milestone_id, trace, bundle.manifest, bundle.lexicon, fixtures_by_boundary
+        )
+        problems.extend(trace_problems)
+        if finding is not None:
+            findings.append(finding)
+    return findings, problems
+
+
+def route_and_execute(bundle: RunBundle, finding: Any, write: bool) -> Tuple[int, str]:
+    """Print the cause, record what the fourth edge has to record, and roll the state back."""
+    target = route_cause(finding.cause)
+    if target is None:
+        return 1, (
+            "UNROUTABLE_ROLLBACK_CAUSE: %s is not a cause the transition table permits from %s "
+            "(permitted: %s)" % (finding.cause, STAGE_4_STATE, json.dumps(rollback_edges()))
+        )
+
+    lines = ["%s: %s" % (finding.cause, finding.detail)]
+    lines.append("  routes to %s" % target)
+
+    if finding.cause == UNCLASSIFIED_BOUNDARY_CAUSE and write:
+        manifest = bundle.manifest if isinstance(bundle.manifest, dict) else {}
+        amendment_id = record_unclassified_boundary(
+            bundle.manifest_path, manifest, finding, now_iso_utc()
+        )
+        lines.append(
+            "  recorded the boundary under OTHER in %s and raised register amendment %s"
+            % (bundle.manifest_path.name, amendment_id)
+        )
+
+    if write:
+        code, executed_target = execute_rollback(bundle.feature_dir, bundle.feature_slug, finding.cause)
+        if code != 0 or executed_target is None:
+            lines.append("  the state transition to %s was refused by the state engine" % target)
+        else:
+            lines.append("  rolled the feature state back to %s" % executed_target)
+    return 1, "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# The full Stage 4 grading run
+# ---------------------------------------------------------------------------
+
+def validate_milestone_execution(feature_dir: Path, write: bool = True) -> Tuple[int, str]:
+    """Grade one slice run in the order the spec's Stage 4 process states."""
+    bundle = RunBundle(Path(feature_dir))
+    if bundle.problems:
+        return 1, "\n".join("MISSING_GATE_ARTIFACT: %s" % problem for problem in bundle.problems)
+
+    records, problems = bundle.milestone_records()
+    if problems:
+        return 1, "\n".join(problems)
+
+    fixtures_by_boundary = bundle.fixtures_by_boundary()
+    all_fixtures = list(bundle.contract_fixtures.values())
+
+    # Success is graded against the matrix's declared outcome codes, which are read through the
+    # observer register, so a register that cannot be read is refused before any grading.
+    if isinstance(bundle.matrix, dict):
+        _media, observer_problems = observer_media(bundle.matrix)
+        if observer_problems:
+            return 1, "\n".join("MISSING_GATE_ARTIFACT: %s" % problem for problem in observer_problems)
+
+    # --- step 8, for failures already recorded -----------------------------------------
+    # A milestone that failed has not verified its vertical flow, so the regression engine owns
+    # the run before the remaining obligations are graded.
+    findings, routing_problems = classify_regressions(bundle, records)
+    if findings:
+        return route_and_execute(bundle, findings[0], write)
+    if routing_problems:
+        return 1, "\n".join(routing_problems)
+
+    # --- step 3: the full variance census exercised -----------------------------------
+    recorded: Dict[str, Dict[str, Set[str]]] = {}
+    for name, fixture in bundle.contract_fixtures.items():
+        shapes = recorded_region_shapes(fixture)
+        if shapes:
+            recorded[name] = shapes
+    region_paths = {path for shapes in recorded.values() for path in shapes}
+    exercised = exercised_region_shapes(records, region_paths)
+
+    unexercised: List[str] = []
+    for name in sorted(recorded):
+        for path in sorted(recorded[name]):
+            missing = sorted(recorded[name][path] - exercised.get(path, set()))
+            for shape in missing:
+                unexercised.append(
+                    "  %s recorded shape %s of UNBOUNDED region %s, which no assertion exercised"
+                    % (name, shape, path)
+                )
+    if unexercised:
+        return 1, "\n".join(
+            ["VARIANCE_SHAPE_UNEXERCISED: %d recorded shape(s) of an UNBOUNDED region were never "
+             "asserted against" % len(unexercised)] + unexercised
+        )
+
+    # --- step 4: projection coverage and the binding collision check ------------------
+    if not isinstance(bundle.matrix, dict):
+        return 1, (
+            "MISSING_GATE_ARTIFACT: the scenario matrix is not beside the run, so projection "
+            "coverage cannot be differenced against it"
+        )
+    media_by_observer, observer_problems = observer_media(bundle.matrix)
+    if observer_problems:
+        return 1, "\n".join("MISSING_GATE_ARTIFACT: %s" % problem for problem in observer_problems)
+
+    captures = capture_records_from_milestones(records)
+    computed, capture_problems = compute_captured_projections(
+        captures,
+        media_by_observer,
+        contract_headers=contract_header_names(all_fixtures),
+        artifact_root=bundle.feature_dir,
+        warning_markers=all_census_markers(all_fixtures),
+    )
+    if capture_problems:
+        return 1, "\n".join(capture_problems)
+
+    targets = matrix_projection_targets(bundle.matrix)
+    gaps = coverage_gaps(targets, computed)
+    if gaps:
+        return 1, "\n".join(
+            ["PROJECTION_COVERAGE_GAP: %d matrix projection target(s) were never captured by a "
+             "slice suite" % len(gaps)]
+            + ["  %s for observer %s" % (key, observer) for key, observer in gaps]
+        )
+
+    collisions = fingerprint_collisions(computed)
+    if collisions:
+        finding = classify_collision(*collisions[0])
+        return route_and_execute(bundle, finding, write)
+
+    # --- step 5: no silent boundary degradation ---------------------------------------
+    for record in records:
+        if success_signal(record, bundle.expected_outcome(record)) is not True:
+            continue
+        warnings = warning_classes_in_capture(record, fixtures_by_boundary, all_fixtures)
+        if warnings:
+            return 1, "\n".join(
+                ["SILENT_BOUNDARY_DEGRADATION: milestone %s reported success while reporting that "
+                 "it dropped part of its work" % record.get("milestone_id")]
+                + ["  warning class %s, recorded in the failure envelope census as %r"
+                   % (warning_class, marker) for warning_class, marker in warnings]
+            )
+
+    # --- step 6: every provisional fixture discharged ---------------------------------
+    undeclared_pins = undeclared_pin_fixtures(bundle.contract_fixtures, bundle.dag)
+    if undeclared_pins:
+        return 1, "\n".join(
+            ["PINNED_REPROBE_MILESTONE_UNDECLARED: %d fixture(s) pin a re-probe milestone this "
+             "run's execution DAG never declares" % len(undeclared_pins)]
+            + ["  %s %s" % (name, reason) for name, reason in undeclared_pins]
+        )
+
+    outstanding, unattributed = outstanding_provisional_fixtures(bundle.contract_fixtures, records, bundle)
+    if outstanding:
+        return 1, "\n".join(
+            ["PROVISIONAL_FIXTURE_OUTSTANDING: %d fixture(s) are still schema-derived at the end "
+             "of Stage 4" % len(outstanding)]
+            + ["  %s %s" % (name, reason) for name, reason in outstanding]
+        )
+    if unattributed:
+        return 1, "\n".join(
+            ["PROVISIONAL_DISCHARGE_UNATTRIBUTED: %d fixture(s) had their pinned re-probe "
+             "milestone run without attributing its capture to the fixture's boundary" % len(unattributed)]
+            + ["  %s %s" % (name, reason) for name, reason in unattributed]
+        )
+
+    # --- step 7: progress increments only on a verified flow --------------------------
+    summary = {
+        "schema_version": "1.0.0",
+        "feature_slug": bundle.feature_slug,
+        "generated_at": now_iso_utc(),
+        "milestones_verified": [str(record.get("milestone_id")) for record in records],
+        "projection_targets_covered": len(targets),
+        "provisional_fixtures_outstanding": [],
+        "variance_regions_exercised": sorted(region_paths),
+    }
+    projections_artifact = {
+        "schema_version": "1.0.0",
+        "feature_slug": bundle.feature_slug,
+        "generated_at": summary["generated_at"],
+        "captured_projections": captures,
+    }
+    if write:
+        write_json(bundle.evidence_path, summary)
+        write_json(bundle.projections_path, projections_artifact)
+
+    lines = [
+        "MILESTONES_VERIFIED_STAGE_4: %d milestone(s) verified, %d projection target(s) covered "
+        "with no collision (%s)" % (len(records), len(targets), bundle.feature_slug)
+    ]
+    for entry in sorted(computed, key=lambda e: (e["observer_id"], e["evidence_key"])):
+        lines.append("  %s [%s/%s] %s" % (
+            entry["fingerprint"][:16], entry["observer_id"], entry["medium"], entry["evidence_key"],
+        ))
+    return 0, "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# captureProjection across the six media
+# ---------------------------------------------------------------------------
+
+def verify_all_media(fixture_dir: Path) -> Tuple[int, str]:
+    """Every medium in the closed set must produce a fingerprint from a real capture."""
+    document, error = load_json(fixture_dir / "media-samples.json")
+    if error or not isinstance(document, dict) or is_vacuous_container(document.get("samples")):
+        return 1, "MISSING_GATE_ARTIFACT: no per-medium capture samples at %s" % fixture_dir
+
+    fingerprints: Dict[str, Tuple[str, str]] = {}
+    for index, sample in enumerate(document["samples"]):
+        if not isinstance(sample, dict) or is_vacuous_container(sample.get("captured_artifact")):
+            return 1, "EMPTY_CAPTURED_ARTIFACT: samples[%d] captured nothing" % index
+        medium = sample.get("medium")
+        try:
+            normalised, fingerprint = capture_projection(
+                medium,
+                sample["captured_artifact"],
+                recorded_values=sample.get("recorded_fixture_values") or (),
+                contract_headers=sample.get("contract_headers") or (),
+            )
+        except NormalisationRefused as refused:
+            return 1, "%s: %s" % (refused.code, refused.detail)
+        if is_vacuous_container(normalised):
+            return 1, "EMPTY_CAPTURED_ARTIFACT: medium %r normalised to nothing" % medium
+        fingerprints[str(medium)] = (normalised, fingerprint)
+
+    missing = [medium for medium in CANONICAL_MEDIA if medium not in fingerprints]
+    if missing:
+        return 1, (
+            "MISSING_GATE_ARTIFACT: the normalisation table covers a closed set of six media and "
+            "no capture was supplied for %s" % ", ".join(missing)
+        )
+
+    lines = ["s4-capture-per-medium: captureProjection fingerprinted all %d media" % len(CANONICAL_MEDIA)]
+    for medium in CANONICAL_MEDIA:
+        normalised, fingerprint = fingerprints[medium]
+        lines.append("  %s [%s] %s" % (fingerprint[:16], medium, normalised))
+    return 0, "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# The four regression edges, end to end
+# ---------------------------------------------------------------------------
+
+def test_rollback_routing(fixture_dir: Path) -> Tuple[int, str]:
+    """Classify each recorded regression and check where the state file actually lands.
+
+    The destination is never asserted from a table in this file: the cause is computed from the
+    scenario's artifacts, the target comes from the transition table in bin/planner-state, and
+    the state file is read back after the transition to see where it went.
+    """
+    document, error = load_json(fixture_dir / "edges.json")
+    if error or not isinstance(document, dict) or is_vacuous_container(document.get("edges")):
+        return 1, "MISSING_GATE_ARTIFACT: no regression edges declared at %s" % fixture_dir
+
+    lines = ["s4-rollback-cause-routing: %d regression edge(s)" % len(document["edges"])]
+    for edge in document["edges"]:
+        if not isinstance(edge, dict):
+            return 1, "MISSING_GATE_ARTIFACT: an edge entry records nothing"
+        scenario = str(edge.get("scenario") or "").strip()
+        expected = str(edge.get("expected_target_state") or "").strip()
+        scenario_dir = fixture_dir / scenario
+        if not scenario_dir.is_dir():
+            return 1, "MISSING_GATE_ARTIFACT: no scenario directory %r" % scenario
+
+        bundle = RunBundle(scenario_dir)
+        records, problems = bundle.milestone_records()
+        if problems:
+            return 1, "\n".join(problems)
+
+        computed: List[Dict[str, Any]] = []
+        if isinstance(bundle.matrix, dict):
+            media_by_observer, _observer_problems = observer_media(bundle.matrix)
+            computed, _capture_problems = compute_captured_projections(
+                capture_records_from_milestones(records),
+                media_by_observer,
+                contract_headers=contract_header_names(bundle.contract_fixtures.values()),
+                artifact_root=bundle.feature_dir,
+                warning_markers=all_census_markers(bundle.contract_fixtures.values()),
+            )
+
+        findings, routing_problems = classify_regressions(bundle, records, computed)
+        if not findings:
+            return 1, "\n".join(
+                ["UNROUTABLE_FAILURE: scenario %r records no regression to route" % scenario]
+                + routing_problems
+            )
+
+        finding = findings[0]
+        target = route_cause(finding.cause)
+        if target != expected:
+            return 1, (
+                "ROLLBACK_ROUTED_WRONG: scenario %r classified as %s, which the transition table "
+                "routes to %s, but the edge expects %s" % (scenario, finding.cause, target, expected)
+            )
+
+        if finding.cause == UNCLASSIFIED_BOUNDARY_CAUSE:
+            manifest = bundle.manifest if isinstance(bundle.manifest, dict) else {}
+            record_unclassified_boundary(bundle.manifest_path, manifest, finding, now_iso_utc())
+            reloaded, _error = load_json(bundle.manifest_path)
+            classes = [
+                row.get("class_name") for row in (reloaded or {}).get("boundary_classes", [])
+                if isinstance(row, dict)
+            ]
+            if "OTHER" not in classes or is_vacuous_container((reloaded or {}).get("register_amendments")):
+                return 1, (
+                    "UNCLASSIFIED_BOUNDARY_UNRECORDED: scenario %r did not end with the boundary "
+                    "under OTHER and a register amendment raised" % scenario
+                )
+
+        code, executed_target = execute_rollback(bundle.feature_dir, bundle.feature_slug, finding.cause)
+        if code != 0 or executed_target is None:
+            return 1, "ROLLBACK_REFUSED: the state engine refused %s for scenario %r" % (
+                finding.cause, scenario,
+            )
+        landed, _error = load_json(bundle.feature_dir / "state.json")
+        actual = (landed or {}).get("current_state")
+        if actual != expected:
+            return 1, (
+                "ROLLBACK_LANDED_WRONG: scenario %r rolled back to %s, expected %s"
+                % (scenario, actual, expected)
+            )
+        lines.append("  %s -> %s (%s)" % (finding.cause, actual, scenario))
+
+    return 0, "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Stage 4 milestone harness",
+        prog="milestone-harness",
+    )
+    parser.add_argument("path", nargs="?", help="the feature directory holding the run's artifacts")
+    parser.add_argument("--feature", "-s", help="feature slug, resolved under .verified-feature-delivery/")
+    parser.add_argument("--root", help="target project root")
+    parser.add_argument("--dry-run", action="store_true", help="grade the run without writing artifacts")
+    parser.add_argument("--evaluate-rollback", action="store_true",
+                        help="classify the run's regressions and roll the feature state back")
+    parser.add_argument("--verify-all-media", help="capture samples to fingerprint, one per medium")
+    parser.add_argument("--test-rollback-routing", help="scenario set covering the four regression edges")
+    return parser
+
+
+def resolve_feature_dir(args) -> Optional[Path]:
+    if args.path:
+        path = Path(args.path)
+        if path.is_dir():
+            return path
+        if path.is_file():
+            return path.parent
+        return None
+    if args.feature:
+        base = Path(args.root).resolve() if args.root else Path.cwd()
+        for candidate in (base / ".verified-feature-delivery" / args.feature, base / args.feature):
+            if candidate.is_dir():
+                return candidate
+        return None
+    return Path.cwd()
+
+
+def main() -> int:
+    args = build_parser().parse_args()
+
+    if args.verify_all_media:
+        code, message = verify_all_media(Path(args.verify_all_media))
+        print(message)
+        return code
+
+    if args.test_rollback_routing:
+        code, message = test_rollback_routing(Path(args.test_rollback_routing))
+        print(message)
+        return code
+
+    feature_dir = resolve_feature_dir(args)
+    if feature_dir is None:
+        print("MISSING_GATE_ARTIFACT")
+        sys.stderr.write("MISSING_GATE_ARTIFACT: no feature directory at %r\n" % (args.path or args.feature))
+        return 1
+
+    if args.evaluate_rollback:
+        bundle = RunBundle(feature_dir)
+        if bundle.problems:
+            print("\n".join("MISSING_GATE_ARTIFACT: %s" % problem for problem in bundle.problems))
+            return 1
+        records, problems = bundle.milestone_records()
+        if problems:
+            print("\n".join(problems))
+            return 1
+        computed: List[Dict[str, Any]] = []
+        if isinstance(bundle.matrix, dict):
+            media_by_observer, _problems = observer_media(bundle.matrix)
+            computed, _capture_problems = compute_captured_projections(
+                capture_records_from_milestones(records),
+                media_by_observer,
+                contract_headers=contract_header_names(bundle.contract_fixtures.values()),
+                artifact_root=bundle.feature_dir,
+                warning_markers=all_census_markers(bundle.contract_fixtures.values()),
+            )
+        findings, routing_problems = classify_regressions(bundle, records, computed)
+        if not findings:
+            print("\n".join(["NO_REGRESSION_TO_ROUTE: the run records no failed milestone and no "
+                             "projection collision"] + routing_problems))
+            return 0 if not routing_problems else 1
+        code, message = route_and_execute(bundle, findings[0], write=not args.dry_run)
+        print(message)
+        return code
+
+    code, message = validate_milestone_execution(feature_dir, write=not args.dry_run)
+    print(message)
+    return code
+
+
+if __name__ == "__main__":
+    sys.exit(main())

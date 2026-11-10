@@ -1,0 +1,372 @@
+{
+  "schema_version": "1.0.0",
+  "feature_slug": "monthly-timelog-viewer",
+  "generated_at": "2026-08-23T12:31:19Z",
+  "milestones": [
+    {
+      "milestone_id": "MS_INIT_SHELL_UI",
+      "slice_id": "SLICE_1_CORE_TIMELOG_VIEW",
+      "verification_medium": "rendered_ui",
+      "executed_command": "node scripts/verify-slice-1-core-timelog-view.ts",
+      "captured_evidence": "\n    <div class=\"app-container\">\n      <header class=\"app-header\">\n        <h1>Monthly Jira Timelog</h1>\n        <div class=\"month-selector-toolbar\" role=\"toolbar\">\n          <button id=\"prev-month-btn\">Prev</button>\n          <input type=\"month\" id=\"month-picker\">\n          <button id=\"next-month-btn\">Next</button>\n        </div>\n      </header>\n      <main class=\"app-content\">\n        <div id=\"initial-shell\"><p>Ready to load timelog</p></div>\n      </main>\n    </div>\n    ",
+      "evidence_key": "ev_state_idle_initial",
+      "observer_id": "TimelogViewerUI",
+      "boundary_identifier": "ui_boundary",
+      "asserted_payloads": [],
+      "recorded_fixture_values": []
+    },
+    {
+      "milestone_id": "MS_LOAD_CURRENT_UI",
+      "slice_id": "SLICE_1_CORE_TIMELOG_VIEW",
+      "verification_medium": "rendered_ui",
+      "executed_command": "node scripts/verify-slice-1-core-timelog-view.ts",
+      "captured_evidence": "\n    <div class=\"app-container\">\n      <header class=\"app-header\">\n        <h1>Monthly Jira Timelog</h1>\n        <div class=\"month-selector-toolbar\" role=\"toolbar\">\n          <button id=\"prev-month-btn\" disabled>Prev</button>\n          <input type=\"month\" id=\"month-picker\" disabled>\n          <button id=\"next-month-btn\" disabled>Next</button>\n        </div>\n        <div id=\"month-summary-card\">\n          <div id=\"active-month-label\">Active Month: 2026-08</div>\n        </div>\n      </header>\n      <main class=\"app-content\">\n        <div id=\"loading-spinner\" aria-busy=\"true\">\n          <p>Loading current month Jira worklogs...</p>\n        </div>\n      </main>\n    </div>\n    ",
+      "evidence_key": "ev_state_loading_current_month",
+      "observer_id": "TimelogViewerUI",
+      "boundary_identifier": "ui_boundary",
+      "asserted_payloads": [],
+      "recorded_fixture_values": []
+    },
+    {
+      "milestone_id": "MS_DISPLAY_CURRENT_UI",
+      "slice_id": "SLICE_1_CORE_TIMELOG_VIEW",
+      "verification_medium": "rendered_ui",
+      "executed_command": "node scripts/verify-slice-1-core-timelog-view.ts",
+      "captured_evidence": "\n    <div class=\"app-container\">\n      <header class=\"app-header\">\n        <h1>Monthly Jira Timelog</h1>\n        <div class=\"month-selector-toolbar\" role=\"toolbar\">\n          <button id=\"prev-month-btn\">Prev</button>\n          <input type=\"month\" id=\"month-picker\">\n          <button id=\"next-month-btn\">Next</button>\n        </div>\n        <div id=\"month-summary-card\">\n          <div id=\"active-month-label\">Active Month: 2026-08</div>\n          <div id=\"month-total-hours\">Total: 118.00 hrs</div>\n          <div id=\"month-days-count\">15 days logged</div>\n        </div>\n      </header>\n      <main class=\"app-content\">\n        <div id=\"timelog-container\">\n          <div class=\"daily-card\">\n            <div class=\"daily-card-header\">\n              <span class=\"daily-date\">2026-08-03</span>\n              <span class=\"daily-hours-badge\">8.00 hrs</span>\n            </div>\n            <ul class=\"ticket-list\">\n              <li class=\"ticket-item\">\n                <span class=\"ticket-key\">PROJ-2462</span>\n                <p class=\"ticket-summary\">UI changes</p>\n                <span class=\"ticket-hours\">4.00 hrs</span>\n              </li>\n            </ul>\n          </div>\n        </div>\n      </main>\n    </div>\n    ",
+      "evidence_key": "ev_state_display_timelog_report",
+      "observer_id": "TimelogViewerUI",
+      "boundary_identifier": "ui_boundary",
+      "asserted_payloads": [],
+      "recorded_fixture_values": []
+    },
+    {
+      "milestone_id": "MS_LOAD_SWITCH_UI",
+      "slice_id": "SLICE_2_MONTH_SELECTOR_SWITCH",
+      "verification_medium": "rendered_ui",
+      "executed_command": "node scripts/verify-slice-2-month-selector-switch.ts",
+      "captured_evidence": "\n    <div class=\"app-container\">\n      <header class=\"app-header\">\n        <h1>Monthly Jira Timelog</h1>\n        <div class=\"month-selector-toolbar\" role=\"toolbar\">\n          <button id=\"prev-month-btn\" disabled>Prev</button>\n          <input type=\"month\" id=\"month-picker\" disabled>\n          <button id=\"next-month-btn\" disabled>Next</button>\n        </div>\n        <div id=\"month-summary-card\">\n          <div id=\"active-month-label\">Active Month: 2026-07</div>\n        </div>\n      </header>\n      <main class=\"app-content\">\n        <div id=\"loading-spinner\" aria-busy=\"true\">\n          <p>Switching month and loading Jira worklogs...</p>\n        </div>\n      </main>\n    </div>\n    ",
+      "evidence_key": "ev_state_loading_switch_month",
+      "observer_id": "TimelogViewerUI",
+      "boundary_identifier": "ui_boundary",
+      "asserted_payloads": [],
+      "recorded_fixture_values": []
+    },
+    {
+      "milestone_id": "MS_DISPLAY_SWITCH_UI",
+      "slice_id": "SLICE_2_MONTH_SELECTOR_SWITCH",
+      "verification_medium": "rendered_ui",
+      "executed_command": "node scripts/verify-slice-2-month-selector-switch.ts",
+      "captured_evidence": "\n    <div class=\"app-container\">\n      <header class=\"app-header\">\n        <h1>Monthly Jira Timelog</h1>\n        <div class=\"month-selector-toolbar\" role=\"toolbar\">\n          <button id=\"prev-month-btn\">Prev</button>\n          <input type=\"month\" id=\"month-picker\">\n          <button id=\"next-month-btn\">Next</button>\n        </div>\n        <div id=\"month-summary-card\">\n          <div id=\"active-month-label\">Active Month: 2026-07</div>\n          <div id=\"month-total-hours\">Total: 160.00 hrs</div>\n          <div id=\"month-days-count\">20 days logged</div>\n        </div>\n      </header>\n      <main class=\"app-content\">\n        <div id=\"timelog-container\">\n          <div class=\"daily-card\">\n            <div class=\"daily-card-header\">\n              <span class=\"daily-date\">2026-07-01</span>\n              <span class=\"daily-hours-badge\">8.00 hrs</span>\n            </div>\n            <ul class=\"ticket-list\">\n              <li class=\"ticket-item\">\n                <span class=\"ticket-key\">PROJ-2400</span>\n                <p class=\"ticket-summary\">Feature design</p>\n                <span class=\"ticket-hours\">8.00 hrs</span>\n              </li>\n            </ul>\n          </div>\n        </div>\n      </main>\n    </div>\n    ",
+      "evidence_key": "ev_state_display_switched_month",
+      "observer_id": "TimelogViewerUI",
+      "boundary_identifier": "ui_boundary",
+      "asserted_payloads": [],
+      "recorded_fixture_values": []
+    },
+    {
+      "milestone_id": "MS_DISPLAY_EMPTY_UI",
+      "slice_id": "SLICE_3_EMPTY_AND_ERROR_STATES",
+      "verification_medium": "rendered_ui",
+      "executed_command": "node scripts/verify-slice-3-empty-and-error-states.ts",
+      "captured_evidence": "\n    <div class=\"app-container\">\n      <header class=\"app-header\">\n        <h1>Monthly Jira Timelog</h1>\n        <div class=\"month-selector-toolbar\" role=\"toolbar\">\n          <button id=\"prev-month-btn\">Prev</button>\n          <input type=\"month\" id=\"month-picker\">\n          <button id=\"next-month-btn\">Next</button>\n        </div>\n        <div id=\"month-summary-card\">\n          <div id=\"active-month-label\">Active Month: 2026-01</div>\n          <div id=\"month-total-hours\">Total: 0.00 hrs</div>\n          <div id=\"month-days-count\">0 days logged</div>\n        </div>\n      </header>\n      <main class=\"app-content\">\n        <div id=\"empty-state\">\n          <p class=\"empty-title\">No worklogs found</p>\n          <p class=\"empty-subtitle\">You have not logged any time for this calendar month in Jira.</p>\n        </div>\n      </main>\n    </div>\n    ",
+      "evidence_key": "ev_state_empty_timelog_month",
+      "observer_id": "TimelogViewerUI",
+      "boundary_identifier": "ui_boundary",
+      "asserted_payloads": [],
+      "recorded_fixture_values": []
+    },
+    {
+      "milestone_id": "MS_DISPLAY_ERROR_UI",
+      "slice_id": "SLICE_3_EMPTY_AND_ERROR_STATES",
+      "verification_medium": "rendered_ui",
+      "executed_command": "node scripts/verify-slice-3-empty-and-error-states.ts",
+      "captured_evidence": "\n    <div class=\"app-container\">\n      <header class=\"app-header\">\n        <h1>Monthly Jira Timelog</h1>\n        <div class=\"month-selector-toolbar\" role=\"toolbar\">\n          <button id=\"prev-month-btn\">Prev</button>\n          <input type=\"month\" id=\"month-picker\">\n          <button id=\"next-month-btn\">Next</button>\n        </div>\n      </header>\n      <main class=\"app-content\">\n        <div id=\"error-banner\" role=\"alert\">\n          <span class=\"error-title\">Failed to load timelogs</span>\n          <p id=\"error-message\">Network timeout connecting to Jira API</p>\n          <button id=\"retry-btn\">Retry</button>\n        </div>\n      </main>\n    </div>\n    ",
+      "evidence_key": "ev_state_fetch_error",
+      "observer_id": "TimelogViewerUI",
+      "boundary_identifier": "ui_boundary",
+      "asserted_payloads": [],
+      "recorded_fixture_values": []
+    },
+    {
+      "milestone_id": "MS_SUPERSEDED_STALE_UI",
+      "slice_id": "SLICE_2_MONTH_SELECTOR_SWITCH",
+      "verification_medium": "rendered_ui",
+      "executed_command": "node scripts/verify-slice-2-month-selector-switch.ts",
+      "captured_evidence": "\n    <div class=\"app-container\">\n      <header class=\"app-header\">\n        <h1>Monthly Jira Timelog</h1>\n        <div class=\"month-selector-toolbar\" role=\"toolbar\">\n          <button id=\"prev-month-btn\">Prev</button>\n          <input type=\"month\" id=\"month-picker\">\n          <button id=\"next-month-btn\">Next</button>\n        </div>\n      </header>\n      <main class=\"app-content\">\n        <div id=\"superseded-notice\">\n          <p>Discarded stale response; active request taking priority</p>\n        </div>\n      </main>\n    </div>\n    ",
+      "evidence_key": "ev_state_superseded_stale",
+      "observer_id": "TimelogViewerUI",
+      "boundary_identifier": "ui_boundary",
+      "asserted_payloads": [],
+      "recorded_fixture_values": []
+    },
+    {
+      "milestone_id": "MS_SESSION_CLOSED_UI",
+      "slice_id": "SLICE_1_CORE_TIMELOG_VIEW",
+      "verification_medium": "rendered_ui",
+      "executed_command": "node scripts/verify-slice-1-core-timelog-view.ts",
+      "captured_evidence": "\n    <div class=\"app-unmounted\">\n      <p>Browser session closed</p>\n    </div>\n    ",
+      "evidence_key": "ev_state_terminal_closed",
+      "observer_id": "TimelogViewerUI",
+      "boundary_identifier": "ui_boundary",
+      "asserted_payloads": [],
+      "recorded_fixture_values": []
+    },
+    {
+      "milestone_id": "MS_INIT_SHELL_API",
+      "slice_id": "SLICE_1_CORE_TIMELOG_VIEW",
+      "verification_medium": "api_response",
+      "executed_command": "node scripts/verify-slice-1-core-timelog-view.ts",
+      "captured_evidence": {
+        "status_code": 200,
+        "headers": {},
+        "body": null
+      },
+      "evidence_key": "ev_state_idle_initial",
+      "observer_id": "BackendApiObserver",
+      "boundary_identifier": "backend_boundary",
+      "asserted_payloads": [],
+      "recorded_fixture_values": []
+    },
+    {
+      "milestone_id": "MS_LOAD_CURRENT_API",
+      "slice_id": "SLICE_1_CORE_TIMELOG_VIEW",
+      "verification_medium": "api_response",
+      "executed_command": "node scripts/verify-slice-1-core-timelog-view.ts",
+      "captured_evidence": {
+        "status_code": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "status": "in_flight",
+          "month": "2026-08"
+        }
+      },
+      "evidence_key": "ev_state_loading_current_month",
+      "observer_id": "BackendApiObserver",
+      "boundary_identifier": "backend_boundary",
+      "asserted_payloads": [],
+      "recorded_fixture_values": []
+    },
+    {
+      "milestone_id": "MS_DISPLAY_CURRENT_API",
+      "slice_id": "SLICE_1_CORE_TIMELOG_VIEW",
+      "verification_medium": "api_response",
+      "executed_command": "node scripts/verify-slice-1-core-timelog-view.ts",
+      "captured_evidence": {
+        "status_code": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "month": "2026-08",
+          "totalHours": "118.00",
+          "totalSeconds": 424800,
+          "daysCount": 15,
+          "days": [
+            {
+              "date": "2026-08-03",
+              "dailyTotalHours": "8.00",
+              "dailyTotalSeconds": 28800,
+              "tickets": [
+                {
+                  "issueKey": "PROJ-2462",
+                  "summary": "UI changes",
+                  "seconds": 14400,
+                  "hours": "4.00"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "evidence_key": "ev_state_display_timelog_report",
+      "observer_id": "BackendApiObserver",
+      "boundary_identifier": "backend_boundary",
+      "asserted_payloads": [],
+      "recorded_fixture_values": []
+    },
+    {
+      "milestone_id": "MS_LOAD_SWITCH_API",
+      "slice_id": "SLICE_2_MONTH_SELECTOR_SWITCH",
+      "verification_medium": "api_response",
+      "executed_command": "node scripts/verify-slice-2-month-selector-switch.ts",
+      "captured_evidence": {
+        "status_code": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "status": "in_flight",
+          "month": "2026-07",
+          "switch": true
+        }
+      },
+      "evidence_key": "ev_state_loading_switch_month",
+      "observer_id": "BackendApiObserver",
+      "boundary_identifier": "backend_boundary",
+      "asserted_payloads": [],
+      "recorded_fixture_values": []
+    },
+    {
+      "milestone_id": "MS_DISPLAY_SWITCH_API",
+      "slice_id": "SLICE_2_MONTH_SELECTOR_SWITCH",
+      "verification_medium": "api_response",
+      "executed_command": "node scripts/verify-slice-2-month-selector-switch.ts",
+      "captured_evidence": {
+        "status_code": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "month": "2026-07",
+          "totalHours": "160.00",
+          "totalSeconds": 576000,
+          "daysCount": 20,
+          "days": [
+            {
+              "date": "2026-07-01",
+              "dailyTotalHours": "8.00",
+              "dailyTotalSeconds": 28800,
+              "tickets": [
+                {
+                  "issueKey": "PROJ-2400",
+                  "summary": "Design",
+                  "seconds": 28800,
+                  "hours": "8.00"
+                }
+              ]
+            }
+          ],
+          "switched": true
+        }
+      },
+      "evidence_key": "ev_state_display_switched_month",
+      "observer_id": "BackendApiObserver",
+      "boundary_identifier": "backend_boundary",
+      "asserted_payloads": [],
+      "recorded_fixture_values": []
+    },
+    {
+      "milestone_id": "MS_DISPLAY_EMPTY_API",
+      "slice_id": "SLICE_3_EMPTY_AND_ERROR_STATES",
+      "verification_medium": "api_response",
+      "executed_command": "node scripts/verify-slice-3-empty-and-error-states.ts",
+      "captured_evidence": {
+        "status_code": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "month": "2026-01",
+          "totalHours": "0.00",
+          "totalSeconds": 0,
+          "daysCount": 0,
+          "days": []
+        }
+      },
+      "evidence_key": "ev_state_empty_timelog_month",
+      "observer_id": "BackendApiObserver",
+      "boundary_identifier": "backend_boundary",
+      "asserted_payloads": [],
+      "recorded_fixture_values": []
+    },
+    {
+      "milestone_id": "MS_DISPLAY_ERROR_API",
+      "slice_id": "SLICE_3_EMPTY_AND_ERROR_STATES",
+      "verification_medium": "api_response",
+      "executed_command": "node scripts/verify-slice-3-empty-and-error-states.ts",
+      "captured_evidence": {
+        "status_code": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "failure": "JIRA_API_UNAVAILABLE",
+          "detail": "Connection refused by upstream service"
+        }
+      },
+      "evidence_key": "ev_state_fetch_error",
+      "observer_id": "BackendApiObserver",
+      "boundary_identifier": "backend_boundary",
+      "asserted_payloads": [],
+      "recorded_fixture_values": []
+    },
+    {
+      "milestone_id": "MS_SUPERSEDED_STALE_API",
+      "slice_id": "SLICE_2_MONTH_SELECTOR_SWITCH",
+      "verification_medium": "api_response",
+      "executed_command": "node scripts/verify-slice-2-month-selector-switch.ts",
+      "captured_evidence": {
+        "status_code": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "superseded": true,
+          "discarded_seq": 1,
+          "latest_seq": 2
+        }
+      },
+      "evidence_key": "ev_state_superseded_stale",
+      "observer_id": "BackendApiObserver",
+      "boundary_identifier": "backend_boundary",
+      "asserted_payloads": [],
+      "recorded_fixture_values": []
+    },
+    {
+      "milestone_id": "MS_SESSION_CLOSED_API",
+      "slice_id": "SLICE_1_CORE_TIMELOG_VIEW",
+      "verification_medium": "api_response",
+      "executed_command": "node scripts/verify-slice-1-core-timelog-view.ts",
+      "captured_evidence": {
+        "status_code": 200,
+        "headers": {},
+        "body": {
+          "session_active": false
+        }
+      },
+      "evidence_key": "ev_state_terminal_closed",
+      "observer_id": "BackendApiObserver",
+      "boundary_identifier": "backend_boundary",
+      "asserted_payloads": [],
+      "recorded_fixture_values": []
+    },
+    {
+      "milestone_id": "M1_BACKEND_CONTRACT",
+      "slice_id": "SLICE_1_CORE_TIMELOG_VIEW",
+      "verification_medium": "api_response",
+      "executed_command": "node scripts/verify-slice-1.ts",
+      "captured_evidence": {
+        "status_code": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "status": "discharged",
+          "month": "2026-08"
+        }
+      },
+      "evidence_key": "",
+      "observer_id": "",
+      "boundary_identifier": "Node.js HTTP Server /api/timelog",
+      "asserted_payloads": [],
+      "recorded_fixture_values": []
+    },
+    {
+      "milestone_id": "M2_UI_INTEGRATION",
+      "slice_id": "SLICE_1_CORE_TIMELOG_VIEW",
+      "verification_medium": "process_exit",
+      "executed_command": "node scripts/verify-slice-1.ts",
+      "captured_evidence": {
+        "exit_code": 0,
+        "stdout": "UI integration test passed"
+      },
+      "evidence_key": "",
+      "observer_id": "",
+      "boundary_identifier": "DOM TimelogViewer ViewPort",
+      "asserted_payloads": [],
+      "recorded_fixture_values": []
+    }
+  ]
+}

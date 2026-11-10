@@ -1,0 +1,16 @@
+{
+  "_why": "Two captures of two different states, taken from the same build so the markup, styling and test attributes are identical. The only difference is the wording the observer reads: a populated result header against a zero-result one. Normalisation must fingerprint them differently, or the masking rules have eaten the template wording and every state collides with every other.",
+  "medium": "rendered_ui",
+  "captures": [
+    {
+      "label": "RESULTS_POPULATED",
+      "captured_artifact": "<div class=\"MuiBox-root\" data-testid=\"results-pane\"><h2 class=\"title\">Found 10 matches for \"database\"</h2><button class=\"btn\" aria-label=\"Clear filters\">Clear</button></div>",
+      "recorded_fixture_values": ["database"]
+    },
+    {
+      "label": "RESULTS_EMPTY",
+      "captured_artifact": "<div class=\"MuiBox-root\" data-testid=\"results-pane\"><h2 class=\"title\">No results found for \"database\"</h2><button class=\"btn\" aria-label=\"Clear filters\">Clear</button></div>",
+      "recorded_fixture_values": ["database"]
+    }
+  ]
+}

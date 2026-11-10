@@ -1,0 +1,42 @@
+{
+  "schema_version": "1.0.0",
+  "boundary_class": "NETWORK_API",
+  "boundary_identifier": "POST /v1/search",
+  "fixture_status": "PROBED_LIVE",
+  "pinned_reprobe_milestone": null,
+  "contract_reference": "src/api/searchApi.ts#SearchResponse",
+  "contract_variant_selectors": ["is_summary", "is_promoted"],
+  "success_samples": [],
+  "failure_envelope_census": [
+    {
+      "envelope_id": "http_400_bad_request",
+      "status_code": 400,
+      "payload_type": "JSON",
+      "payload": { "detail": "Invalid filter parameter: categories cannot be empty." },
+      "description": "Validation failure on malformed search request body."
+    },
+    {
+      "envelope_id": "http_502_nginx_html",
+      "status_code": 502,
+      "payload_type": "HTML",
+      "payload": "<html><head><title>502 Bad Gateway</title></head><body>502 Bad Gateway</body></html>",
+      "description": "Reverse proxy gateway timeout returning HTML error page."
+    }
+  ],
+  "variance_census": {
+    "unbounded_regions": [
+      "payload.results[].metadata",
+      "payload.results[].links"
+    ],
+    "contract_variant_selectors": ["is_summary", "is_promoted"],
+    "partition_cells_evaluated": [
+      { "cell": { "is_summary": true, "is_promoted": true }, "sample_ref": "sample_summary_promoted" },
+      { "cell": { "is_summary": true, "is_promoted": false }, "sample_ref": "sample_summary_unpromoted" },
+      { "cell": { "is_summary": false, "is_promoted": false }, "sample_ref": "sample_detailed_unpromoted" }
+    ],
+    "variance_analysis": {
+      "key_intersection": ["id", "score", "is_summary", "is_promoted", "metadata", "links"],
+      "key_union": ["id", "score", "is_summary", "is_promoted", "metadata", "links"]
+    }
+  }
+}

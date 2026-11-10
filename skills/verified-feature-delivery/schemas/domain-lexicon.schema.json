@@ -1,0 +1,597 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "DomainLexicon",
+  "description": "Stage 0 Domain Lexicon Schema. Defines bounded context, entity taxonomy, value objects, state enums, monotonic clocks, unit precisions, actor/observer registries, cross-boundary alias pairs, observer projection bindings, value authority models, and fact precedence rules.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "feature_slug",
+    "bounded_context",
+    "entities",
+    "value_objects",
+    "state_enums",
+    "unit_precisions",
+    "actors_and_observers",
+    "alias_pairs",
+    "projection_bindings",
+    "value_authorities",
+    "fact_precedences"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "description": "Semantic version of the schema format (e.g. 1.0.0)."
+    },
+    "feature_slug": {
+      "type": "string",
+      "description": "Feature identifier matching the workspace slug."
+    },
+    "bounded_context": {
+      "type": "string",
+      "description": "The DDD bounded context name scoping this domain dictionary."
+    },
+    "entities": {
+      "type": "array",
+      "description": "Domain entities with structured attributes and lifecycle states.",
+      "items": {
+        "$ref": "#/definitions/Entity"
+      }
+    },
+    "value_objects": {
+      "type": "array",
+      "description": "Immutable domain value objects and compound value structures.",
+      "items": {
+        "$ref": "#/definitions/ValueObject"
+      }
+    },
+    "actions": {
+      "type": "array",
+      "description": "Domain actions and operations triggering state transitions.",
+      "items": {
+        "$ref": "#/definitions/Action"
+      }
+    },
+    "state_enums": {
+      "type": "array",
+      "description": "Authoritative state enum definitions and terminal tokens.",
+      "items": {
+        "$ref": "#/definitions/StateEnum"
+      }
+    },
+    "monotonic_clocks": {
+      "type": "array",
+      "description": "Monotonic sequence clocks and timestamp ordering rules.",
+      "items": {
+        "$ref": "#/definitions/MonotonicClock"
+      }
+    },
+    "terminal_states": {
+      "type": "array",
+      "description": "List of all terminal state tokens across entities.",
+      "items": {
+        "type": "string"
+      }
+    },
+    "unit_precisions": {
+      "type": "array",
+      "description": "Locked precision units for all numeric, financial, temporal, and spatial quantities.",
+      "items": {
+        "$ref": "#/definitions/UnitPrecision"
+      }
+    },
+    "actors_and_observers": {
+      "type": "object",
+      "description": "Registry of trigger actors and perception observers.",
+      "required": [
+        "actors",
+        "observers"
+      ],
+      "properties": {
+        "actors": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/definitions/Actor"
+          }
+        },
+        "observers": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/definitions/Observer"
+          }
+        }
+      }
+    },
+    "alias_pairs": {
+      "type": "array",
+      "description": "Declared mappings between divergent boundary names representing the same concept.",
+      "items": {
+        "$ref": "#/definitions/AliasPair"
+      }
+    },
+    "projection_bindings": {
+      "type": "array",
+      "description": "Bindings mapping observer-facing facts to underlying contract fields or pure expressions.",
+      "items": {
+        "$ref": "#/definitions/ProjectionBinding"
+      }
+    },
+    "value_authorities": {
+      "type": "array",
+      "description": "Authority designations for quantities computed across multiple boundaries.",
+      "items": {
+        "$ref": "#/definitions/ValueAuthority"
+      }
+    },
+    "fact_precedences": {
+      "type": "array",
+      "description": "Precedence and reconciliation rules for facts derivable from dual boundaries.",
+      "items": {
+        "$ref": "#/definitions/FactPrecedence"
+      }
+    },
+    "dual_computed_values": {
+      "type": "array",
+      "description": "Optional list of values computed across dual boundaries.",
+      "items": {
+        "type": "string"
+      }
+    },
+    "dual_boundary_facts": {
+      "type": "array",
+      "description": "Optional list of facts derivable from dual boundaries.",
+      "items": {
+        "type": "string"
+      }
+    },
+    "observable_quantities": {
+      "type": "array",
+      "description": "Optional list of declared observer-facing quantities requiring projection bindings.",
+      "items": {
+        "type": "string"
+      }
+    },
+    "entity_relationships": {
+      "type": "array",
+      "description": "Relationships between entities in the domain model.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "from_entity",
+          "to_entity",
+          "kind",
+          "cardinality",
+          "description"
+        ],
+        "properties": {
+          "from_entity": { "type": "string" },
+          "to_entity": { "type": "string" },
+          "kind": {
+            "type": "string",
+            "enum": ["OWNS", "REFERENCES", "DERIVES_FROM"]
+          },
+          "cardinality": { "type": "string" },
+          "description": { "type": "string" }
+        }
+      }
+    },
+    "entity_boundaries": {
+      "type": "array",
+      "description": "Entity boundaries partitioning entities and defining interface contracts.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "boundary_id",
+          "name",
+          "entities",
+          "owned_invariants",
+          "interfaces"
+        ],
+        "properties": {
+          "boundary_id": { "type": "string" },
+          "name": { "type": "string" },
+          "entities": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "owned_invariants": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "interfaces": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "interface_id",
+                "direction",
+                "peer",
+                "contract_ref",
+                "description"
+              ],
+              "properties": {
+                "interface_id": { "type": "string" },
+                "direction": {
+                  "type": "string",
+                  "enum": ["INBOUND", "OUTBOUND"]
+                },
+                "peer": { "type": "string" },
+                "contract_ref": { "type": "string" },
+                "description": { "type": "string" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "simulated_dependencies": {
+      "type": "array",
+      "description": "External boundary classes simulated and their fixture references.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "boundary_class",
+          "simulation_strategy",
+          "fixture_ref",
+          "business_logic_under_test"
+        ],
+        "properties": {
+          "boundary_class": { "type": "string" },
+          "simulation_strategy": { "type": "string" },
+          "fixture_ref": { "type": "string" },
+          "business_logic_under_test": { "type": "string" }
+        }
+      }
+    }
+  },
+  "definitions": {
+    "RepoReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "symbol"],
+      "properties": {
+        "path": { "type": "string" },
+        "symbol": { "type": "string" }
+      }
+    },
+    "Attribute": {
+      "type": "object",
+      "required": [
+        "name",
+        "type"
+      ],
+      "properties": {
+        "name": { "type": "string" },
+        "type": { "type": "string" },
+        "description": { "type": "string" },
+        "enum_ref": { "type": "string" },
+        "unit_ref": { "type": "string" },
+        "default": {},
+        "boundary_tokens": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        },
+        "boundary_mappings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["boundary_class", "token"],
+            "properties": {
+              "boundary_class": { "type": "string" },
+              "token": { "type": "string" }
+            }
+          }
+        },
+        "dual_computed": { "type": "boolean" },
+        "dual_boundary": { "type": "boolean" },
+        "observable": { "type": "boolean" },
+        "is_quantity": { "type": "boolean" },
+        "dimensionless": { "type": "boolean" },
+        "is_dimensionless": { "type": "boolean" },
+        "projection_id": { "type": "string" }
+      }
+    },
+    "Entity": {
+      "type": "object",
+      "required": [
+        "name",
+        "attributes"
+      ],
+      "properties": {
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "provenance": {
+          "type": "string",
+          "enum": ["BORROWED_FROM_REPO", "FEATURE_INTRODUCED"]
+        },
+        "repo_reference": { "$ref": "#/definitions/RepoReference" },
+        "glossary_visibility": {
+          "type": "string",
+          "enum": ["INCLUDE", "ASSUMED_COMMON"]
+        },
+        "plain_language_summary": { "type": "string" },
+        "attributes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Attribute"
+          }
+        }
+      }
+    },
+    "ValueObject": {
+      "type": "object",
+      "required": [
+        "name",
+        "attributes"
+      ],
+      "properties": {
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "provenance": {
+          "type": "string",
+          "enum": ["BORROWED_FROM_REPO", "FEATURE_INTRODUCED"]
+        },
+        "repo_reference": { "$ref": "#/definitions/RepoReference" },
+        "glossary_visibility": {
+          "type": "string",
+          "enum": ["INCLUDE", "ASSUMED_COMMON"]
+        },
+        "plain_language_summary": { "type": "string" },
+        "attributes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Attribute"
+          }
+        },
+        "dual_computed": { "type": "boolean" }
+      }
+    },
+    "Action": {
+      "type": "object",
+      "required": [
+        "name"
+      ],
+      "properties": {
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "provenance": {
+          "type": "string",
+          "enum": ["BORROWED_FROM_REPO", "FEATURE_INTRODUCED"]
+        },
+        "repo_reference": { "$ref": "#/definitions/RepoReference" },
+        "glossary_visibility": {
+          "type": "string",
+          "enum": ["INCLUDE", "ASSUMED_COMMON"]
+        },
+        "plain_language_summary": { "type": "string" },
+        "actor_ref": { "type": "string" },
+        "target_entity": { "type": "string" },
+        "source_state": {
+          "oneOf": [
+            { "type": "string" },
+            { "type": "array", "items": { "type": "string" } }
+          ]
+        },
+        "target_state": { "type": "string" }
+      }
+    },
+    "StateEnum": {
+      "type": "object",
+      "required": [
+        "name",
+        "tokens",
+        "terminal_tokens"
+      ],
+      "properties": {
+        "name": { "type": "string" },
+        "provenance": {
+          "type": "string",
+          "enum": ["BORROWED_FROM_REPO", "FEATURE_INTRODUCED"]
+        },
+        "repo_reference": { "$ref": "#/definitions/RepoReference" },
+        "glossary_visibility": {
+          "type": "string",
+          "enum": ["INCLUDE", "ASSUMED_COMMON"]
+        },
+        "plain_language_summary": { "type": "string" },
+        "tokens": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string" }
+        },
+        "terminal_tokens": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "MonotonicClock": {
+      "type": "object",
+      "required": [
+        "name",
+        "source_boundary",
+        "source_field",
+        "unit_ref",
+        "comparison_rule"
+      ],
+      "properties": {
+        "name": { "type": "string" },
+        "source_boundary": { "type": "string" },
+        "source_field": { "type": "string" },
+        "unit_ref": { "type": "string" },
+        "comparison_rule": { "type": "string" }
+      }
+    },
+    "UnitPrecision": {
+      "type": "object",
+      "required": [
+        "id",
+        "quantity_type",
+        "base_unit",
+        "numeric_type",
+        "representation",
+        "rounding_mode"
+      ],
+      "properties": {
+        "id": { "type": "string" },
+        "quantity_type": { "type": "string" },
+        "base_unit": { "type": "string" },
+        "numeric_type": { "type": "string" },
+        "representation": { "type": "string" },
+        "rounding_mode": { "type": "string" }
+      }
+    },
+    "Actor": {
+      "type": "object",
+      "required": [
+        "id",
+        "kind",
+        "modality"
+      ],
+      "properties": {
+        "id": { "type": "string" },
+        "kind": { "type": "string" },
+        "modality": { "type": "string" },
+        "description": { "type": "string" },
+        "provenance": {
+          "type": "string",
+          "enum": ["BORROWED_FROM_REPO", "FEATURE_INTRODUCED"]
+        },
+        "repo_reference": { "$ref": "#/definitions/RepoReference" },
+        "glossary_visibility": {
+          "type": "string",
+          "enum": ["INCLUDE", "ASSUMED_COMMON"]
+        },
+        "plain_language_summary": { "type": "string" }
+      }
+    },
+    "Observer": {
+      "type": "object",
+      "required": [
+        "id",
+        "kind",
+        "channels"
+      ],
+      "properties": {
+        "id": { "type": "string" },
+        "kind": { "type": "string" },
+        "channels": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string" }
+        },
+        "description": { "type": "string" },
+        "provenance": {
+          "type": "string",
+          "enum": ["BORROWED_FROM_REPO", "FEATURE_INTRODUCED"]
+        },
+        "repo_reference": { "$ref": "#/definitions/RepoReference" },
+        "glossary_visibility": {
+          "type": "string",
+          "enum": ["INCLUDE", "ASSUMED_COMMON"]
+        },
+        "plain_language_summary": { "type": "string" },
+        "observable_quantities": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "observable_facts": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "BoundaryDescriptor": {
+      "type": "object",
+      "required": [
+        "boundary_class",
+        "token"
+      ],
+      "properties": {
+        "boundary_class": { "type": "string" },
+        "token": { "type": "string" }
+      }
+    },
+    "AliasPair": {
+      "type": "object",
+      "required": [
+        "canonical_concept",
+        "left",
+        "right"
+      ],
+      "properties": {
+        "canonical_concept": { "type": "string" },
+        "left": { "$ref": "#/definitions/BoundaryDescriptor" },
+        "right": { "$ref": "#/definitions/BoundaryDescriptor" },
+        "mapping_notes": { "type": "string" }
+      }
+    },
+    "ProjectionBinding": {
+      "type": "object",
+      "required": [
+        "projection_id",
+        "quantity_or_label",
+        "observer_id",
+        "source_type",
+        "source_reference",
+        "derivation_expression"
+      ],
+      "properties": {
+        "projection_id": { "type": "string" },
+        "quantity_or_label": { "type": "string" },
+        "observer_id": { "type": "string" },
+        "source_type": {
+          "type": "string",
+          "enum": ["CONTRACT_FIELD", "PURE_EXPRESSION"]
+        },
+        "source_reference": { "type": "string" },
+        "derivation_expression": { "type": "string" }
+      }
+    },
+    "ValueAuthority": {
+      "type": "object",
+      "required": [
+        "value_name",
+        "authority_model"
+      ],
+      "properties": {
+        "value_name": { "type": "string" },
+        "authority_model": {
+          "type": "string",
+          "enum": [
+            "UPSTREAM_AUTHORITATIVE",
+            "LOCAL_AUTHORITATIVE",
+            "SHADOW_RECONCILED"
+          ]
+        },
+        "upstream_boundary": { "type": ["string", "null"] },
+        "local_computation": { "type": ["string", "null"] },
+        "tolerance_epsilon": { "type": ["number", "string", "null"] },
+        "divergence_action": { "type": ["string", "null"] },
+        "rationale": { "type": "string" }
+      }
+    },
+    "FactPrecedence": {
+      "type": "object",
+      "required": [
+        "fact_name",
+        "primary_boundary",
+        "secondary_boundary",
+        "precedence_rule",
+        "reconciliation_check"
+      ],
+      "properties": {
+        "fact_name": { "type": "string" },
+        "primary_boundary": { "type": "string" },
+        "secondary_boundary": { "type": "string" },
+        "precedence_rule": { "type": "string" },
+        "reconciliation_check": { "type": "string" }
+      }
+    }
+  }
+}

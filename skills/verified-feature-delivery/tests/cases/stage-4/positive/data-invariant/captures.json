@@ -1,0 +1,16 @@
+{
+  "_why": "Two captures of RESULTS_POPULATED taken from two runs of the same slice suite. They differ only in data: ten matches against four thousand, one query string against another, one result title against another, and the styling and test attributes the two builds happened to emit. Normalisation must fingerprint them alike, or every re-run of a passing suite reports a new state.",
+  "medium": "rendered_ui",
+  "captures": [
+    {
+      "label": "RESULTS_POPULATED with ten matches",
+      "captured_artifact": "<div class=\"MuiBox-root css-1a2b\" data-testid=\"results-pane\"><h2 class=\"title\">Found 10 matches for \"database\"</h2><button class=\"btn btn-primary\" aria-label=\"Clear filters\">Clear</button><ul role=\"list\"><li role=\"listitem\" key=\"k-1\"><span>Result 1: SQL indexing guide</span></li></ul></div>",
+      "recorded_fixture_values": ["database", "SQL indexing guide"]
+    },
+    {
+      "label": "RESULTS_POPULATED with four thousand matches",
+      "captured_artifact": "<section class=\"theme-dark results-container\" data-testid=\"search-results-wrapper\"><h2 class=\"header-bold\">Found 4210 matches for \"caching\"</h2><button class=\"custom-button\" aria-label=\"Clear filters\">Clear</button><ol role=\"list\"><li role=\"listitem\" key=\"node-99\"><span>Result 4210: Distributed caching patterns</span></li></ol></section>",
+      "recorded_fixture_values": ["caching", "Distributed caching patterns"]
+    }
+  ]
+}

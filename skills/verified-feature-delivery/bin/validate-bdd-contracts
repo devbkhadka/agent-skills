@@ -1,0 +1,115 @@
+#!/usr/bin/env python3
+"""Gate Validator: validate-bdd-contracts.
+
+Validates BDD scenario documents and mock-boundary contracts against upstream Stage 0 (domain lexicon),
+Stage 1 (boundary manifest & contract fixtures), and Stage 2 (scenario simulation matrix).
+
+Exit Codes:
+- 0: Scenarios validated clean (prints BDD_SCENARIO_VALIDATED_CLEAN)
+- Non-zero: Emits bare error code token on stderr/stdout
+"""
+
+import argparse
+import json
+import os
+from pathlib import Path
+import sys
+from typing import Any, Dict, List, Optional
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from lib.bdd_scenario import (
+    render_bdd_scenario_markdown,
+    validate_bdd_scenario,
+)
+
+
+def load_json_file(path: Optional[Path]) -> Optional[Dict[str, Any]]:
+    if not path or not path.is_file():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception as e:
+        sys.stderr.write("Failed to parse JSON from %s: %s\n" % (path, e))
+        return None
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Validate BDD scenario files and mock-boundary contracts.")
+    parser.add_argument("target", help="Path to BDD scenario JSON file or directory containing scenario files")
+    parser.add_argument("--lexicon", help="Path to domain-lexicon.json", default=None)
+    parser.add_argument("--manifest", help="Path to boundary-manifest.json or contract-fixtures/manifest.json", default=None)
+    parser.add_argument("--matrix", help="Path to flow-simulation-matrix.json", default=None)
+    parser.add_argument("--fixtures-dir", help="Path to contract-fixtures directory", default=None)
+    parser.add_argument("--render-doc", help="Optional output directory to render markdown scenario docs", default=None)
+
+    args = parser.parse_args()
+    target_path = Path(args.target)
+
+    if not target_path.exists():
+        sys.stderr.write("Target path does not exist: %s\n" % target_path)
+        print("TARGET_NOT_FOUND")
+        return 1
+
+    lexicon = load_json_file(Path(args.lexicon)) if args.lexicon else None
+    manifest = load_json_file(Path(args.manifest)) if args.manifest else None
+    matrix = load_json_file(Path(args.matrix)) if args.matrix else None
+
+    fixtures_by_boundary = {}
+    if args.fixtures_dir and Path(args.fixtures_dir).is_dir():
+        for fix_file in Path(args.fixtures_dir).rglob("*.json"):
+            fix_data = load_json_file(fix_file)
+            if isinstance(fix_data, dict):
+                b_id = fix_data.get("boundary_identifier") or fix_data.get("boundary_id")
+                if b_id:
+                    fixtures_by_boundary[str(b_id)] = fix_data
+
+    scenario_files: List[Path] = []
+    if target_path.is_file():
+        scenario_files.append(target_path)
+    elif target_path.is_dir():
+        scenario_files.extend(sorted(target_path.glob("*.json")))
+
+    if not scenario_files:
+        sys.stderr.write("No scenario JSON files found at %s\n" % target_path)
+        print("NO_SCENARIOS_FOUND")
+        return 1
+
+    all_errors: List[str] = []
+
+    for s_path in scenario_files:
+        scenario = load_json_file(s_path)
+        if not scenario:
+            all_errors.append("MALFORMED_JSON: %s" % s_path)
+            continue
+
+        is_valid, errors = validate_bdd_scenario(
+            scenario=scenario,
+            lexicon=lexicon,
+            manifest=manifest,
+            scenario_matrix=matrix,
+            fixtures_by_boundary=fixtures_by_boundary,
+        )
+
+        if not is_valid:
+            all_errors.extend(errors)
+        else:
+            if args.render_doc:
+                out_dir = Path(args.render_doc)
+                out_dir.mkdir(parents=True, exist_ok=True)
+                md = render_bdd_scenario_markdown(scenario)
+                out_file = out_dir / ("%s.md" % scenario.get("scenario_id", s_path.stem))
+                out_file.write_text(md, encoding="utf-8")
+
+    if all_errors:
+        for err in all_errors:
+            print(err.split(":")[0])
+            sys.stderr.write("%s\n" % err)
+        return 1
+
+    print("BDD_SCENARIO_VALIDATED_CLEAN")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

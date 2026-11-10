@@ -1,0 +1,928 @@
+{
+  "schema_version": "1.0.0",
+  "feature_slug": "monthly-timelog-viewer",
+  "updated_at": "2026-08-23T12:30:00Z",
+  "entity_relationships": [
+    {
+      "from_entity": "MonthlyTimelogReport",
+      "to_entity": "DailyTimelog",
+      "kind": "OWNS",
+      "cardinality": "1:N",
+      "description": "A monthly report contains zero or more daily timelog summaries."
+    },
+    {
+      "from_entity": "DailyTimelog",
+      "to_entity": "TicketWorklog",
+      "kind": "OWNS",
+      "cardinality": "1:N",
+      "description": "Each day contains one or more ticket worklog entries."
+    }
+  ],
+  "entity_boundaries": [
+    {
+      "boundary_id": "ui_boundary",
+      "name": "Web Frontend Boundary",
+      "entities": [
+        "MonthlyTimelogReport",
+        "DailyTimelog",
+        "TicketWorklog"
+      ],
+      "owned_invariants": [
+        "Month total equals sum of daily totals",
+        "Daily total equals sum of ticket hours for that day"
+      ],
+      "interfaces": [
+        {
+          "interface_id": "api_report_fetch",
+          "direction": "OUTBOUND",
+          "peer": "backend_boundary",
+          "contract_ref": "GET /api/timelog?month=YYYY-MM",
+          "description": "Fetches monthly timelog data in JSON format from the backend service."
+        }
+      ]
+    },
+    {
+      "boundary_id": "backend_boundary",
+      "name": "Node.js Backend Server Boundary",
+      "entities": [
+        "MonthlyTimelogReport",
+        "DailyTimelog",
+        "TicketWorklog"
+      ],
+      "owned_invariants": [
+        "JQL query strictly scopes worklogAuthor = currentUser() and worklogDate within month bounds",
+        "Aggregates worklogs deterministically by calendar date and ticket"
+      ],
+      "interfaces": [
+        {
+          "interface_id": "http_report_endpoint",
+          "direction": "INBOUND",
+          "peer": "ui_boundary",
+          "contract_ref": "GET /api/timelog?month=YYYY-MM",
+          "description": "Serves structured monthly timelog JSON payload to the UI client."
+        },
+        {
+          "interface_id": "jira_rest_client",
+          "direction": "OUTBOUND",
+          "peer": "jira_boundary",
+          "contract_ref": "Jira REST API /rest/api/3/search & /rest/api/3/issue/{id}/worklog",
+          "description": "Queries Jira Cloud REST API for issues and worklogs."
+        }
+      ]
+    },
+    {
+      "boundary_id": "jira_boundary",
+      "name": "External Jira Cloud Service",
+      "entities": [
+        "TicketWorklog"
+      ],
+      "owned_invariants": [
+        "Worklogs hold immutable author and start timestamps",
+        "Time spent is reported in integer seconds"
+      ],
+      "interfaces": [
+        {
+          "interface_id": "jira_api",
+          "direction": "INBOUND",
+          "peer": "backend_boundary",
+          "contract_ref": "Jira REST API v3 / CLI",
+          "description": "External Jira boundary receiving issue search and worklog queries."
+        }
+      ]
+    }
+  ],
+  "simulated_dependencies": [
+    {
+      "boundary_class": "NETWORK_API",
+      "simulation_strategy": "FIXTURE_RESPONSE",
+      "fixture_ref": "contract-fixtures/jira-worklog-samples.json",
+      "business_logic_under_test": "Jira issue search and worklog response parsing, author matching, date filtering, and aggregation."
+    }
+  ],
+  "actors": [
+    {
+      "actor_id": "User",
+      "description": "Developer viewing personal Jira monthly timelogs and switching active month view."
+    }
+  ],
+  "observers": [
+    {
+      "observer_id": "TimelogViewerUI",
+      "medium": "rendered_ui",
+      "modality": "DOM_PAGE",
+      "description": "Plain HTML+CSS web frontend interface rendering monthly totals and daily ticket logs."
+    },
+    {
+      "observer_id": "BackendApiObserver",
+      "medium": "api_response",
+      "modality": "HTTP_JSON",
+      "description": "Node.js HTTP server REST endpoint delivering JSON timelog responses."
+    }
+  ],
+  "triggers": [
+    {
+      "trigger_id": "TRIGGER_INITIAL_PAGE_LOAD",
+      "actor_id": "User",
+      "is_actor_repeatable": false,
+      "description": "User opens application in browser triggering automatic fetch of current month timelog."
+    },
+    {
+      "trigger_id": "TRIGGER_SELECT_MONTH",
+      "actor_id": "User",
+      "is_actor_repeatable": true,
+      "description": "User selects a different calendar month from the month selector control."
+    },
+    {
+      "trigger_id": "TRIGGER_RETRY_FETCH",
+      "actor_id": "User",
+      "is_actor_repeatable": true,
+      "description": "User clicks retry button following a network or authentication error."
+    },
+    {
+      "trigger_id": "TRIGGER_CLOSE_VIEW",
+      "actor_id": "User",
+      "is_actor_repeatable": false,
+      "description": "User closes the web browser tab or navigates away."
+    }
+  ],
+  "branch_coverage": {
+    "group_a_resource_and_state": [
+      {
+        "class_name": "ORPHANED_DELETED_TARGET_STATES",
+        "status": "ADDRESSED",
+        "handling_description": "If Jira issues referenced in worklogs are deleted upstream, worklog seconds are retained in daily and monthly totals with placeholder ticket key.",
+        "related_states": [
+          "STATE_DISPLAY_TIMELOG_REPORT",
+          "STATE_DISPLAY_SWITCHED_MONTH"
+        ]
+      },
+      {
+        "class_name": "RESOURCE_LEAK_AND_TERMINATION_INVARIANTS",
+        "status": "ADDRESSED",
+        "handling_description": "HTTP client connections to Jira are closed on response completion or abort; UI event listeners cleaned up.",
+        "related_states": [
+          "STATE_LOADING_CURRENT_MONTH",
+          "STATE_LOADING_SWITCH_MONTH",
+          "STATE_TERMINAL_SESSION_CLOSED"
+        ]
+      },
+      {
+        "class_name": "EVENT_ORDERING_AND_MONOTONIC_SEQUENCE_CLOCKS",
+        "status": "ADDRESSED",
+        "handling_description": "Monotonically increasing request sequence IDs attached to client fetch calls discard stale out-of-order network responses.",
+        "related_states": [
+          "STATE_LOADING_SWITCH_MONTH",
+          "STATE_SUPERSEDED_STALE",
+          "STATE_DISPLAY_SWITCHED_MONTH"
+        ]
+      },
+      {
+        "class_name": "INGRESS_HANDOFF_DURABILITY",
+        "status": "ADDRESSED",
+        "handling_description": "Month selection query parameters are strictly validated against YYYY-MM regex before dispatching upstream requests. Worklog date assignment strictly extracts YYYY-MM-DD from the Jira worklog started ISO timestamp in account timezone offset.",
+        "related_states": [
+          "STATE_LOADING_CURRENT_MONTH",
+          "STATE_LOADING_SWITCH_MONTH",
+          "STATE_FETCH_ERROR"
+        ]
+      },
+      {
+        "class_name": "TEMPORAL_EGRESS_FROM_FINITE_LIFESPAN_STATES",
+        "status": "ADDRESSED",
+        "handling_description": "15-second HTTP request timeout ensures loading states transition to error state if Jira API stalls.",
+        "related_states": [
+          "STATE_LOADING_CURRENT_MONTH",
+          "STATE_LOADING_SWITCH_MONTH",
+          "STATE_FETCH_ERROR"
+        ]
+      },
+      {
+        "class_name": "COMPOUND_PUBLICATION_ORDERING",
+        "status": "ADDRESSED",
+        "handling_description": "Monthly total hours and daily breakdown items are rendered atomically in a single DOM update pass.",
+        "related_states": [
+          "STATE_DISPLAY_TIMELOG_REPORT",
+          "STATE_DISPLAY_SWITCHED_MONTH"
+        ]
+      },
+      {
+        "class_name": "OPERATIONAL_EDGE_CASES",
+        "status": "ADDRESSED",
+        "handling_description": "Months with zero logged hours render an explicit empty state banner with 0.00 hrs total rather than failing. Issues where total worklogs exceed the inline worklog page size (total > worklogs.length) trigger explicit secondary paginated worklog fetches to prevent data truncation.",
+        "related_states": [
+          "STATE_EMPTY_TIMELOG_MONTH",
+          "STATE_DISPLAY_TIMELOG_REPORT"
+        ]
+      }
+    ],
+    "group_b_trigger_and_observation": [
+      {
+        "class_name": "REPEAT_TRIGGER_OUT_OF_ORDER_SETTLEMENT",
+        "status": "ADDRESSED",
+        "handling_description": "Request sequence clock ensures older month query response arriving after a newer request is ignored.",
+        "related_states": [
+          "STATE_LOADING_SWITCH_MONTH",
+          "STATE_SUPERSEDED_STALE",
+          "STATE_DISPLAY_SWITCHED_MONTH"
+        ]
+      },
+      {
+        "class_name": "DUPLICATE_TRIGGER",
+        "status": "ADDRESSED",
+        "handling_description": "Selecting the currently active month is an idempotent no-op; double-clicks are debounced in UI.",
+        "related_states": [
+          "STATE_LOADING_SWITCH_MONTH",
+          "STATE_DISPLAY_SWITCHED_MONTH"
+        ]
+      },
+      {
+        "class_name": "OBSERVER_TEARDOWN_MID_FLIGHT",
+        "status": "ADDRESSED",
+        "handling_description": "AbortController cancels in-flight fetch requests if user navigates or triggers a new month fetch.",
+        "related_states": [
+          "STATE_LOADING_SWITCH_MONTH",
+          "STATE_TERMINAL_SESSION_CLOSED"
+        ]
+      },
+      {
+        "class_name": "STALE_OUTPUT_SUPERSESSION",
+        "status": "ADDRESSED",
+        "resolution": "STATE_SPLIT",
+        "state_split_applied": true,
+        "materialized_states": [
+          "STATE_LOADING_SWITCH_MONTH",
+          "STATE_SUPERSEDED_STALE"
+        ],
+        "handling_description": "When a new month is selected mid-flight, previous in-flight request is marked superseded and UI displays loading spinner for newly targeted month.",
+        "related_states": [
+          "STATE_LOADING_SWITCH_MONTH",
+          "STATE_SUPERSEDED_STALE"
+        ]
+      },
+      {
+        "class_name": "SEMANTIC_CONTRADICTION",
+        "status": "ADDRESSED",
+        "handling_description": "UI clears previous monthly and daily totals during month transition preventing conflicting data display.",
+        "related_states": [
+          "STATE_LOADING_SWITCH_MONTH",
+          "STATE_DISPLAY_SWITCHED_MONTH"
+        ]
+      }
+    ]
+  },
+  "states": [
+    {
+      "state_id": "STATE_IDLE_INITIAL",
+      "evidence_key": "ev_state_idle_initial",
+      "is_initial": true,
+      "is_terminal": false,
+      "description": "Application loaded into browser before initial month timelog fetch dispatches.",
+      "observable_projections": [
+        {
+          "observer_id": "TimelogViewerUI",
+          "medium": "rendered_ui",
+          "modality": "DOM_PAGE",
+          "description": "Initial shell rendered with month selector ready.",
+          "discriminator": {
+            "view_status": "SHELL_MOUNTED",
+            "active_banner": "NONE",
+            "has_timelog_data": false
+          }
+        },
+        {
+          "observer_id": "BackendApiObserver",
+          "medium": "api_response",
+          "modality": "HTTP_JSON",
+          "description": "No active HTTP API request dispatched yet.",
+          "discriminator": {
+            "http_status": 0,
+            "endpoint": "NONE",
+            "response_received": false
+          }
+        }
+      ]
+    },
+    {
+      "state_id": "STATE_LOADING_CURRENT_MONTH",
+      "evidence_key": "ev_state_loading_current_month",
+      "is_initial": false,
+      "is_terminal": false,
+      "description": "Fetching current month timelog data from backend /api/timelog endpoint.",
+      "observable_projections": [
+        {
+          "observer_id": "TimelogViewerUI",
+          "medium": "rendered_ui",
+          "modality": "DOM_PAGE",
+          "description": "UI shows loading indicator for current month fetch.",
+          "discriminator": {
+            "view_status": "LOADING_CURRENT_MONTH",
+            "loading_spinner_visible": true,
+            "has_timelog_data": false
+          }
+        },
+        {
+          "observer_id": "BackendApiObserver",
+          "medium": "api_response",
+          "modality": "HTTP_JSON",
+          "description": "In-flight HTTP GET request for current month.",
+          "discriminator": {
+            "http_status": 200,
+            "endpoint": "GET /api/timelog?month=CURRENT",
+            "in_flight": true
+          }
+        }
+      ]
+    },
+    {
+      "state_id": "STATE_DISPLAY_TIMELOG_REPORT",
+      "evidence_key": "ev_state_display_timelog_report",
+      "is_initial": false,
+      "is_terminal": false,
+      "description": "Active month timelog report rendered with monthly total and daily breakdowns.",
+      "observable_projections": [
+        {
+          "observer_id": "TimelogViewerUI",
+          "medium": "rendered_ui",
+          "modality": "DOM_PAGE",
+          "description": "UI displays monthly total hours header, date breakdown cards, and ticket line items.",
+          "discriminator": {
+            "view_status": "REPORT_LOADED",
+            "month_header_rendered": true,
+            "daily_list_populated": true,
+            "error_banner_visible": false
+          }
+        },
+        {
+          "observer_id": "BackendApiObserver",
+          "medium": "api_response",
+          "modality": "HTTP_JSON",
+          "description": "HTTP 200 OK JSON payload delivered with days array and total_hours.",
+          "discriminator": {
+            "http_status": 200,
+            "response_schema": "MONTHLY_TIMELOG_REPORT",
+            "has_days": true
+          }
+        }
+      ]
+    },
+    {
+      "state_id": "STATE_LOADING_SWITCH_MONTH",
+      "evidence_key": "ev_state_loading_switch_month",
+      "is_initial": false,
+      "is_terminal": false,
+      "description": "Fetching timelog report for a user-selected target month.",
+      "observable_projections": [
+        {
+          "observer_id": "TimelogViewerUI",
+          "medium": "rendered_ui",
+          "modality": "DOM_PAGE",
+          "description": "UI indicates loading state while fetching newly selected month.",
+          "discriminator": {
+            "view_status": "LOADING_SWITCH_MONTH",
+            "target_month_selected": true,
+            "loading_spinner_visible": true
+          }
+        },
+        {
+          "observer_id": "BackendApiObserver",
+          "medium": "api_response",
+          "modality": "HTTP_JSON",
+          "description": "HTTP GET request in-flight for target month parameter.",
+          "discriminator": {
+            "http_status": 200,
+            "endpoint": "GET /api/timelog?month=TARGET",
+            "in_flight": true
+          }
+        }
+      ]
+    },
+    {
+      "state_id": "STATE_DISPLAY_SWITCHED_MONTH",
+      "evidence_key": "ev_state_display_switched_month",
+      "is_initial": false,
+      "is_terminal": false,
+      "description": "Successfully switched and rendered timelog report for target month.",
+      "observable_projections": [
+        {
+          "observer_id": "TimelogViewerUI",
+          "medium": "rendered_ui",
+          "modality": "DOM_PAGE",
+          "description": "UI displays target month total hours and updated daily breakdown entries.",
+          "discriminator": {
+            "view_status": "SWITCHED_MONTH_LOADED",
+            "target_month_rendered": true,
+            "daily_list_populated": true
+          }
+        },
+        {
+          "observer_id": "BackendApiObserver",
+          "medium": "api_response",
+          "modality": "HTTP_JSON",
+          "description": "HTTP 200 OK JSON payload for target month delivered.",
+          "discriminator": {
+            "http_status": 200,
+            "target_month_payload": true,
+            "has_days": true
+          }
+        }
+      ]
+    },
+    {
+      "state_id": "STATE_EMPTY_TIMELOG_MONTH",
+      "evidence_key": "ev_state_empty_timelog_month",
+      "is_initial": false,
+      "is_terminal": false,
+      "description": "Selected month contains zero logged hours; displays clean empty state.",
+      "observable_projections": [
+        {
+          "observer_id": "TimelogViewerUI",
+          "medium": "rendered_ui",
+          "modality": "DOM_PAGE",
+          "description": "UI displays 0.00 hrs total and zero-worklogs empty state banner.",
+          "discriminator": {
+            "view_status": "EMPTY_MONTH_VIEW",
+            "total_hours_display": "0.00 hrs",
+            "empty_banner_visible": true
+          }
+        },
+        {
+          "observer_id": "BackendApiObserver",
+          "medium": "api_response",
+          "modality": "HTTP_JSON",
+          "description": "HTTP 200 OK JSON response with empty days array and total_hours 0.00.",
+          "discriminator": {
+            "http_status": 200,
+            "response_schema": "MONTHLY_TIMELOG_REPORT",
+            "days_count": 0
+          }
+        }
+      ]
+    },
+    {
+      "state_id": "STATE_FETCH_ERROR",
+      "evidence_key": "ev_state_fetch_error",
+      "is_initial": false,
+      "is_terminal": false,
+      "description": "Network, authentication, or Jira API error occurred during timelog retrieval.",
+      "observable_projections": [
+        {
+          "observer_id": "TimelogViewerUI",
+          "medium": "rendered_ui",
+          "modality": "DOM_PAGE",
+          "description": "UI displays error banner with error message and retry button.",
+          "discriminator": {
+            "view_status": "ERROR_VIEW",
+            "error_banner_visible": true,
+            "retry_button_enabled": true
+          }
+        },
+        {
+          "observer_id": "BackendApiObserver",
+          "medium": "api_response",
+          "modality": "HTTP_JSON",
+          "description": "HTTP 400 or 500 error response JSON with error details.",
+          "discriminator": {
+            "http_status": 500,
+            "error_occurred": true,
+            "error_type": "JIRA_API_ERROR"
+          }
+        }
+      ]
+    },
+    {
+      "state_id": "STATE_SUPERSEDED_STALE",
+      "evidence_key": "ev_state_superseded_stale",
+      "is_initial": false,
+      "is_terminal": false,
+      "description": "Prior in-flight month request was superseded by a rapid month selection.",
+      "observable_projections": [
+        {
+          "observer_id": "TimelogViewerUI",
+          "medium": "rendered_ui",
+          "modality": "DOM_PAGE",
+          "description": "Stale response discarded silently; UI remains focused on latest request.",
+          "discriminator": {
+            "view_status": "SUPERSEDED_DISCARDED",
+            "stale_response_ignored": true
+          }
+        },
+        {
+          "observer_id": "BackendApiObserver",
+          "medium": "api_response",
+          "modality": "HTTP_JSON",
+          "description": "Obsolete response completed but discarded by sequence counter check.",
+          "discriminator": {
+            "http_status": 200,
+            "sequence_mismatch": true,
+            "action": "DISCARDED"
+          }
+        }
+      ]
+    },
+    {
+      "state_id": "STATE_TERMINAL_SESSION_CLOSED",
+      "evidence_key": "ev_state_terminal_closed",
+      "is_initial": false,
+      "is_terminal": true,
+      "terminal_classification": "NORMAL_TERMINATION",
+      "description": "Browser session closed or client disconnected; all active listeners and requests aborted.",
+      "observable_projections": [
+        {
+          "observer_id": "TimelogViewerUI",
+          "medium": "rendered_ui",
+          "modality": "DOM_PAGE",
+          "description": "DOM unmounted on browser window close.",
+          "discriminator": {
+            "view_status": "DOM_UNMOUNTED",
+            "session_active": false
+          }
+        },
+        {
+          "observer_id": "BackendApiObserver",
+          "medium": "api_response",
+          "modality": "HTTP_JSON",
+          "description": "No further HTTP requests received.",
+          "discriminator": {
+            "http_status": 0,
+            "connection_status": "CLOSED"
+          }
+        }
+      ]
+    }
+  ],
+  "transitions": [
+    {
+      "transition_id": "TRANS_APP_LOAD",
+      "from_state": "STATE_IDLE_INITIAL",
+      "to_state": "STATE_LOADING_CURRENT_MONTH",
+      "trigger_ref": "TRIGGER_INITIAL_PAGE_LOAD",
+      "guard": null,
+      "description": "App initialization dispatches load for current month timelog."
+    },
+    {
+      "transition_id": "TRANS_CURRENT_MONTH_SUCCESS",
+      "from_state": "STATE_LOADING_CURRENT_MONTH",
+      "to_state": "STATE_DISPLAY_TIMELOG_REPORT",
+      "trigger_ref": null,
+      "guard": "response.status == 200 && response.days.length > 0",
+      "description": "Current month timelog retrieved successfully with worklogs."
+    },
+    {
+      "transition_id": "TRANS_CURRENT_MONTH_EMPTY",
+      "from_state": "STATE_LOADING_CURRENT_MONTH",
+      "to_state": "STATE_EMPTY_TIMELOG_MONTH",
+      "trigger_ref": null,
+      "guard": "response.status == 200 && response.days.length == 0",
+      "description": "Current month timelog retrieved successfully with zero worklogs."
+    },
+    {
+      "transition_id": "TRANS_CURRENT_MONTH_ERROR",
+      "from_state": "STATE_LOADING_CURRENT_MONTH",
+      "to_state": "STATE_FETCH_ERROR",
+      "trigger_ref": null,
+      "guard": "response.status != 200 || network_error",
+      "description": "Current month fetch fails due to network or Jira error."
+    },
+    {
+      "transition_id": "TRANS_SWITCH_MONTH_FROM_REPORT",
+      "from_state": "STATE_DISPLAY_TIMELOG_REPORT",
+      "to_state": "STATE_LOADING_SWITCH_MONTH",
+      "trigger_ref": "TRIGGER_SELECT_MONTH",
+      "guard": "selected_month != active_month",
+      "description": "User picks a different calendar month from active report view."
+    },
+    {
+      "transition_id": "TRANS_SWITCH_MONTH_FROM_EMPTY",
+      "from_state": "STATE_EMPTY_TIMELOG_MONTH",
+      "to_state": "STATE_LOADING_SWITCH_MONTH",
+      "trigger_ref": "TRIGGER_SELECT_MONTH",
+      "guard": "selected_month != active_month",
+      "description": "User picks a different calendar month from empty month view."
+    },
+    {
+      "transition_id": "TRANS_SWITCH_SUCCESS",
+      "from_state": "STATE_LOADING_SWITCH_MONTH",
+      "to_state": "STATE_DISPLAY_SWITCHED_MONTH",
+      "trigger_ref": null,
+      "guard": "response.status == 200 && response.days.length > 0 && is_latest_seq",
+      "description": "Target month timelog retrieved successfully with worklogs."
+    },
+    {
+      "transition_id": "TRANS_SWITCH_EMPTY",
+      "from_state": "STATE_LOADING_SWITCH_MONTH",
+      "to_state": "STATE_EMPTY_TIMELOG_MONTH",
+      "trigger_ref": null,
+      "guard": "response.status == 200 && response.days.length == 0 && is_latest_seq",
+      "description": "Target month timelog retrieved with zero worklogs."
+    },
+    {
+      "transition_id": "TRANS_SWITCH_ERROR",
+      "from_state": "STATE_LOADING_SWITCH_MONTH",
+      "to_state": "STATE_FETCH_ERROR",
+      "trigger_ref": null,
+      "guard": "response.status != 200 || network_error",
+      "description": "Target month fetch fails due to network or Jira error."
+    },
+    {
+      "transition_id": "TRANS_SWITCH_SUPERSEDED",
+      "from_state": "STATE_LOADING_SWITCH_MONTH",
+      "to_state": "STATE_SUPERSEDED_STALE",
+      "trigger_ref": "TRIGGER_SELECT_MONTH",
+      "guard": "new_selection_dispatched_before_prior_settled",
+      "description": "User triggers another month selection before previous request settled."
+    },
+    {
+      "transition_id": "TRANS_SUPERSEDED_TO_LOADING",
+      "from_state": "STATE_SUPERSEDED_STALE",
+      "to_state": "STATE_LOADING_SWITCH_MONTH",
+      "trigger_ref": null,
+      "guard": null,
+      "description": "Superseded state routes immediately into loading the latest month."
+    },
+    {
+      "transition_id": "TRANS_RETRY_FROM_ERROR",
+      "from_state": "STATE_FETCH_ERROR",
+      "to_state": "STATE_LOADING_SWITCH_MONTH",
+      "trigger_ref": "TRIGGER_RETRY_FETCH",
+      "guard": null,
+      "description": "User clicks retry button from error view."
+    },
+    {
+      "transition_id": "TRANS_SWITCH_FROM_SWITCHED",
+      "from_state": "STATE_DISPLAY_SWITCHED_MONTH",
+      "to_state": "STATE_LOADING_SWITCH_MONTH",
+      "trigger_ref": "TRIGGER_SELECT_MONTH",
+      "guard": "selected_month != active_month",
+      "description": "User switches month again from switched view."
+    },
+    {
+      "transition_id": "TRANS_CLOSE_FROM_REPORT",
+      "from_state": "STATE_DISPLAY_TIMELOG_REPORT",
+      "to_state": "STATE_TERMINAL_SESSION_CLOSED",
+      "trigger_ref": "TRIGGER_CLOSE_VIEW",
+      "guard": null,
+      "description": "User closes browser tab from active report view."
+    },
+    {
+      "transition_id": "TRANS_CLOSE_FROM_SWITCHED",
+      "from_state": "STATE_DISPLAY_SWITCHED_MONTH",
+      "to_state": "STATE_TERMINAL_SESSION_CLOSED",
+      "trigger_ref": "TRIGGER_CLOSE_VIEW",
+      "guard": null,
+      "description": "User closes browser tab from switched report view."
+    },
+    {
+      "transition_id": "TRANS_CLOSE_FROM_EMPTY",
+      "from_state": "STATE_EMPTY_TIMELOG_MONTH",
+      "to_state": "STATE_TERMINAL_SESSION_CLOSED",
+      "trigger_ref": "TRIGGER_CLOSE_VIEW",
+      "guard": null,
+      "description": "User closes browser tab from empty report view."
+    },
+    {
+      "transition_id": "TRANS_CLOSE_FROM_ERROR",
+      "from_state": "STATE_FETCH_ERROR",
+      "to_state": "STATE_TERMINAL_SESSION_CLOSED",
+      "trigger_ref": "TRIGGER_CLOSE_VIEW",
+      "guard": null,
+      "description": "User closes browser tab from error view."
+    }
+  ],
+  "flow_groups": [
+    {
+      "group_id": "GRP_PRIMARY_TIMELOG_FLOWS",
+      "name": "Primary Timelog Viewing Flows",
+      "actor_id": "User",
+      "shared_preconditions": [
+        "User has valid Jira credentials in .env and network connectivity"
+      ],
+      "functional_area": "Timelog Viewing",
+      "summary": "Covers initial page load, successful month viewing, month switching, empty state, and error handling."
+    }
+  ],
+  "flows": [
+    {
+      "flow_id": "FLOW_INITIAL_LOAD_AND_VIEW",
+      "group_id": "GRP_PRIMARY_TIMELOG_FLOWS",
+      "name": "Initial Application Load and View Current Month",
+      "actor_id": "User",
+      "preconditions": [
+        "Browser is launched with app URL"
+      ],
+      "steps": [
+        {
+          "step_no": 1,
+          "action": "User opens application URL in web browser",
+          "actor_id": "User",
+          "transition_ref": "TRANS_APP_LOAD"
+        },
+        {
+          "step_no": 2,
+          "action": "Current month timelog data is received and rendered",
+          "actor_id": "User",
+          "transition_ref": "TRANS_CURRENT_MONTH_SUCCESS"
+        },
+        {
+          "step_no": 3,
+          "action": "User reviews timelog hours and closes browser",
+          "actor_id": "User",
+          "transition_ref": "TRANS_CLOSE_FROM_REPORT"
+        }
+      ],
+      "expected_outcome": {
+        "description": "Current month total hours and daily ticket breakdown rendered accurately.",
+        "evidence_key": "ev_state_terminal_closed",
+        "observer_id": "TimelogViewerUI",
+        "medium": "rendered_ui"
+      }
+    },
+    {
+      "flow_id": "FLOW_SWITCH_MONTH_SUCCESS",
+      "group_id": "GRP_PRIMARY_TIMELOG_FLOWS",
+      "name": "Switch Month and View Target Month Logs",
+      "actor_id": "User",
+      "preconditions": [
+        "Initial timelog report is displayed"
+      ],
+      "steps": [
+        {
+          "step_no": 1,
+          "action": "User opens application URL in web browser",
+          "actor_id": "User",
+          "transition_ref": "TRANS_APP_LOAD"
+        },
+        {
+          "step_no": 2,
+          "action": "Current month timelog data is received and rendered",
+          "actor_id": "User",
+          "transition_ref": "TRANS_CURRENT_MONTH_SUCCESS"
+        },
+        {
+          "step_no": 3,
+          "action": "User selects previous month from month selector",
+          "actor_id": "User",
+          "transition_ref": "TRANS_SWITCH_MONTH_FROM_REPORT"
+        },
+        {
+          "step_no": 4,
+          "action": "Target month timelog data is received and rendered",
+          "actor_id": "User",
+          "transition_ref": "TRANS_SWITCH_SUCCESS"
+        },
+        {
+          "step_no": 5,
+          "action": "User closes browser after reviewing target month",
+          "actor_id": "User",
+          "transition_ref": "TRANS_CLOSE_FROM_SWITCHED"
+        }
+      ],
+      "expected_outcome": {
+        "description": "Target month total hours and daily ticket breakdown rendered accurately.",
+        "evidence_key": "ev_state_terminal_closed",
+        "observer_id": "TimelogViewerUI",
+        "medium": "rendered_ui"
+      }
+    },
+    {
+      "flow_id": "FLOW_EMPTY_MONTH_VIEW",
+      "group_id": "GRP_PRIMARY_TIMELOG_FLOWS",
+      "name": "View Month with Zero Worklogs",
+      "actor_id": "User",
+      "preconditions": [
+        "Selected month contains no logged hours in Jira"
+      ],
+      "steps": [
+        {
+          "step_no": 1,
+          "action": "User opens application URL in web browser",
+          "actor_id": "User",
+          "transition_ref": "TRANS_APP_LOAD"
+        },
+        {
+          "step_no": 2,
+          "action": "Current month response arrives with zero worklogs",
+          "actor_id": "User",
+          "transition_ref": "TRANS_CURRENT_MONTH_EMPTY"
+        },
+        {
+          "step_no": 3,
+          "action": "User closes browser after observing empty state",
+          "actor_id": "User",
+          "transition_ref": "TRANS_CLOSE_FROM_EMPTY"
+        }
+      ],
+      "expected_outcome": {
+        "description": "Empty state banner and 0.00 hrs total rendered gracefully.",
+        "evidence_key": "ev_state_terminal_closed",
+        "observer_id": "TimelogViewerUI",
+        "medium": "rendered_ui"
+      }
+    },
+    {
+      "flow_id": "FLOW_ERROR_AND_RETRY",
+      "group_id": "GRP_PRIMARY_TIMELOG_FLOWS",
+      "name": "Handle Error and Retry Successfully",
+      "actor_id": "User",
+      "preconditions": [
+        "Initial network glitch occurs then connectivity restores"
+      ],
+      "steps": [
+        {
+          "step_no": 1,
+          "action": "User opens application URL in web browser",
+          "actor_id": "User",
+          "transition_ref": "TRANS_APP_LOAD"
+        },
+        {
+          "step_no": 2,
+          "action": "Initial fetch fails due to network error",
+          "actor_id": "User",
+          "transition_ref": "TRANS_CURRENT_MONTH_ERROR"
+        },
+        {
+          "step_no": 3,
+          "action": "User clicks retry button",
+          "actor_id": "User",
+          "transition_ref": "TRANS_RETRY_FROM_ERROR"
+        },
+        {
+          "step_no": 4,
+          "action": "Retry succeeds and timelog report renders",
+          "actor_id": "User",
+          "transition_ref": "TRANS_SWITCH_SUCCESS"
+        },
+        {
+          "step_no": 5,
+          "action": "User closes browser session",
+          "actor_id": "User",
+          "transition_ref": "TRANS_CLOSE_FROM_SWITCHED"
+        }
+      ],
+      "expected_outcome": {
+        "description": "Error banner is cleared and timelog data displays properly upon retry.",
+        "evidence_key": "ev_state_terminal_closed",
+        "observer_id": "TimelogViewerUI",
+        "medium": "rendered_ui"
+      }
+    },
+    {
+      "flow_id": "FLOW_RAPID_SWITCH_SUPERSEDED",
+      "group_id": "GRP_PRIMARY_TIMELOG_FLOWS",
+      "name": "Rapid Month Switching with Stale Response Supersession",
+      "actor_id": "User",
+      "preconditions": [
+        "User clicks multiple month options rapidly in succession"
+      ],
+      "steps": [
+        {
+          "step_no": 1,
+          "action": "User opens application URL in web browser",
+          "actor_id": "User",
+          "transition_ref": "TRANS_APP_LOAD"
+        },
+        {
+          "step_no": 2,
+          "action": "Current month report renders",
+          "actor_id": "User",
+          "transition_ref": "TRANS_CURRENT_MONTH_SUCCESS"
+        },
+        {
+          "step_no": 3,
+          "action": "User clicks month A",
+          "actor_id": "User",
+          "transition_ref": "TRANS_SWITCH_MONTH_FROM_REPORT"
+        },
+        {
+          "step_no": 4,
+          "action": "User immediately clicks month B before month A settles",
+          "actor_id": "User",
+          "transition_ref": "TRANS_SWITCH_SUPERSEDED"
+        },
+        {
+          "step_no": 5,
+          "action": "Superseded state clears and proceeds with loading month B",
+          "actor_id": "User",
+          "transition_ref": "TRANS_SUPERSEDED_TO_LOADING"
+        },
+        {
+          "step_no": 6,
+          "action": "Month B timelog response renders successfully",
+          "actor_id": "User",
+          "transition_ref": "TRANS_SWITCH_SUCCESS"
+        },
+        {
+          "step_no": 7,
+          "action": "User closes browser",
+          "actor_id": "User",
+          "transition_ref": "TRANS_CLOSE_FROM_SWITCHED"
+        }
+      ],
+      "expected_outcome": {
+        "description": "Stale month A response is discarded and month B renders cleanly without flicker.",
+        "evidence_key": "ev_state_terminal_closed",
+        "observer_id": "TimelogViewerUI",
+        "medium": "rendered_ui"
+      }
+    }
+  ]
+}

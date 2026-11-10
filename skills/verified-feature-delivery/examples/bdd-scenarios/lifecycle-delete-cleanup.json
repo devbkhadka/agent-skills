@@ -1,0 +1,105 @@
+{
+  "schema_version": "1.0.0",
+  "feature_slug": "order-fulfillment-pipeline",
+  "scenario_id": "scenario_order_lifecycle_purge_cleanup",
+  "slice_id": "slice_order_lifecycle_cleanup",
+  "description": "System purges expired cancelled order, releases resource locks, cleans audit artifacts, and confirms zero resource leaks.",
+  "derived_from": {
+    "state_id": "ORDER_CANCELLED",
+    "transition_id": "TRANS_PURGE_EXPIRED_ORDER",
+    "branch_coverage_class": "RESOURCE_LEAK_AND_TERMINATION_INVARIANTS"
+  },
+  "mock_boundary_contract": {
+    "isolation_mode": "STRICT_EXTERNAL_MOCK_ONLY",
+    "mock_boundaries": [],
+    "prohibited_mocks": [
+      "OrderAggregate",
+      "OrderValidationEngine",
+      "OrderStateMachine",
+      "PostgresOrderRepository"
+    ]
+  },
+  "given": {
+    "state_token": "ORDER_CANCELLED",
+    "entity_states": [
+      {
+        "entity_name": "Order",
+        "entity_id": "ord_1004",
+        "attributes": {
+          "customer_id": "cust_990",
+          "status": "CANCELLED",
+          "cancellation_reason": "USER_REQUESTED",
+          "total_cents": 1500,
+          "inventory_lock_held": true
+        },
+        "unit_precisions": {
+          "total_cents": "integer_cents"
+        }
+      }
+    ],
+    "datastore_state": {
+      "orders": [
+        {
+          "id": "ord_1004",
+          "status": "CANCELLED",
+          "customer_id": "cust_990"
+        }
+      ],
+      "inventory_locks": [
+        {
+          "lock_id": "lock_ord_1004",
+          "order_id": "ord_1004",
+          "sku": "SKU_WIDGET_10",
+          "quantity": 1
+        }
+      ]
+    },
+    "fixture_presets": []
+  },
+  "when": {
+    "entrypoint": {
+      "entrypoint_type": "CLI_COMMAND",
+      "invoked_target": "bin/purge-cancelled-orders",
+      "actor_id": "system_scheduler",
+      "action_token": "PURGE_CANCELLED_ORDERS",
+      "command_args": ["--order-id", "ord_1004", "--retention-days", "0", "--release-locks"]
+    }
+  },
+  "then": {
+    "state_token": "TERMINATED_PURGED",
+    "state_assertions": [
+      {
+        "entity_name": "Order",
+        "attribute": "status",
+        "operator": "EQUALS",
+        "expected_value": "PURGED"
+      },
+      {
+        "entity_name": "Order",
+        "attribute": "inventory_lock_held",
+        "operator": "EQUALS",
+        "expected_value": false
+      }
+    ],
+    "observer_projections": [
+      {
+        "observer_id": "operator",
+        "medium": "process_exit",
+        "expected_projection": "PURGE_COMPLETED: order_id=ord_1004 locks_released=1 records_archived=1",
+        "discriminator": "exit_status:PURGE_COMPLETED",
+        "projection_quantities": ["purged_count", "released_lock_count"]
+      }
+    ],
+    "event_emissions": [
+      {
+        "event_name": "OrderPurgedLifecycleEvent",
+        "topic_or_stream": "orders.lifecycle.v1",
+        "payload": {
+          "order_id": "ord_1004",
+          "purged_at": "2026-08-30T12:15:00Z",
+          "locks_released": 1
+        }
+      }
+    ]
+  }
+}

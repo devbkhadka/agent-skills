@@ -1,0 +1,1275 @@
+#!/usr/bin/env python3
+"""State manager and transition engine for verified-feature-delivery.
+
+Enforces the architecture specification Section 4 state transition table as a
+declarative data structure. Tracks lifecycle progress, gate exit artifacts,
+and regression rollback routing in .verified-feature-delivery/<feature-slug>/state.json.
+"""
+
+from datetime import datetime, timezone
+import hashlib
+import json
+import os
+from pathlib import Path
+import sys
+
+# Milestones gated by a human approval record (improvement plan §5.1). Each
+# awaiting-approval state below can only be left once bin/record-approval has
+# written a matching, digest-valid record for the milestone_id it guards --
+# bin/planner-state advance never approves anything itself.
+MILESTONES = {
+    "FLOW_SIMULATION": {
+        "awaiting_state": "AWAITING_FLOW_SIMULATION_APPROVAL",
+        "artifact_path": "flow-simulation-matrix.json",
+        "digest_scope": ["flows", "flow_groups", "states", "transitions"],
+        "derived_docs": ["ubiquitous-language-glossary.md", "flow-simulation.md"],
+    },
+    "ENTITY_BOUNDARIES": {
+        "awaiting_state": "AWAITING_ENTITY_BOUNDARIES_APPROVAL",
+        "artifact_path": "flow-simulation-matrix.json",
+        "digest_scope": ["entity_boundaries", "entity_relationships", "simulated_dependencies"],
+        "derived_docs": ["domain-entity-map.md"],
+    },
+    "UI_LAYOUT": {
+        "awaiting_state": "AWAITING_UI_LAYOUT_APPROVAL",
+        "artifact_path": "execution-dag.json",
+        "digest_scope": ["ui_layout"],
+        "derived_docs": [],
+    },
+}
+AWAITING_STATE_TO_MILESTONE = {meta["awaiting_state"]: mid for mid, meta in MILESTONES.items()}
+
+# Linear pipeline order used only to tell "already passed this gate" (stale
+# check) apart from "sitting at this gate right now" (leaving-gate check).
+# Stage 4 regression targets are reached via cmd_rollback, a separate path
+# that does not consult this ordering.
+STATE_ORDER = [
+    "UNINITIALIZED",
+    "STAGE_0_DOMAIN_INGESTION",
+    "STAGE_1_CONTRACT_PROBING",
+    "STAGE_2_SCENARIO_SIMULATION",
+    "AWAITING_FLOW_SIMULATION_APPROVAL",
+    "AWAITING_ENTITY_BOUNDARIES_APPROVAL",
+    "STAGE_3_VERTICAL_SLICING",
+    "AWAITING_UI_LAYOUT_APPROVAL",
+    "STAGE_4_MILESTONE_EXECUTION",
+    "STAGE_5_DELIVERY",
+    "COMPLETED",
+]
+
+
+def state_ordinal(state_name):
+    return STATE_ORDER.index(state_name) if state_name in STATE_ORDER else -1
+
+
+def canonical_digest(artifact, scope_keys):
+    """sha256 over the sorted-key, whitespace-free JSON of the named subtrees."""
+    scoped = {k: artifact[k] for k in scope_keys if k in artifact}
+    blob = json.dumps(scoped, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+
+
+def load_artifact(feature_dir, rel_path):
+    p = feature_dir / rel_path
+    if not p.is_file():
+        return None
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def load_ledger(feature_dir):
+    p = feature_dir / "approvals.json"
+    if not p.is_file():
+        return None
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if not isinstance(data, dict) or not isinstance(data.get("approvals"), list):
+        return None
+    return data
+
+
+def save_ledger(feature_dir, ledger_data):
+    p = feature_dir / "approvals.json"
+    p.write_text(json.dumps(ledger_data, indent=2) + "\n", encoding="utf-8")
+
+
+def find_approval(ledger_data, milestone_id):
+    if not ledger_data:
+        return None
+    for r in ledger_data.get("approvals", []):
+        if isinstance(r, dict) and r.get("milestone_id") == milestone_id:
+            return r
+    return None
+
+
+def mark_approval_stale(feature_dir, ledger_data, milestone_id):
+    for r in ledger_data.get("approvals", []):
+        if r.get("milestone_id") == milestone_id:
+            r["status"] = "STALE"
+    save_ledger(feature_dir, ledger_data)
+
+
+def delete_derived_docs(feature_dir, doc_names):
+    docs_dir = feature_dir / "docs"
+    for name in doc_names:
+        p = docs_dir / name
+        if not p.exists():
+            continue
+        try:
+            p.unlink()
+        except PermissionError:
+            p.chmod(0o644)
+            p.unlink()
+
+
+def find_stale_milestone(feature_dir, state_data):
+    """Return the milestone_id of the earliest-gated APPROVED record whose
+    recomputed digest no longer matches its artifact, considering only
+    milestones the pipeline has already advanced past. A mismatch on the
+    milestone the pipeline is currently sitting at is not staleness -- it is
+    handled by the leaving-the-gate check in cmd_advance instead.
+
+    UI_LAYOUT is excluded here: its approval is scoped per slice rather than
+    to the whole artifact, so it is handled separately by
+    find_stale_ui_layout_slices, which walks every ui_layout-bearing slice
+    instead of the single top-level digest_scope this function checks.
+    """
+    current_ord = state_ordinal(state_data.get("current_state"))
+    ledger_data = load_ledger(feature_dir)
+    if not ledger_data:
+        return None
+    candidates = []
+    for milestone_id, meta in MILESTONES.items():
+        if milestone_id == "UI_LAYOUT":
+            continue
+        awaiting_ord = state_ordinal(meta["awaiting_state"])
+        if awaiting_ord < 0 or awaiting_ord >= current_ord:
+            continue
+        rec = find_approval(ledger_data, milestone_id)
+        if not rec or rec.get("status") != "APPROVED":
+            continue
+        artifact = load_artifact(feature_dir, meta["artifact_path"])
+        if artifact is None:
+            continue
+        if canonical_digest(artifact, meta["digest_scope"]) != rec.get("approved_digest"):
+            candidates.append((awaiting_ord, milestone_id))
+    if not candidates:
+        return None
+    candidates.sort()
+    return candidates[0][1]
+
+
+def ui_slices_with_layout(artifact):
+    """slice_ids in the execution DAG that declare a non-empty ui_layout."""
+    result = []
+    for sl in (artifact or {}).get("slices", []) or []:
+        if isinstance(sl, dict) and isinstance(sl.get("ui_layout"), dict) and sl.get("ui_layout"):
+            result.append(sl.get("slice_id"))
+    return result
+
+
+def slice_ui_layout_digest(artifact, slice_id):
+    """sha256 over the sorted-key, whitespace-free JSON of one slice's own ui_layout -- the
+    per-slice counterpart to canonical_digest, which scopes to the whole artifact."""
+    for sl in (artifact or {}).get("slices", []) or []:
+        if isinstance(sl, dict) and sl.get("slice_id") == slice_id:
+            blob = json.dumps(
+                {"ui_layout": sl.get("ui_layout")},
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=True,
+            )
+            return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+    return None
+
+
+def find_ui_layout_approval(ledger_data, slice_id):
+    if not ledger_data:
+        return None
+    for r in ledger_data.get("approvals", []):
+        if isinstance(r, dict) and r.get("milestone_id") == "UI_LAYOUT" and r.get("slice_id") == slice_id:
+            return r
+    return None
+
+
+def mark_ui_layout_stale(ledger_data, slice_id):
+    for r in ledger_data.get("approvals", []):
+        if r.get("milestone_id") == "UI_LAYOUT" and r.get("slice_id") == slice_id:
+            r["status"] = "STALE"
+
+
+def delete_ui_mockup(feature_dir, slice_id):
+    p = feature_dir / "docs" / ("ui-mockup-%s.html" % slice_id)
+    if not p.exists():
+        return
+    try:
+        p.unlink()
+    except PermissionError:
+        p.chmod(0o644)
+        p.unlink()
+
+
+def find_stale_ui_layout_slices(feature_dir, state_data):
+    """Return the slice_ids whose APPROVED UI_LAYOUT record no longer matches that slice's
+    current ui_layout content. Only meaningful once the pipeline has already left
+    AWAITING_UI_LAYOUT_APPROVAL -- a mismatch while still sitting at that gate is handled by the
+    leaving-the-gate check in cmd_advance instead."""
+    current_ord = state_ordinal(state_data.get("current_state"))
+    awaiting_ord = state_ordinal("AWAITING_UI_LAYOUT_APPROVAL")
+    if awaiting_ord < 0 or awaiting_ord >= current_ord:
+        return []
+    ledger_data = load_ledger(feature_dir)
+    if not ledger_data:
+        return []
+    artifact = load_artifact(feature_dir, MILESTONES["UI_LAYOUT"]["artifact_path"])
+    if artifact is None:
+        return []
+    stale = []
+    for slice_id in ui_slices_with_layout(artifact):
+        rec = find_ui_layout_approval(ledger_data, slice_id)
+        if not rec or rec.get("status") != "APPROVED":
+            continue
+        if slice_ui_layout_digest(artifact, slice_id) != rec.get("approved_digest"):
+            stale.append(slice_id)
+    return stale
+
+
+# Declarative State Machine Table per Architecture Spec Section 4
+TRANSITION_TABLE = {
+    "UNINITIALIZED": {
+        "allowed_next": ["STAGE_0_DOMAIN_INGESTION"],
+        "required_artifact_path": None,
+        "required_artifact_key": None,
+        "allowed_rollback_targets": {},
+    },
+    "STAGE_0_DOMAIN_INGESTION": {
+        "allowed_next": ["STAGE_1_CONTRACT_PROBING"],
+        "required_artifact_path": "domain-lexicon.json",
+        "required_artifact_key": "stage_0_lexicon",
+        "allowed_rollback_targets": {},
+    },
+    "STAGE_1_CONTRACT_PROBING": {
+        "allowed_next": ["STAGE_2_SCENARIO_SIMULATION"],
+        "required_artifact_path": "contract-fixtures/manifest.json",
+        "required_artifact_key": "stage_1_manifest",
+        "allowed_rollback_targets": {},
+    },
+    "STAGE_2_SCENARIO_SIMULATION": {
+        "allowed_next": ["AWAITING_FLOW_SIMULATION_APPROVAL"],
+        "required_artifact_path": "flow-simulation-matrix.json",
+        "required_artifact_key": "stage_2_scenario_matrix",
+        "allowed_rollback_targets": {},
+    },
+    "AWAITING_FLOW_SIMULATION_APPROVAL": {
+        "allowed_next": ["AWAITING_ENTITY_BOUNDARIES_APPROVAL"],
+        "required_artifact_path": None,
+        "required_artifact_key": None,
+        "allowed_rollback_targets": {},
+    },
+    "AWAITING_ENTITY_BOUNDARIES_APPROVAL": {
+        "allowed_next": ["STAGE_3_VERTICAL_SLICING"],
+        "required_artifact_path": None,
+        "required_artifact_key": None,
+        "allowed_rollback_targets": {},
+    },
+    "STAGE_3_VERTICAL_SLICING": {
+        "allowed_next": ["AWAITING_UI_LAYOUT_APPROVAL"],
+        "required_artifact_path": "execution-dag.json",
+        "required_artifact_key": "stage_3_execution_dag",
+        "allowed_rollback_targets": {},
+    },
+    "AWAITING_UI_LAYOUT_APPROVAL": {
+        "allowed_next": ["STAGE_4_MILESTONE_EXECUTION"],
+        "required_artifact_path": None,
+        "required_artifact_key": None,
+        "allowed_rollback_targets": {},
+    },
+    "STAGE_4_MILESTONE_EXECUTION": {
+        "allowed_next": ["STAGE_5_DELIVERY"],
+        "required_artifact_path": "milestones/evidence-summary.json",
+        "required_artifact_key": "stage_4_milestone_evidence",
+        "allowed_rollback_targets": {
+            "STAGE_2_SCENARIO_SIMULATION": [
+                "PROJECTION_COLLISION",
+                "FINGERPRINT_COLLISION",
+                "BROKEN_INVARIANT",
+                "REGRESSION",
+            ],
+            "STAGE_1_CONTRACT_PROBING": [
+                "CONTRACT_DRIFT",
+                "UNCLASSIFIED_BOUNDARY",
+                "CONTRACT_MISMATCH",
+            ],
+            "STAGE_0_DOMAIN_INGESTION": [
+                "DOMAIN_TYPE_PRECISION_MISMATCH",
+                "DOMAIN_TYPE_MISMATCH",
+            ],
+        },
+    },
+    "STAGE_5_DELIVERY": {
+        "allowed_next": ["COMPLETED"],
+        "required_artifact_path": "delivery-report.md",
+        "required_artifact_key": "stage_5_delivery_report",
+        "allowed_rollback_targets": {},
+    },
+    "COMPLETED": {
+        "allowed_next": [],
+        "required_artifact_path": None,
+        "required_artifact_key": None,
+        "allowed_rollback_targets": {},
+    },
+}
+
+DEFAULT_ARTIFACT_MAP = {
+    "stage_0_lexicon": "domain-lexicon.json",
+    "stage_1_manifest": "contract-fixtures/manifest.json",
+    "stage_2_scenario_matrix": "flow-simulation-matrix.json",
+    "stage_3_execution_dag": "execution-dag.json",
+    "stage_3_invariants": "slice-invariants.json",
+    "stage_4_milestone_evidence": "milestones/evidence-summary.json",
+    "stage_5_delivery_report": "delivery-report.md",
+}
+
+# Artifacts invalidated upon rollback to earlier stages
+STAGE_INVALIDATED_ARTIFACTS = {
+    "STAGE_0_DOMAIN_INGESTION": [
+        "stage_0_lexicon",
+        "stage_1_manifest",
+        "stage_2_scenario_matrix",
+        "stage_3_execution_dag",
+        "stage_3_invariants",
+        "stage_4_milestone_evidence",
+        "stage_5_delivery_report",
+    ],
+    "STAGE_1_CONTRACT_PROBING": [
+        "stage_1_manifest",
+        "stage_2_scenario_matrix",
+        "stage_3_execution_dag",
+        "stage_3_invariants",
+        "stage_4_milestone_evidence",
+        "stage_5_delivery_report",
+    ],
+    "STAGE_2_SCENARIO_SIMULATION": [
+        "stage_3_execution_dag",
+        "stage_3_invariants",
+        "stage_4_milestone_evidence",
+        "stage_5_delivery_report",
+    ],
+}
+
+
+def now_iso_utc():
+    """Return current UTC timestamp in ISO-8601 format."""
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def resolve_feature_dir(slug, dir_override=None, root_override=None):
+    """Resolve the directory holding state.json and stage artifacts."""
+    if dir_override:
+        return Path(dir_override).resolve()
+
+    if root_override:
+        root_path = Path(root_override).resolve()
+        if (root_path / ".verified-feature-delivery" / slug).exists():
+            return root_path / ".verified-feature-delivery" / slug
+        if (root_path / slug).exists():
+            return root_path / slug
+        return root_path / ".verified-feature-delivery" / slug
+
+    cwd = Path.cwd()
+    # Check default project-local location
+    candidate = cwd / ".verified-feature-delivery" / slug
+    if candidate.exists():
+        return candidate
+
+    # Check test fixture directories
+    repo_root = Path(__file__).resolve().parent.parent.parent.parent
+    fixtures_dir = repo_root / "skills" / "verified-feature-delivery" / "tests" / "cases" / "scaffold" / "fixtures" / slug
+    if fixtures_dir.exists():
+        return fixtures_dir
+
+    return candidate
+
+
+def load_state(feature_dir):
+    """Load state.json from feature_dir or return None if absent."""
+    state_file = feature_dir / "state.json"
+    if not state_file.is_file():
+        return None
+    try:
+        with open(state_file, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:
+        sys.stderr.write("Failed to parse state.json: %s\n" % e)
+        return None
+
+
+def save_state(feature_dir, state_data):
+    """Save state_data to state.json in feature_dir."""
+    feature_dir.mkdir(parents=True, exist_ok=True)
+    state_file = feature_dir / "state.json"
+    with open(state_file, "w", encoding="utf-8") as f:
+        json.dump(state_data, f, indent=2)
+        f.write("\n")
+
+
+def cmd_init(args):
+    """Initialize state.json at UNINITIALIZED for a given feature."""
+    feature_dir = resolve_feature_dir(args.feature, args.dir, args.root)
+    state_data = {
+        "schema_version": "1.0.0",
+        "feature_slug": args.feature,
+        "current_state": "UNINITIALIZED",
+        "updated_at": now_iso_utc(),
+        "artifacts": dict(DEFAULT_ARTIFACT_MAP),
+        "history": [
+            {
+                "from_state": None,
+                "to_state": "UNINITIALIZED",
+                "transition_type": "INIT",
+                "timestamp": now_iso_utc(),
+                "gate_artifact_verified": None,
+                "rollback_cause": None,
+            }
+        ],
+    }
+    if not args.dry_run:
+        save_state(feature_dir, state_data)
+    print("INITIALIZED: %s at UNINITIALIZED" % args.feature)
+    print(json.dumps(state_data, indent=2))
+    return 0
+
+
+def cmd_show(args):
+    """Display current state and recorded artifacts."""
+    feature_dir = resolve_feature_dir(args.feature, args.dir, args.root)
+    state_data = load_state(feature_dir)
+    if not state_data:
+        sys.stderr.write("State file missing at %s\n" % (feature_dir / "state.json"))
+        return 1
+    print(json.dumps(state_data, indent=2))
+    return 0
+
+
+def cmd_advance(args):
+    """Advance feature to next state if transition is legal and gate artifact exists."""
+    feature_dir = resolve_feature_dir(args.feature, args.dir, args.root)
+    state_data = load_state(feature_dir)
+
+    if not state_data:
+        sys.stderr.write("Feature state not found or uninitialized: %s\n" % (feature_dir / "state.json"))
+        return 1
+
+    recorded_state = state_data.get("current_state")
+    if not recorded_state:
+        sys.stderr.write("Invalid state.json: current_state missing\n")
+        return 1
+
+    # Assert source state if --from was specified
+    if args.from_state:
+        if args.from_state != recorded_state:
+            print("STATE_ASSERTION_MISMATCH")
+            sys.stderr.write(
+                "STATE_ASSERTION_MISMATCH: asserted --from state %r does not match recorded current_state %r in %s\n"
+                % (args.from_state, recorded_state, feature_dir / "state.json")
+            )
+            return 1
+
+    current_state = recorded_state
+    target_state = args.to_state
+
+    # 0a. A milestone approved in the past whose artifact has since drifted
+    # invalidates loudly: the record goes STALE, its rendered documents are
+    # deleted, and the feature is pulled back to that milestone's gate --
+    # regardless of what target was requested.
+    stale_id = find_stale_milestone(feature_dir, state_data)
+    if stale_id:
+        meta = MILESTONES[stale_id]
+        ledger_data = load_ledger(feature_dir)
+        if not args.dry_run:
+            mark_approval_stale(feature_dir, ledger_data, stale_id)
+            delete_derived_docs(feature_dir, meta["derived_docs"])
+        prev_state = state_data["current_state"]
+        if prev_state != meta["awaiting_state"]:
+            state_data["current_state"] = meta["awaiting_state"]
+            state_data["updated_at"] = now_iso_utc()
+            state_data.setdefault("history", []).append(
+                {
+                    "from_state": prev_state,
+                    "to_state": meta["awaiting_state"],
+                    "transition_type": "STALE_INVALIDATION",
+                    "timestamp": now_iso_utc(),
+                    "gate_artifact_verified": None,
+                    "rollback_cause": stale_id,
+                }
+            )
+            if not args.dry_run:
+                save_state(feature_dir, state_data)
+        print("STALE_APPROVAL_INVALIDATED")
+        sys.stderr.write(
+            "STALE_APPROVAL_INVALIDATED: %s approval no longer matches the current content of "
+            "%s; record marked STALE, its rendered documents deleted, and the feature returned "
+            "to %s. Re-run bin/record-approval to re-open the path.\n"
+            % (stale_id, meta["artifact_path"], meta["awaiting_state"])
+        )
+        return 1
+
+    # 0a2. UI_LAYOUT staleness, per slice (improvement plan §5.1 applied at §5.2's scope): a
+    # slice's ui_layout edited after its own approval invalidates only that slice's record and
+    # deletes only that slice's mockup, regardless of what other UI slices in the same feature
+    # are still approved.
+    stale_ui_slices = find_stale_ui_layout_slices(feature_dir, state_data)
+    if stale_ui_slices:
+        ledger_data = load_ledger(feature_dir)
+        if not args.dry_run:
+            for slice_id in stale_ui_slices:
+                mark_ui_layout_stale(ledger_data, slice_id)
+            save_ledger(feature_dir, ledger_data)
+            for slice_id in stale_ui_slices:
+                delete_ui_mockup(feature_dir, slice_id)
+        prev_state = state_data["current_state"]
+        awaiting = "AWAITING_UI_LAYOUT_APPROVAL"
+        if prev_state != awaiting:
+            state_data["current_state"] = awaiting
+            state_data["updated_at"] = now_iso_utc()
+            state_data.setdefault("history", []).append(
+                {
+                    "from_state": prev_state,
+                    "to_state": awaiting,
+                    "transition_type": "STALE_INVALIDATION",
+                    "timestamp": now_iso_utc(),
+                    "gate_artifact_verified": None,
+                    "rollback_cause": "UI_LAYOUT:" + ",".join(stale_ui_slices),
+                }
+            )
+            if not args.dry_run:
+                save_state(feature_dir, state_data)
+        print("STALE_APPROVAL_INVALIDATED")
+        sys.stderr.write(
+            "STALE_APPROVAL_INVALIDATED: UI_LAYOUT approval for slice(s) %s no longer matches "
+            "the current content of their ui_layout; record(s) marked STALE, their mockups "
+            "deleted, and the feature returned to %s. Re-run bin/record-approval --milestone "
+            "UI_LAYOUT --slice <slice_id> for each to re-open the path.\n"
+            % (", ".join(stale_ui_slices), awaiting)
+        )
+        return 1
+
+    # 0b. An awaiting-approval state can only be left by a matching, digest-valid
+    # APPROVED record for the milestone it guards. advance never grants this
+    # itself -- not to the stage after it, not to the next awaiting state --
+    # because a human gate the authoring agent can walk through is not a gate.
+    #
+    # UI_LAYOUT is scoped per slice rather than to the whole artifact (improvement plan §5.2):
+    # every slice that declares a ui_layout needs its own APPROVED, digest-valid record before
+    # Stage 4 may run, not one record for the feature.
+    awaiting_milestone = AWAITING_STATE_TO_MILESTONE.get(current_state)
+    if awaiting_milestone == "UI_LAYOUT":
+        artifact = load_artifact(feature_dir, MILESTONES["UI_LAYOUT"]["artifact_path"])
+        ledger_data = load_ledger(feature_dir)
+        slice_ids = ui_slices_with_layout(artifact) if artifact is not None else []
+        unapproved = []
+        for slice_id in slice_ids:
+            rec = find_ui_layout_approval(ledger_data, slice_id)
+            digest = slice_ui_layout_digest(artifact, slice_id) if artifact is not None else None
+            if not rec or rec.get("status") != "APPROVED" or digest is None or digest != rec.get("approved_digest"):
+                unapproved.append(slice_id)
+        if unapproved:
+            print("AWAITING_APPROVAL")
+            sys.stderr.write(
+                "AWAITING_APPROVAL: UI_LAYOUT has no APPROVED, digest-valid record for slice(s) "
+                "%s; run bin/record-approval --milestone UI_LAYOUT --slice <slice_id> for each "
+                "before advancing\n" % ", ".join(unapproved)
+            )
+            return 1
+    elif awaiting_milestone:
+        meta = MILESTONES[awaiting_milestone]
+        ledger_data = load_ledger(feature_dir)
+        rec = find_approval(ledger_data, awaiting_milestone)
+        if not rec or rec.get("status") != "APPROVED":
+            print("AWAITING_APPROVAL")
+            sys.stderr.write(
+                "AWAITING_APPROVAL: %s has no APPROVED record for milestone %s; run "
+                "bin/record-approval, a separate executable, before advancing\n"
+                % (current_state, awaiting_milestone)
+            )
+            return 1
+        artifact = load_artifact(feature_dir, meta["artifact_path"])
+        digest = canonical_digest(artifact, meta["digest_scope"]) if artifact is not None else None
+        if digest is None or digest != rec.get("approved_digest"):
+            print("AWAITING_APPROVAL")
+            sys.stderr.write(
+                "AWAITING_APPROVAL: recomputed digest for milestone %s does not match the "
+                "stored approved_digest; a stored status of APPROVED is never sufficient on its "
+                "own\n" % awaiting_milestone
+            )
+            return 1
+
+    # 1. Validate source state
+    if current_state not in TRANSITION_TABLE:
+        print("INVALID_STAGE_TRANSITION")
+        sys.stderr.write("INVALID_STAGE_TRANSITION: unknown source state %r\n" % current_state)
+        return 1
+
+    # 2. Validate transition adherence in Section 4 table
+    allowed_next = TRANSITION_TABLE[current_state]["allowed_next"]
+    if target_state not in allowed_next:
+        print("INVALID_STAGE_TRANSITION")
+        sys.stderr.write(
+            "INVALID_STAGE_TRANSITION: transition from %s to %s is not permitted in §4 table. Allowed next: %s\n"
+            % (current_state, target_state, ", ".join(allowed_next) if allowed_next else "None")
+        )
+        return 1
+
+    # 3. Validate required gate exit artifact
+    req_path = TRANSITION_TABLE[current_state]["required_artifact_path"]
+    req_key = TRANSITION_TABLE[current_state]["required_artifact_key"]
+    verified_artifact = None
+
+    # Refuse non-authoritative artifacts entries in state.json
+    artifacts = state_data.get("artifacts", {})
+    if isinstance(artifacts, dict):
+        for k, v in artifacts.items():
+            if k in DEFAULT_ARTIFACT_MAP and v is not None and v != DEFAULT_ARTIFACT_MAP[k]:
+                print("GATE_ARTIFACT_PATH_NOT_AUTHORITATIVE")
+                sys.stderr.write(
+                    "GATE_ARTIFACT_PATH_NOT_AUTHORITATIVE: state.json artifacts[%r] = %r disagrees with authoritative path %r\n"
+                    % (k, v, DEFAULT_ARTIFACT_MAP[k])
+                )
+                return 1
+
+    if req_path:
+        artifact_file = feature_dir / req_path
+        if not artifact_file.is_file():
+            print("MISSING_GATE_ARTIFACT")
+            sys.stderr.write(
+                "MISSING_GATE_ARTIFACT: exit artifact for %s is missing at %s\n"
+                % (current_state, artifact_file)
+            )
+            return 1
+        verified_artifact = req_path
+
+    # 3b. Validate required human-readable stage documents
+    required_stage_docs = {
+        "STAGE_0_DOMAIN_INGESTION": [
+            ("docs/ubiquitous-language-glossary.md", "domain-lexicon.json"),
+            ("docs/domain-entity-map.md", "domain-lexicon.json"),
+        ],
+        "STAGE_2_SCENARIO_SIMULATION": [
+            ("docs/flow-simulation.md", "flow-simulation-matrix.json"),
+        ],
+        "STAGE_3_VERTICAL_SLICING": [
+            ("docs/vertical-slice-plan.md", "execution-dag.json"),
+        ],
+    }
+    req_docs = required_stage_docs.get(current_state, [])
+    for doc_rel, src_rel in req_docs:
+        doc_file = feature_dir / doc_rel
+        if not doc_file.is_file() or doc_file.stat().st_size == 0:
+            print("MISSING_STAGE_DOCUMENT")
+            sys.stderr.write(
+                "MISSING_STAGE_DOCUMENT: required human-readable document %s is missing or empty for %s at %s\n"
+                % (doc_rel, current_state, doc_file)
+            )
+            return 1
+        src_file = feature_dir / src_rel
+        if src_file.is_file():
+            if doc_file.stat().st_mtime < src_file.stat().st_mtime - 1.0:
+                print("STALE_STAGE_DOCUMENT")
+                sys.stderr.write(
+                    "STALE_STAGE_DOCUMENT: human-readable document %s is older than source artifact %s\n"
+                    % (doc_rel, src_rel)
+                )
+                return 1
+
+    # 3c. Gate the STAGE_5_DELIVERY -> COMPLETED transition on evidence verification passing
+    if current_state == "STAGE_5_DELIVERY" and target_state == "COMPLETED":
+        delivery_json = feature_dir / "delivery-report.json"
+        dag_json = feature_dir / "execution-dag.json"
+        if delivery_json.is_file() and dag_json.is_file():
+            skill_root = str(Path(__file__).resolve().parent.parent)
+            if skill_root not in sys.path:
+                sys.path.insert(0, skill_root)
+            try:
+                from lib.delivery import (
+                    read_report,
+                    read_planned_milestones,
+                    lint_intent,
+                    lint_abstraction,
+                    check_gates,
+                    verify_medium,
+                    verify_claim,
+                )
+                report, rep_problems = read_report(delivery_json)
+                if rep_problems:
+                    token = rep_problems[0].split(":")[0].strip()
+                    print(token)
+                    sys.stderr.write("EVIDENCE_VERIFICATION_FAILED: %s\n" % rep_problems[0])
+                    return 1
+                planned, plan_problems = read_planned_milestones(dag_json)
+                if plan_problems:
+                    token = plan_problems[0].split(":")[0].strip()
+                    print(token)
+                    sys.stderr.write("EVIDENCE_VERIFICATION_FAILED: %s\n" % plan_problems[0])
+                    return 1
+                for check in (lint_intent, lint_abstraction, check_gates):
+                    chk_problems = check(report)
+                    if chk_problems:
+                        token = chk_problems[0].split(":")[0].strip()
+                        print(token)
+                        sys.stderr.write("EVIDENCE_VERIFICATION_FAILED: %s\n" % chk_problems[0])
+                        return 1
+                verified, med_problems = verify_medium(report, planned, feature_dir)
+                if med_problems:
+                    token = med_problems[0].split(":")[0].strip()
+                    print(token)
+                    sys.stderr.write("EVIDENCE_VERIFICATION_FAILED: %s\n" % med_problems[0])
+                    return 1
+                _notes, claim_problems = verify_claim(report, planned, verified, base_dir=feature_dir)
+                if claim_problems:
+                    token = claim_problems[0].split(":")[0].strip()
+                    print(token)
+                    sys.stderr.write("EVIDENCE_VERIFICATION_FAILED: %s\n" % claim_problems[0])
+                    return 1
+            except Exception as ex:
+                sys.stderr.write("Error running evidence verification: %s\n" % ex)
+                print("EVIDENCE_VERIFICATION_ERROR")
+                return 1
+
+    # 4. Apply state advance
+    state_data["current_state"] = target_state
+    state_data["updated_at"] = now_iso_utc()
+    state_data.setdefault("history", []).append(
+        {
+            "from_state": current_state,
+            "to_state": target_state,
+            "transition_type": "ADVANCE",
+            "timestamp": now_iso_utc(),
+            "gate_artifact_verified": verified_artifact,
+            "rollback_cause": None,
+        }
+    )
+
+    if not args.dry_run:
+        save_state(feature_dir, state_data)
+
+    print("ADVANCED: %s -> %s" % (current_state, target_state))
+    return 0
+
+
+def cmd_rollback(args):
+    """Execute regression rollback routing from Stage 4 with specified cause."""
+    feature_dir = resolve_feature_dir(args.feature, args.dir, args.root)
+    state_data = load_state(feature_dir)
+
+    if not state_data:
+        sys.stderr.write("Feature state not found or uninitialized: %s\n" % (feature_dir / "state.json"))
+        return 1
+
+    recorded_state = state_data.get("current_state")
+    if not recorded_state:
+        sys.stderr.write("Invalid state.json: current_state missing\n")
+        return 1
+
+    # Assert source state if --from was specified
+    if args.from_state:
+        if args.from_state != recorded_state:
+            print("STATE_ASSERTION_MISMATCH")
+            sys.stderr.write(
+                "STATE_ASSERTION_MISMATCH: asserted --from state %r does not match recorded current_state %r in %s\n"
+                % (args.from_state, recorded_state, feature_dir / "state.json")
+            )
+            return 1
+
+    current_state = recorded_state
+    target_state = args.to_state
+    cause = args.cause
+
+    if current_state not in TRANSITION_TABLE:
+        print("INVALID_STAGE_TRANSITION")
+        sys.stderr.write("INVALID_STAGE_TRANSITION: unknown source state %r\n" % current_state)
+        return 1
+
+    allowed_rollbacks = TRANSITION_TABLE[current_state].get("allowed_rollback_targets", {})
+    if target_state not in allowed_rollbacks:
+        print("INVALID_STAGE_TRANSITION")
+        sys.stderr.write(
+            "INVALID_STAGE_TRANSITION: rollback from %s to %s is not permitted. Allowed rollback targets: %s\n"
+            % (current_state, target_state, ", ".join(allowed_rollbacks.keys()) if allowed_rollbacks else "None")
+        )
+        return 1
+
+    allowed_causes = allowed_rollbacks[target_state]
+    if cause not in allowed_causes:
+        print("INVALID_STAGE_TRANSITION")
+        sys.stderr.write(
+            "INVALID_STAGE_TRANSITION: rollback cause %r is invalid for target %s. Allowed causes: %s\n"
+            % (cause, target_state, ", ".join(allowed_causes))
+        )
+        return 1
+
+    # Invalidate downstream artifacts
+    invalidated = STAGE_INVALIDATED_ARTIFACTS.get(target_state, [])
+    if "artifacts" in state_data:
+        for art_key in invalidated:
+            if art_key in state_data["artifacts"]:
+                state_data["artifacts"][art_key] = None
+
+    state_data["current_state"] = target_state
+    state_data["updated_at"] = now_iso_utc()
+    state_data.setdefault("history", []).append(
+        {
+            "from_state": current_state,
+            "to_state": target_state,
+            "transition_type": "ROLLBACK",
+            "timestamp": now_iso_utc(),
+            "gate_artifact_verified": None,
+            "rollback_cause": cause,
+        }
+    )
+
+    if not args.dry_run:
+        save_state(feature_dir, state_data)
+
+    print("ROLLED_BACK: %s -> %s (cause: %s)" % (current_state, target_state, cause))
+    return 0
+
+
+def cmd_status(args):
+    """Display deterministic lifecycle status, gate readiness, and progress."""
+    feature_dir = resolve_feature_dir(args.feature, args.dir, args.root)
+    state_data = load_state(feature_dir)
+    if not state_data:
+        sys.stderr.write("State file missing at %s\n" % (feature_dir / "state.json"))
+        return 1
+
+    current_state = state_data.get("current_state", "UNINITIALIZED")
+    ord_idx = state_ordinal(current_state)
+
+    req_path = TRANSITION_TABLE.get(current_state, {}).get("required_artifact_path")
+    gate_artifact_present = bool(req_path and (feature_dir / req_path).is_file())
+
+    awaiting_milestone = AWAITING_STATE_TO_MILESTONE.get(current_state)
+
+    milestone_summary = load_artifact(feature_dir, "milestones/evidence-summary.json")
+    completed_milestones = (
+        milestone_summary.get("milestones_verified", [])
+        if isinstance(milestone_summary, dict)
+        else []
+    )
+
+    status_obj = {
+        "schema_version": "1.0.0",
+        "feature_slug": args.feature,
+        "current_state": current_state,
+        "ordinal": ord_idx,
+        "total_stages": len(STATE_ORDER) - 1,
+        "gate_artifact_required": req_path,
+        "gate_artifact_present": gate_artifact_present,
+        "awaiting_approval": awaiting_milestone,
+        "completed_milestones": completed_milestones,
+        "updated_at": state_data.get("updated_at"),
+    }
+
+    if getattr(args, "json", False):
+        print(json.dumps(status_obj, indent=2))
+    else:
+        print("Feature: %s" % args.feature)
+        print("Current State: %s (Stage %d/%d)" % (current_state, ord_idx, len(STATE_ORDER) - 1))
+        print("Gate Exit Artifact: %s (%s)" % (
+            req_path or "None",
+            "PRESENT" if gate_artifact_present else ("MISSING" if req_path else "N/A"),
+        ))
+        if awaiting_milestone:
+            print("Awaiting Approval: %s" % awaiting_milestone)
+        if completed_milestones:
+            print("Completed Milestones: %s" % ", ".join(completed_milestones))
+    return 0
+
+
+def cmd_next_action(args):
+    """Determine deterministic next action for the driver or supervisor."""
+    feature_dir = resolve_feature_dir(args.feature, args.dir, args.root)
+    state_data = load_state(feature_dir)
+    if not state_data:
+        sys.stderr.write("State file missing at %s\n" % (feature_dir / "state.json"))
+        return 1
+
+    current_state = state_data.get("current_state", "UNINITIALIZED")
+    action_obj: Dict[str, Any] = {}
+
+    if current_state == "UNINITIALIZED":
+        action_obj = {
+            "action": "INIT_STAGE_0",
+            "guide": "phases/0-domain-ingestion/guide.md",
+            "command": "python3 bin/planner-state advance --feature %s --to STAGE_0_DOMAIN_INGESTION" % args.feature,
+            "description": "Advance to Stage 0 to ingest domain taxonomy, lock precisions, and register actors/observers.",
+        }
+    elif current_state == "STAGE_0_DOMAIN_INGESTION":
+        lex_file = feature_dir / "domain-lexicon.json"
+        if not lex_file.is_file():
+            action_obj = {
+                "action": "AUTHOR_DOMAIN_LEXICON",
+                "guide": "phases/0-domain-ingestion/guide.md",
+                "target_file": "domain-lexicon.json",
+                "command": "python3 bin/validate-lexicon %s" % lex_file,
+                "description": "Author domain-lexicon.json declaring entities, value objects, precisions, and actors.",
+            }
+        else:
+            action_obj = {
+                "action": "ADVANCE_TO_STAGE_1",
+                "guide": "phases/1-contract-probing/guide.md",
+                "command": "python3 bin/planner-state advance --feature %s --to STAGE_1_CONTRACT_PROBING" % args.feature,
+                "description": "Advance to Stage 1 Contract Probing.",
+            }
+    elif current_state == "STAGE_1_CONTRACT_PROBING":
+        manifest_file = feature_dir / "contract-fixtures" / "manifest.json"
+        if not manifest_file.is_file():
+            action_obj = {
+                "action": "PROBE_CONTRACT_BOUNDARIES",
+                "guide": "phases/1-contract-probing/guide.md",
+                "target_file": "contract-fixtures/manifest.json",
+                "command": "python3 bin/verify-fixture-variance %s" % manifest_file,
+                "description": "Probe external boundary classes and capture contract fixtures.",
+            }
+        else:
+            action_obj = {
+                "action": "ADVANCE_TO_STAGE_2",
+                "guide": "phases/2-scenario-simulation/guide.md",
+                "command": "python3 bin/planner-state advance --feature %s --to STAGE_2_SCENARIO_SIMULATION" % args.feature,
+                "description": "Advance to Stage 2 Scenario Simulation.",
+            }
+    elif current_state == "STAGE_2_SCENARIO_SIMULATION":
+        matrix_file = feature_dir / "flow-simulation-matrix.json"
+        if not matrix_file.is_file():
+            action_obj = {
+                "action": "AUTHOR_SCENARIO_MATRIX",
+                "guide": "phases/2-scenario-simulation/guide.md",
+                "target_file": "flow-simulation-matrix.json",
+                "command": "python3 bin/validate-scenario-matrix %s" % matrix_file,
+                "description": "Author flow-simulation-matrix.json covering branch groups A & B.",
+            }
+        else:
+            action_obj = {
+                "action": "ADVANCE_TO_FLOW_APPROVAL",
+                "command": "python3 bin/planner-state advance --feature %s --to AWAITING_FLOW_SIMULATION_APPROVAL" % args.feature,
+                "description": "Advance to AWAITING_FLOW_SIMULATION_APPROVAL gate.",
+            }
+    elif current_state in ("AWAITING_FLOW_SIMULATION_APPROVAL", "AWAITING_ENTITY_BOUNDARIES_APPROVAL", "AWAITING_UI_LAYOUT_APPROVAL"):
+        milestone_id = AWAITING_STATE_TO_MILESTONE.get(current_state)
+        action_obj = {
+            "action": "RECORD_APPROVAL_%s" % milestone_id,
+            "milestone_id": milestone_id,
+            "command": "python3 bin/record-approval --milestone %s" % milestone_id,
+            "description": "Record independent human approval for %s." % milestone_id,
+        }
+    elif current_state == "STAGE_3_VERTICAL_SLICING":
+        dag_file = feature_dir / "execution-dag.json"
+        if not dag_file.is_file():
+            action_obj = {
+                "action": "AUTHOR_EXECUTION_DAG",
+                "guide": "phases/3-vertical-slicing/guide.md",
+                "target_file": "execution-dag.json",
+                "command": "python3 bin/validate-execution-dag %s" % dag_file,
+                "description": "Author execution-dag.json defining vertical tracer-bullet slices.",
+            }
+        else:
+            action_obj = {
+                "action": "ADVANCE_TO_UI_APPROVAL",
+                "command": "python3 bin/planner-state advance --feature %s --to AWAITING_UI_LAYOUT_APPROVAL" % args.feature,
+                "description": "Advance to AWAITING_UI_LAYOUT_APPROVAL gate.",
+            }
+    elif current_state == "STAGE_4_MILESTONE_EXECUTION":
+        evidence_summary = feature_dir / "milestones" / "evidence-summary.json"
+        if not evidence_summary.is_file():
+            action_obj = {
+                "action": "EXECUTE_MILESTONES",
+                "guide": "phases/4-milestone-execution/guide.md",
+                "command": "python3 bin/milestone-harness %s" % feature_dir,
+                "description": "Dispatch worker agents to execute slices and generate evidence captures.",
+            }
+        else:
+            action_obj = {
+                "action": "ADVANCE_TO_STAGE_5",
+                "guide": "phases/5-process-delivery/guide.md",
+                "command": "python3 bin/planner-state advance --feature %s --to STAGE_5_DELIVERY" % args.feature,
+                "description": "Advance to Stage 5 Delivery.",
+            }
+    elif current_state == "STAGE_5_DELIVERY":
+        rep_file = feature_dir / "delivery-report.md"
+        if not rep_file.is_file():
+            action_obj = {
+                "action": "GENERATE_DELIVERY_REPORT",
+                "guide": "phases/5-process-delivery/guide.md",
+                "target_file": "delivery-report.md",
+                "command": "python3 bin/verify-evidence %s" % feature_dir,
+                "description": "Verify all evidence axes and emit delivery report.",
+            }
+        else:
+            action_obj = {
+                "action": "ADVANCE_TO_COMPLETED",
+                "command": "python3 bin/planner-state advance --feature %s --to COMPLETED" % args.feature,
+                "description": "Complete verified feature delivery.",
+            }
+    elif current_state == "COMPLETED":
+        action_obj = {
+            "action": "COMPLETE",
+            "description": "Feature delivery complete. All verification obligations met.",
+        }
+
+    if getattr(args, "json", False):
+        print(json.dumps(action_obj, indent=2))
+    else:
+        print("Next Action: %s" % action_obj.get("action"))
+        print("Description: %s" % action_obj.get("description"))
+        if action_obj.get("command"):
+            print("Command: %s" % action_obj.get("command"))
+        if action_obj.get("guide"):
+            print("Guide: %s" % action_obj.get("guide"))
+    return 0
+
+
+def cmd_sidecar(args):
+    """Generate or view slice sidecar state for scoped worker context."""
+    feature_dir = resolve_feature_dir(args.feature, args.dir, args.root)
+    skill_root = str(Path(__file__).resolve().parent.parent)
+    if skill_root not in sys.path:
+        sys.path.insert(0, skill_root)
+
+    from lib.sidecar import build_slice_sidecar
+    out_path = Path(args.out).resolve() if args.out else None
+    diff_files = [f.strip() for f in args.diff.split(",") if f.strip()] if getattr(args, "diff", None) else None
+    try:
+        sidecar_data = build_slice_sidecar(feature_dir, args.slice_id, out_path, diff_files=diff_files)
+        print(json.dumps(sidecar_data, indent=2))
+        return 0
+    except Exception as e:
+        sys.stderr.write("Failed to generate sidecar: %s\n" % e)
+        return 1
+
+
+def cmd_verification_plan(args):
+    """Generate and inspect deterministic verification plan for feature / slice."""
+    feature_dir = resolve_feature_dir(args.feature, args.dir, args.root)
+    skill_root = str(Path(__file__).resolve().parent.parent)
+    if skill_root not in sys.path:
+        sys.path.insert(0, skill_root)
+
+    from lib.verification_policy import generate_verification_plan, validate_verification_plan
+
+    diff_files = [f.strip() for f in args.diff.split(",") if f.strip()] if getattr(args, "diff", None) else None
+    try:
+        plan = generate_verification_plan(
+            feature_dir=feature_dir,
+            slice_id=args.slice_id,
+            diff_files=diff_files,
+            is_stage_5_exit=getattr(args, "stage_5_exit", False),
+        )
+        is_valid, token, errors = validate_verification_plan(plan)
+        if not is_valid:
+            sys.stderr.write("Verification plan validation failed [%s]: %s\n" % (token, errors))
+            return 1
+
+        if args.json:
+            print(json.dumps(plan, indent=2))
+        else:
+            print("=== Verification Plan (%s) ===" % plan["escalation_tier"])
+            print("Feature: %s | Slice: %s" % (plan["feature_slug"], plan.get("slice_id") or "N/A"))
+            print("Mandatory Gatekeeper: %s" % plan["mandatory_gatekeeper"])
+            if plan.get("warnings"):
+                print("Warnings:")
+                for w in plan["warnings"]:
+                    print("  [!] %s" % w)
+            print("Selected Checks:")
+            for sc in plan["selected_checks"]:
+                print("  [%s] %s" % (sc["category"], sc["command"]))
+                print("      Rationale: %s" % sc["rationale"])
+            if plan.get("skipped_checks"):
+                print("Skipped Checks (Audited):")
+                for sk in plan["skipped_checks"]:
+                    print("  [SKIP:%s] %s" % (sk["reason_code"], sk["suite_name"]))
+                    print("      Reason: %s" % sk["reason_description"])
+        return 0
+    except Exception as e:
+        sys.stderr.write("Failed to generate verification plan: %s\n" % e)
+        return 1
+
+
+def cmd_evaluate_capsule(args):
+    """Evaluate a worker handoff capsule and optionally advance or rollback."""
+    feature_dir = resolve_feature_dir(args.feature, args.dir, args.root)
+    capsule_path = Path(args.capsule).resolve()
+    if not capsule_path.is_file():
+        sys.stderr.write("Capsule file not found at %s\n" % capsule_path)
+        return 1
+
+    try:
+        with open(capsule_path, "r", encoding="utf-8") as f:
+            capsule_data = json.load(f)
+    except Exception as e:
+        sys.stderr.write("Failed to parse capsule JSON: %s\n" % e)
+        return 1
+
+    skill_root = str(Path(__file__).resolve().parent.parent)
+    if skill_root not in sys.path:
+        sys.path.insert(0, skill_root)
+
+    from lib.capsule import evaluate_capsule
+    is_valid, token, details = evaluate_capsule(feature_dir, capsule_data)
+
+    if not is_valid:
+        print(token)
+        sys.stderr.write("CAPSULE_REJECTED [%s]: %s\n" % (token, json.dumps(details)))
+        return 1
+
+    print(token)
+    print(json.dumps(details, indent=2))
+    return 0
+
+
+def cmd_diagnostics(args):
+    """Retrieve raw file-backed diagnostics on demand."""
+    feature_dir = resolve_feature_dir(args.feature, args.dir, args.root)
+    skill_root = str(Path(__file__).resolve().parent.parent)
+    if skill_root not in sys.path:
+        sys.path.insert(0, skill_root)
+
+    from lib.capsule import get_diagnostics
+    ref = args.ref or (f"diagnostics/{args.task}.log" if args.task else None)
+    if not ref:
+        sys.stderr.write("Must specify --ref or --task\n")
+        return 1
+    diag = get_diagnostics(feature_dir, ref)
+    if diag is None:
+        sys.stderr.write("Diagnostics not found for %s\n" % ref)
+        return 1
+    print(diag, end="")
+    return 0
+
+
+def build_parser():
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Agentic Feature Planner - State Transition Engine",
+        prog="planner-state",
+    )
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    # init
+    p_init = subparsers.add_parser("init", help="Initialize feature state at UNINITIALIZED")
+    p_init.add_argument("--feature", required=True, help="Feature slug identifier")
+    p_init.add_argument("--dir", help="Explicit target directory for state files")
+    p_init.add_argument("--root", help="Project root directory")
+    p_init.add_argument("--dry-run", action="store_true", help="Validate without writing state to disk")
+
+    # show
+    p_show = subparsers.add_parser("show", help="Show current state and artifacts")
+    p_show.add_argument("--feature", required=True, help="Feature slug identifier")
+    p_show.add_argument("--dir", help="Explicit target directory for state files")
+    p_show.add_argument("--root", help="Project root directory")
+
+    # status
+    p_status = subparsers.add_parser("status", help="Show deterministic status and progress")
+    p_status.add_argument("--feature", required=True, help="Feature slug identifier")
+    p_status.add_argument("--json", action="store_true", help="Output status as structured JSON")
+    p_status.add_argument("--dir", help="Explicit target directory for state files")
+    p_status.add_argument("--root", help="Project root directory")
+
+    # next-action
+    p_next = subparsers.add_parser("next-action", help="Show deterministic next action")
+    p_next.add_argument("--feature", required=True, help="Feature slug identifier")
+    p_next.add_argument("--json", action="store_true", help="Output next-action as structured JSON")
+    p_next.add_argument("--dir", help="Explicit target directory for state files")
+    p_next.add_argument("--root", help="Project root directory")
+
+    # advance
+    p_adv = subparsers.add_parser("advance", help="Advance to next stage")
+    p_adv.add_argument("--feature", required=True, help="Feature slug identifier")
+    p_adv.add_argument("--to", dest="to_state", required=True, help="Target state to advance to")
+    p_adv.add_argument("--from", dest="from_state", help="Assert expected source state (fails with STATE_ASSERTION_MISMATCH on disagreement)")
+    p_adv.add_argument("--dir", help="Explicit target directory for state files")
+    p_adv.add_argument("--root", help="Project root directory")
+    p_adv.add_argument("--dry-run", action="store_true", help="Validate without writing state to disk")
+
+    # rollback
+    p_rb = subparsers.add_parser("rollback", help="Roll back on regression")
+    p_rb.add_argument("--feature", required=True, help="Feature slug identifier")
+    p_rb.add_argument("--to", dest="to_state", required=True, help="Target state to roll back to")
+    p_rb.add_argument("--cause", required=True, help="Regression trigger cause code")
+    p_rb.add_argument("--from", dest="from_state", help="Assert expected source state (fails with STATE_ASSERTION_MISMATCH on disagreement)")
+    p_rb.add_argument("--dir", help="Explicit target directory for state files")
+    p_rb.add_argument("--root", help="Project root directory")
+    p_rb.add_argument("--dry-run", action="store_true", help="Validate without writing state to disk")
+
+    # sidecar
+    p_sc = subparsers.add_parser("sidecar", help="Generate slice sidecar state for worker")
+    p_sc.add_argument("--feature", required=True, help="Feature slug identifier")
+    p_sc.add_argument("--slice", dest="slice_id", required=True, help="Target vertical slice ID")
+    p_sc.add_argument("--diff", help="Optional comma-separated list of modified file paths")
+    p_sc.add_argument("--out", help="Optional output path for sidecar JSON")
+    p_sc.add_argument("--dir", help="Explicit target directory for state files")
+    p_sc.add_argument("--root", help="Project root directory")
+
+    # verification-plan
+    p_vp = subparsers.add_parser("verification-plan", help="Generate deterministic verification plan")
+    p_vp.add_argument("--feature", required=True, help="Feature slug identifier")
+    p_vp.add_argument("--slice", dest="slice_id", help="Optional target vertical slice ID")
+    p_vp.add_argument("--diff", help="Optional comma-separated list of modified file paths")
+    p_vp.add_argument("--stage-5-exit", action="store_true", help="Enforce mandatory Stage 5 delivery exit gatekeeper verification")
+    p_vp.add_argument("--json", action="store_true", help="Output verification plan as structured JSON")
+    p_vp.add_argument("--dir", help="Explicit target directory for state files")
+    p_vp.add_argument("--root", help="Project root directory")
+
+    # evaluate-capsule
+    p_ec = subparsers.add_parser("evaluate-capsule", help="Evaluate a worker handoff capsule")
+    p_ec.add_argument("--feature", required=True, help="Feature slug identifier")
+    p_ec.add_argument("--capsule", required=True, help="Path to capsule JSON file")
+    p_ec.add_argument("--dir", help="Explicit target directory for state files")
+    p_ec.add_argument("--root", help="Project root directory")
+
+    # diagnostics
+    p_diag = subparsers.add_parser("diagnostics", help="Retrieve file-backed raw diagnostics")
+    p_diag.add_argument("--feature", required=True, help="Feature slug identifier")
+    p_diag.add_argument("--task", help="Task / slice ID identifier")
+    p_diag.add_argument("--ref", help="Direct relative diagnostics reference path")
+    p_diag.add_argument("--dir", help="Explicit target directory for state files")
+    p_diag.add_argument("--root", help="Project root directory")
+
+    return parser
+
+
+def main():
+    parser = build_parser()
+    args = parser.parse_args()
+    if args.command == "init":
+        return cmd_init(args)
+    elif args.command == "show":
+        return cmd_show(args)
+    elif args.command == "status":
+        return cmd_status(args)
+    elif args.command == "next-action":
+        return cmd_next_action(args)
+    elif args.command == "advance":
+        return cmd_advance(args)
+    elif args.command == "rollback":
+        return cmd_rollback(args)
+    elif args.command == "sidecar":
+        return cmd_sidecar(args)
+    elif args.command == "verification-plan":
+        return cmd_verification_plan(args)
+    elif args.command == "evaluate-capsule":
+        return cmd_evaluate_capsule(args)
+    elif args.command == "diagnostics":
+        return cmd_diagnostics(args)
+    else:
+        sys.stderr.write("Unknown command: %s\n" % args.command)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+

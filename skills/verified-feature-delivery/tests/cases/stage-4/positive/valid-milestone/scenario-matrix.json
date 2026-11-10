@@ -1,0 +1,20 @@
+{
+  "schema_version": "1.0.0",
+  "feature_slug": "valid-milestone-feature",
+  "states": [
+    {
+      "state_id": "IDLE",
+      "evidence_key": "state:IDLE",
+      "observable_projections": [
+        { "observer_id": "operator", "medium": "rendered_ui", "discriminator": { "view": "idle" } }
+      ]
+    },
+    {
+      "state_id": "RESULTS_POPULATED",
+      "evidence_key": "state:RESULTS_POPULATED",
+      "observable_projections": [
+        { "observer_id": "operator", "medium": "rendered_ui", "discriminator": { "view": "results" } }
+      ]
+    }
+  ]
+}

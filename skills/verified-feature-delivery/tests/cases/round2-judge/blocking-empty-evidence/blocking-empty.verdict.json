@@ -1,0 +1,8 @@
+{
+  "schema_version": "1.0.0",
+  "claim_id": "claim:ui:observable_projections_distinct",
+  "verdict": "REFUTED",
+  "blocking": true,
+  "minimal_fix": "assert the rendered list, not the log line",
+  "evidence_examined": []
+}

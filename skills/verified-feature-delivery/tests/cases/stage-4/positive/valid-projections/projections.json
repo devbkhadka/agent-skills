@@ -1,0 +1,65 @@
+{
+  "schema_version": "1.0.0",
+  "feature_slug": "search-console-web-ui",
+  "generated_at": "2026-08-22T12:10:00Z",
+  "captured_projections": [
+    {
+      "evidence_key": "state:IDLE",
+      "observer_id": "operator",
+      "milestone_id": "M1_QUERY_PANE_RENDERS",
+      "captured_artifact": "<div class=\"pane pane--idle\" data-testid=\"search-pane\"><h2 class=\"title\">Search the indexed corpus</h2><input type=\"search\" aria-label=\"Search query\"><button class=\"btn\" aria-label=\"Run search\">Search</button></div>"
+    },
+    {
+      "evidence_key": "state:RESULTS_POPULATED",
+      "observer_id": "operator",
+      "milestone_id": "M2_RESULTS_RENDER",
+      "captured_artifact": "<div class=\"results-pane\" data-testid=\"results\"><h2 class=\"hdr\">Found 10 matches for \"database\"</h2><button class=\"btn\" aria-label=\"Clear filters\">Clear</button><ul role=\"list\"><li role=\"listitem\"><span>Result 1: SQL indexing guide</span></li></ul></div>",
+      "recorded_fixture_values": ["database", "SQL indexing guide"]
+    },
+    {
+      "evidence_key": "state:RESULTS_EMPTY",
+      "observer_id": "operator",
+      "milestone_id": "M3_EMPTY_RESULTS_RENDER",
+      "captured_artifact": "<div class=\"results-pane results-pane--empty\" data-testid=\"results\"><h2 class=\"hdr\">No results found for \"database\"</h2><button class=\"btn\" aria-label=\"Clear filters\">Clear</button></div>",
+      "recorded_fixture_values": ["database"]
+    },
+    {
+      "evidence_key": "state:IDLE",
+      "observer_id": "system_telemetry",
+      "milestone_id": "M1_QUERY_PANE_RENDERS",
+      "captured_artifact": {
+        "tool_calls": [],
+        "final_message": "Console initialized with an empty query box.",
+        "prompt_tokens": 0,
+        "latency_ms": 4
+      }
+    },
+    {
+      "evidence_key": "state:RESULTS_POPULATED",
+      "observer_id": "system_telemetry",
+      "milestone_id": "M2_RESULTS_RENDER",
+      "recorded_fixture_values": ["database"],
+      "captured_artifact": {
+        "tool_calls": [
+          {"name": "run_search", "arguments": {"query": "database"}, "latency_ms": 118},
+          {"name": "render_results", "arguments": {"count": 10}, "latency_ms": 6}
+        ],
+        "final_message": "Rendered 10 result cards for \"database\".",
+        "prompt_tokens": 240
+      }
+    },
+    {
+      "evidence_key": "state:RESULTS_EMPTY",
+      "observer_id": "system_telemetry",
+      "milestone_id": "M3_EMPTY_RESULTS_RENDER",
+      "recorded_fixture_values": ["database"],
+      "captured_artifact": {
+        "tool_calls": [
+          {"name": "run_search", "arguments": {"query": "database"}, "latency_ms": 96}
+        ],
+        "final_message": "No result cards to render for \"database\".",
+        "prompt_tokens": 190
+      }
+    }
+  ]
+}

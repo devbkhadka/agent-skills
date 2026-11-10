@@ -1,0 +1,48 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "JudgePacket",
+  "description": "Scoped context handed to the judging agent containing claim, acceptance rule, medium, evidence, and excerpts.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "claim_id",
+    "claim_text",
+    "acceptance_rule",
+    "verification_medium",
+    "evidence_refs",
+    "artifact_excerpts"
+  ],
+  "properties": {
+    "claim_id": { "type": "string" },
+    "claim_text": { "type": "string" },
+    "acceptance_rule": { "type": "string" },
+    "verification_medium": {
+      "type": "string",
+      "enum": [
+        "rendered_ui",
+        "api_response",
+        "process_exit",
+        "datastore_state",
+        "device_actuation",
+        "agent_transcript"
+      ]
+    },
+    "evidence_refs": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "artifact_excerpts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["artifact_path", "field_path", "content"],
+        "properties": {
+          "artifact_path": { "type": "string" },
+          "field_path": { "type": "string" },
+          "content": {}
+        }
+      }
+    }
+  }
+}

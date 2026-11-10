@@ -1,0 +1,14 @@
+{
+  "captured_artifact": {
+    "exit_code": 0,
+    "stdout": "search filter composition: 12 of 40 records retained\nranking order stable across reruns\n",
+    "stderr": ""
+  },
+  "value_bindings": [
+    {
+      "domain_term": "retained_record_count",
+      "projection_binding": "SearchResponse.total_results to the operator result summary count",
+      "asserted_value": "12 of 40 records retained"
+    }
+  ]
+}

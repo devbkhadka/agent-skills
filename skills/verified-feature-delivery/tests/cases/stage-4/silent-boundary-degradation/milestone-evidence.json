@@ -1,0 +1,15 @@
+{
+  "schema_version": "1.0.0",
+  "feature_slug": "silent-degradation-test",
+  "milestones": [
+    {
+      "milestone_id": "M1_TRANSCODE_CHUNK",
+      "slice_id": "slice_1",
+      "verification_medium": "process_exit",
+      "status": "PASSED",
+      "exit_code": 0,
+      "warning_classes_detected": ["FRAME_DROPPED"]
+    }
+  ],
+  "provisional_fixtures_outstanding": 0
+}

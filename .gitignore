@@ -1,0 +1,26 @@
+.DS_Store
+node_modules/
+.pnpm-store/
+__pycache__/
+*.pyc
+.env
+.env.local
+mcp/*/.env
+mcp/*/.env.local
+
+skills/verified-feature-delivery/**/__pycache__/
+.herder/
+# br doctor per-run artifacts
+.doctor/
+data/*
+!data/**/.gitkeep
+suggestions/*
+!suggestions/**/.gitkeep
+
+# Local agent & project artifacts
+.beads/
+.claude/
+dev-plans/
+ideas.md
+plan-docs/
+CONTINUE-PLANNER-BUILD.md

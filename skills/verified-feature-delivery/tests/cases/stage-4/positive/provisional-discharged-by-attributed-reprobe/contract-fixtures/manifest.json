@@ -1,0 +1,60 @@
+{
+  "schema_version": "1.0.0",
+  "feature_slug": "search-console-web-ui",
+  "updated_at": "2026-08-23T11:45:00Z",
+  "boundary_classes": [
+    {
+      "class_name": "SUBPROCESS_CLI",
+      "verdict": "NOT_PRESENT",
+      "absence_reason": "The console runs inside a browser sandbox and spawns no child process of its own."
+    },
+    {
+      "class_name": "NETWORK_API",
+      "verdict": "NOT_PRESENT",
+      "absence_reason": "This case exercises only the UI runtime boundary's provisional re-probe discharge."
+    },
+    {
+      "class_name": "FRAMEWORK_MIDDLEWARE",
+      "verdict": "NOT_PRESENT",
+      "absence_reason": "A single page client has no server middleware and no raw buffer handling of its own."
+    },
+    {
+      "class_name": "DATASTORE",
+      "verdict": "NOT_PRESENT",
+      "absence_reason": "The client keeps no local database and persists nothing between sessions."
+    },
+    {
+      "class_name": "MESSAGE_TRANSPORT",
+      "verdict": "NOT_PRESENT",
+      "absence_reason": "Every query is a synchronous request and no queue or broker carries work for it."
+    },
+    {
+      "class_name": "DEVICE_IO",
+      "verdict": "NOT_PRESENT",
+      "absence_reason": "The target is a desktop browser with no sensor, serial or bluetooth peripheral."
+    },
+    {
+      "class_name": "MODEL_ENDPOINT",
+      "verdict": "NOT_PRESENT",
+      "absence_reason": "Embedding and scoring happen behind the search service and are opaque to the client."
+    },
+    {
+      "class_name": "UI_RUNTIME",
+      "verdict": "PRESENT",
+      "probe_path": "phases/1-contract-probing/probes/ui_runtime.ts",
+      "properties": [
+        {"property_name": "render_and_teardown_lifecycle", "verdict": "PROBED", "fixture_ref": "ui_runtime-react_lifecycle.json"}
+      ]
+    },
+    {
+      "class_name": "VERIFICATION_HARNESS",
+      "verdict": "NOT_PRESENT",
+      "absence_reason": "The suite drives the real component tree, so no substitute stands in for a boundary."
+    },
+    {
+      "class_name": "OTHER",
+      "verdict": "NOT_PRESENT",
+      "absence_reason": "Probing met no boundary outside the nine classes the register already names."
+    }
+  ]
+}

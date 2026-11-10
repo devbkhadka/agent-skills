@@ -1,0 +1,69 @@
+{
+  "schema_version": "1.0.0",
+  "feature_slug": "pure-module-prefix-collision-feature",
+  "bootstrap_floor": [
+    "src/main.ts"
+  ],
+  "pure_modules": [
+    "src/core/wsdlParser.ts"
+  ],
+  "locked_dimensions": {
+    "1_slicing_topology": {
+      "strategy": "SINGLE_TRACER_BULLET_FIRST",
+      "slice_1_anchor": "slice_1",
+      "bootstrap_floor": ["src/main.ts"]
+    },
+    "2_execution_semantics": {
+      "mode": "SYNC_REQUEST_RESPONSE"
+    },
+    "3_state_and_lifecycle": {
+      "persistence_model": "EPHEMERAL"
+    },
+    "4_idempotency_and_ordering": {
+      "strategy": "GENERATION_SEQUENCING"
+    },
+    "5_external_boundaries": {
+      "boundary_fixtures": ["contract-fixtures/api.json"]
+    },
+    "6_observation_and_actor_modality": {
+      "primary_observer": "operator",
+      "verification_medium": "process_exit"
+    }
+  },
+  "slices": [
+    {
+      "slice_id": "slice_1",
+      "name": "Slice 1",
+      "dependencies": [],
+      "is_slice_1": true,
+      "slice_level": "FLOW",
+      "user_visible_outcome": "Outcome for slice 1",
+      "legs": {
+        "trigger": {
+          "type": "USER_ACTION",
+          "description": "Trigger"
+        },
+        "core_pure_logic": {
+          "pure_module_files": [
+            "src/core/wsdlParser.ts"
+          ]
+        },
+        "adapter_persistence": {
+          "optional_leg_present": false
+        },
+        "output_verification": {
+          "verification_medium": "process_exit",
+          "verification_script": "tests/slices/slice_1_verify.sh"
+        }
+      },
+      "files_touched": [
+        "src/main.ts",
+        "src/core/wsdlParser.ts",
+        "tests/slices/slice_1_verify.sh"
+      ],
+      "files_read": [
+        "src/main.ts"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,34 @@
+{
+  "schema_version": "1.0.0",
+  "feature_slug": "unresolvable-pin-feature",
+  "generated_at": "2026-08-23T12:05:00Z",
+  "milestones": [
+    {
+      "milestone_id": "M1_QUERY_ENTRY",
+      "slice_id": "SLICE_1_CHAT_PANE",
+      "verification_medium": "rendered_ui",
+      "executed_command": "node scripts/verify-slice-1.ts",
+      "captured_evidence": "<div class=\"chat-pane chat-pane--idle\"><h2>Chat</h2><textarea id=\"chat-input\"></textarea></div>",
+      "evidence_key": "state:IDLE",
+      "observer_id": "operator",
+      "boundary_identifier": "ChatPane DOM Runtime",
+      "asserted_payloads": [],
+      "recorded_fixture_values": []
+    },
+    {
+      "milestone_id": "GHOST_REPROBE_MILESTONE",
+      "slice_id": "SLICE_1_CHAT_PANE",
+      "verification_medium": "process_exit",
+      "executed_command": "node scripts/self-reported-reprobe.ts",
+      "captured_evidence": {
+        "exit_code": 0,
+        "stdout": "reprobe passed"
+      },
+      "evidence_key": "",
+      "observer_id": "",
+      "boundary_identifier": "ChatPane DOM Runtime",
+      "asserted_payloads": [],
+      "recorded_fixture_values": []
+    }
+  ]
+}

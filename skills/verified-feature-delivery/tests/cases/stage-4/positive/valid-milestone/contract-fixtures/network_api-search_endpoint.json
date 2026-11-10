@@ -1,0 +1,71 @@
+{
+  "schema_version": "1.0.0",
+  "boundary_class": "NETWORK_API",
+  "boundary_identifier": "POST /v1/search",
+  "fixture_status": "PROBED_LIVE",
+  "pinned_reprobe_milestone": null,
+  "contract_reference": "src/api/searchApi.ts#SearchResponse",
+  "contract_variant_selectors": ["is_summary"],
+  "success_samples": [
+    {
+      "sample_id": "sample_summary",
+      "partition_cell": {"is_summary": true},
+      "status_code": 200,
+      "headers": {"content-type": "application/json"},
+      "payload": {
+        "total_results": 4210,
+        "cursor": "cur_xyz",
+        "results": [
+          {"id": "chunk_101", "score": 0.94, "metadata": {"author": "dev", "cluster": "core"}}
+        ]
+      }
+    },
+    {
+      "sample_id": "sample_detailed",
+      "partition_cell": {"is_summary": false},
+      "status_code": 200,
+      "headers": {"content-type": "application/json"},
+      "payload": {
+        "total_results": 4210,
+        "cursor": "cur_abc",
+        "results": [
+          {
+            "id": "chunk_103",
+            "score": 0.76,
+            "metadata": {"checksum": "a1b2c3d4", "raw_bytes": 1024, "retrieval_model": "embed-v3", "tokens": 240}
+          }
+        ]
+      }
+    }
+  ],
+  "failure_envelope_census": [
+    {
+      "envelope_id": "http_400_bad_request",
+      "error_class": "InvalidFilterParameter",
+      "status_code": 400,
+      "payload_type": "JSON",
+      "payload": {"detail": "The filter list may not be empty when a category facet is applied."},
+      "description": "Validation failure on a malformed search request body."
+    },
+    {
+      "envelope_id": "http_200_truncated",
+      "error_class": "PartialResultTruncation",
+      "status_code": 200,
+      "payload_type": "HEADER",
+      "payload": {"warning": "Result set truncated at the configured ceiling; later matches were dropped."},
+      "description": "The service answers 200 while reporting that it dropped part of the result set."
+    }
+  ],
+  "variance_census": {
+    "unbounded_regions": ["payload.results[].metadata"],
+    "contract_variant_selectors": ["is_summary"],
+    "partition_cells_evaluated": [
+      {"cell": {"is_summary": true}, "sample_ref": "sample_summary"},
+      {"cell": {"is_summary": false}, "sample_ref": "sample_detailed"}
+    ],
+    "variance_analysis": {
+      "key_intersection": ["id", "score", "metadata"],
+      "key_union": ["id", "score", "metadata"]
+    }
+  }
+}

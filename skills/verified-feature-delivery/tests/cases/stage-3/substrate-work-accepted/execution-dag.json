@@ -1,0 +1,51 @@
+{
+  "schema_version": "1.0.0",
+  "feature_slug": "substrate-work-accepted-feature",
+  "bootstrap_floor": ["src/main.ts"],
+  "slices": [
+    {
+      "slice_id": "slice_foundation_tokens",
+      "name": "Design Tokens Substrate",
+      "dependencies": [],
+      "slice_level": "SUBTASK",
+      "files_touched": ["src/tokens/theme.ts"],
+      "files_read": ["src/tokens/theme.ts"]
+    },
+    {
+      "slice_id": "slice_1",
+      "name": "Slice 1",
+      "dependencies": ["slice_foundation_tokens"],
+      "slice_level": "FLOW",
+      "user_visible_outcome": "Outcome 1",
+      "legs": {
+        "trigger": { "type": "USER_ACTION", "description": "Trigger 1" },
+        "core_pure_logic": { "pure_module_files": [] },
+        "adapter_persistence": { "optional_leg_present": false },
+        "output_verification": {
+          "verification_medium": "process_exit",
+          "verification_script": "tests/slices/slice_1_verify.sh"
+        }
+      },
+      "files_touched": ["src/main.ts", "src/tokens/theme.ts"],
+      "files_read": ["src/tokens/theme.ts"]
+    },
+    {
+      "slice_id": "slice_2",
+      "name": "Slice 2",
+      "dependencies": ["slice_1"],
+      "slice_level": "FLOW",
+      "user_visible_outcome": "Outcome 2",
+      "legs": {
+        "trigger": { "type": "USER_ACTION", "description": "Trigger 2" },
+        "core_pure_logic": { "pure_module_files": [] },
+        "adapter_persistence": { "optional_leg_present": false },
+        "output_verification": {
+          "verification_medium": "process_exit",
+          "verification_script": "tests/slices/slice_2_verify.sh"
+        }
+      },
+      "files_touched": ["src/tokens/theme.ts"],
+      "files_read": ["src/tokens/theme.ts"]
+    }
+  ]
+}

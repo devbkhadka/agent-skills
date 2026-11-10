@@ -1,0 +1,24 @@
+{
+  "schema_version": "1.0.0",
+  "feature_slug": "horizontal-missing-legs-feature",
+  "bootstrap_floor": ["src/main.ts"],
+  "slices": [
+    {
+      "slice_id": "slice_isolated_service",
+      "name": "Isolated Billing Service",
+      "dependencies": [],
+      "legs": {
+        "adapter_persistence": {
+          "optional_leg_present": true,
+          "adapter_files": ["src/services/billing_service.ts"]
+        }
+      },
+      "files_touched": [
+        "src/services/billing_service.ts"
+      ],
+      "files_read": [
+        "src/services/billing_service.ts"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,25 @@
+{
+  "schema_version": "1.0.0",
+  "feature_slug": "search-console-web-ui",
+  "generated_at": "2026-08-22T12:05:00Z",
+  "milestones": [
+    {
+      "milestone_id": "M4_SEARCH_ADAPTER_AGAINST_LIVE_BOUNDARY",
+      "slice_id": "slice_1_query_entry",
+      "verification_medium": "api_response",
+      "executed_command": "vitest run tests/searchApi.live.test.ts",
+      "boundary_identifier": "POST /v1/search",
+      "captured_evidence": {
+        "status_code": 500,
+        "headers": {"content-type": "application/json"},
+        "payload": {"items": [], "total": 0}
+      },
+      "failure_trace": {
+        "boundary_identifier": "POST /v1/search",
+        "boundary_property": "error_envelope_shapes",
+        "observed_response": {"items": [], "total": 4210},
+        "description": "The endpoint now answers with an items and total envelope, and the adapter reading total_results and results threw on every response."
+      }
+    }
+  ]
+}

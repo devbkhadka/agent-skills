@@ -1,0 +1,316 @@
+#!/usr/bin/env python3
+"""Build a judge packet for an independent evaluating subagent.
+
+Contract:
+    bin/build-judge-packet --feature <slug> --dir <feature-dir> --claim <claim-id> --out <dir>
+      exit 0 -> wrote <dir>/<claim-id>.packet.json
+      exit 1 -> printed JUDGE_PACKET_CONTAMINATED (or error), wrote no packet
+
+A judge that reads the worker's reasoning inherits its blind spots, so the packet is built
+strictly from stage artifacts and captured evidence. Worker rationale, transcript, diff,
+prior verdicts and self-assessment are refused, not filtered.
+"""
+
+import argparse
+import json
+import os
+from pathlib import Path
+import sys
+from typing import Any, Dict, List, Optional, Set, Tuple
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from lib.primitives import check_closed_key_set, is_vacuous_container
+
+PACKET_REQUIRED = {
+    "claim_id",
+    "claim_text",
+    "acceptance_rule",
+    "verification_medium",
+    "evidence_refs",
+    "artifact_excerpts",
+}
+PACKET_ALLOWED = PACKET_REQUIRED | {"schema_version", "$schema"}
+
+CLAIM_ALLOWED = {
+    "claim_id",
+    "claim_kind",
+    "evidence_key",
+    "verification_kind",
+    "acceptance_rule",
+}
+
+EXCERPT_ALLOWED = {"source_artifact", "field_path", "content"}
+
+STATE_ALLOWED = {
+    "state_id",
+    "name",
+    "description",
+    "observable_projection",
+    "discriminator",
+    "evidence_key",
+    "terminal",
+    "timeout_ms",
+    "tags",
+    "supersedes",
+    "superseded_by",
+}
+
+SLICE_ALLOWED = {
+    "slice_id",
+    "name",
+    "slice_level",
+    "user_visible_outcome",
+    "flow_refs",
+    "ui_layout",
+    "dependencies",
+    "files_touched",
+    "pure_modules",
+    "legs",
+    "verification_script",
+    "acceptance_criteria",
+}
+
+CONTAMINATION_KEYWORDS = {
+    "worker_rationale",
+    "self_assessment",
+    "reviewer_notes",
+    "rationale",
+    "transcript",
+    "worker_transcript",
+    "diff",
+    "prior_verdicts",
+}
+
+
+def _check_contamination_recursive(data: Any, path: str = "content") -> Optional[str]:
+    """Recursively check for contaminated keys in nested data structures."""
+    if isinstance(data, dict):
+        for k, v in data.items():
+            if k in CONTAMINATION_KEYWORDS:
+                return f"contaminated key {k!r} found at {path}"
+            nested_err = _check_contamination_recursive(v, f"{path}.{k}")
+            if nested_err:
+                return nested_err
+    elif isinstance(data, (list, tuple, set)):
+        for idx, item in enumerate(data):
+            nested_err = _check_contamination_recursive(item, f"{path}[{idx}]")
+            if nested_err:
+                return nested_err
+    return None
+
+
+def build_packet(
+    feature_slug: str,
+    feature_dir: Path,
+    claim_id: str,
+    out_dir: Path,
+) -> Tuple[int, str]:
+    summary_path = feature_dir / "milestones" / "evidence-summary.json"
+    if not summary_path.is_file():
+        summary_path = feature_dir / "evidence-summary.json"
+    if not summary_path.is_file():
+        return 1, f"ERROR: evidence summary not found in {feature_dir}"
+
+    try:
+        summary_data = json.loads(summary_path.read_text(encoding="utf-8"))
+    except Exception as e:
+        return 1, f"ERROR: failed to read evidence summary {summary_path}: {e}"
+
+    # 1. Locate claim and record
+    target_rec: Optional[Dict[str, Any]] = None
+    target_claim: Optional[Dict[str, Any]] = None
+
+    for rec in summary_data.get("milestone_evidence_records", []):
+        for cl in rec.get("claims_evaluated", []):
+            if cl.get("claim_id") == claim_id:
+                target_rec = rec
+                target_claim = cl
+                break
+        if target_claim is not None:
+            break
+
+    if target_claim is None or target_rec is None:
+        return 1, f"ERROR: claim {claim_id!r} not found in {summary_path}"
+
+    # 2. Check claim object closed key set and contamination
+    res = check_closed_key_set(target_claim, CLAIM_ALLOWED, "claim")
+    if not res.is_valid:
+        return 1, f"JUDGE_PACKET_CONTAMINATED: claim {claim_id} carries unallowed keys: {sorted(list(res.unexpected))}"
+
+    v_kind = target_claim.get("verification_kind")
+    if v_kind != "judged":
+        return 1, f"ERROR: claim {claim_id} has verification_kind={v_kind!r}; only 'judged' claims receive a packet"
+
+    acceptance_rule = target_claim.get("acceptance_rule")
+    if is_vacuous_container(acceptance_rule):
+        return 1, f"ERROR: claim {claim_id} has vacuous acceptance_rule"
+
+    # 3. Evidence refs
+    evidence_refs: List[str] = []
+    art_path = target_rec.get("artifact_path")
+    if art_path and str(art_path).strip():
+        evidence_refs.append(str(art_path).strip())
+    rec_refs = target_rec.get("evidence_refs")
+    if isinstance(rec_refs, list):
+        for r in rec_refs:
+            if r and str(r).strip() and str(r).strip() not in evidence_refs:
+                evidence_refs.append(str(r).strip())
+
+    if not evidence_refs or is_vacuous_container(evidence_refs) or any(not str(r).strip() for r in evidence_refs):
+        return 1, f"ERROR: evidence_refs for claim {claim_id} is empty or vacuous"
+
+    # 4. Verification medium
+    verification_medium = target_rec.get("verification_medium")
+    if not verification_medium:
+        dag_path = feature_dir / "execution-dag.json"
+        if dag_path.is_file():
+            try:
+                dag_data = json.loads(dag_path.read_text(encoding="utf-8"))
+                for sl in dag_data.get("slices", []):
+                    if sl.get("slice_id") == target_rec.get("slice_id"):
+                        verification_medium = sl.get("verification_medium")
+                        legs = sl.get("legs")
+                        if not verification_medium and isinstance(legs, dict):
+                            out_v = legs.get("output_verification")
+                            if isinstance(out_v, dict):
+                                verification_medium = out_v.get("medium")
+                        break
+            except Exception:
+                pass
+
+    if not verification_medium:
+        verification_medium = "rendered_ui"
+
+    # 5. Artifact excerpts
+    artifact_excerpts: List[Dict[str, Any]] = []
+
+    # Check scenario / flow matrix
+    matrix_file = feature_dir / "flow-simulation-matrix.json"
+    if not matrix_file.is_file():
+        matrix_file = feature_dir / "scenario-matrix.json"
+    if matrix_file.is_file():
+        try:
+            matrix_data = json.loads(matrix_file.read_text(encoding="utf-8"))
+            ev_key = target_claim.get("evidence_key")
+            target_state_id = ev_key.split("state:")[-1] if ev_key else ""
+            for st in matrix_data.get("states", []):
+                if st.get("state_id") == target_state_id or st.get("evidence_key") == ev_key:
+                    st_res = check_closed_key_set(st, STATE_ALLOWED, "state")
+                    if not st_res.is_valid:
+                        return 1, f"JUDGE_PACKET_CONTAMINATED: excerpt from {matrix_file.name} contains unexpected key(s): {sorted(list(st_res.unexpected))}"
+                    contam = _check_contamination_recursive(st, "state")
+                    if contam:
+                        return 1, f"JUDGE_PACKET_CONTAMINATED: {contam}"
+                    artifact_excerpts.append({
+                        "source_artifact": matrix_file.name,
+                        "field_path": f"states[state_id='{st.get('state_id')}']",
+                        "content": st,
+                    })
+                    break
+        except json.JSONDecodeError as e:
+            return 1, f"ERROR: failed to parse {matrix_file}: {e}"
+
+    # Check execution DAG
+    dag_file = feature_dir / "execution-dag.json"
+    if dag_file.is_file():
+        try:
+            dag_data = json.loads(dag_file.read_text(encoding="utf-8"))
+            slice_id = target_rec.get("slice_id")
+            for sl in dag_data.get("slices", []):
+                if sl.get("slice_id") == slice_id:
+                    sl_res = check_closed_key_set(sl, SLICE_ALLOWED, "slice")
+                    if not sl_res.is_valid:
+                        return 1, f"JUDGE_PACKET_CONTAMINATED: excerpt from {dag_file.name} contains unexpected key(s): {sorted(list(sl_res.unexpected))}"
+                    contam = _check_contamination_recursive(sl, "slice")
+                    if contam:
+                        return 1, f"JUDGE_PACKET_CONTAMINATED: {contam}"
+                    artifact_excerpts.append({
+                        "source_artifact": dag_file.name,
+                        "field_path": f"slices[slice_id='{sl.get('slice_id')}']",
+                        "content": sl,
+                    })
+                    break
+        except json.JSONDecodeError as e:
+            return 1, f"ERROR: failed to parse {dag_file}: {e}"
+
+    # If no matrix/dag excerpt found, excerpt the claim from evidence summary
+    if not artifact_excerpts:
+        claim_content = {
+            "claim_id": target_claim.get("claim_id"),
+            "claim_kind": target_claim.get("claim_kind"),
+            "evidence_key": target_claim.get("evidence_key"),
+            "acceptance_rule": target_claim.get("acceptance_rule"),
+        }
+        artifact_excerpts.append({
+            "source_artifact": "milestones/evidence-summary.json",
+            "field_path": f"milestone_evidence_records[milestone_id='{target_rec.get('milestone_id')}'].claims_evaluated[claim_id='{claim_id}']",
+            "content": claim_content,
+        })
+
+    # Validate each excerpt container
+    if is_vacuous_container(artifact_excerpts) or not artifact_excerpts:
+        return 1, f"ERROR: artifact_excerpts is empty or vacuous for claim {claim_id}"
+
+    for exc in artifact_excerpts:
+        exc_res = check_closed_key_set(exc, EXCERPT_ALLOWED, "artifact_excerpt")
+        if not exc_res.is_valid:
+            return 1, f"JUDGE_PACKET_CONTAMINATED: artifact excerpt carries unallowed keys: {sorted(list(exc_res.unexpected))}"
+        if is_vacuous_container(exc.get("content")):
+            return 1, f"ERROR: artifact excerpt content is vacuous at {exc.get('field_path')}"
+        contam = _check_contamination_recursive(exc.get("content"), "artifact_excerpt.content")
+        if contam:
+            return 1, f"JUDGE_PACKET_CONTAMINATED: {contam}"
+
+    # 6. Claim text
+    claim_text = (
+        f"Claim {claim_id} ({target_claim.get('claim_kind')}) for evidence key "
+        f"{target_claim.get('evidence_key')}: {acceptance_rule}"
+    )
+
+    # 7. Construct packet
+    packet = {
+        "schema_version": "1.0.0",
+        "claim_id": target_claim["claim_id"],
+        "claim_text": claim_text,
+        "acceptance_rule": acceptance_rule,
+        "verification_medium": verification_medium,
+        "evidence_refs": evidence_refs,
+        "artifact_excerpts": artifact_excerpts,
+    }
+
+    p_res = check_closed_key_set(packet, PACKET_ALLOWED, "judge packet")
+    if not p_res.is_valid:
+        return 1, f"JUDGE_PACKET_CONTAMINATED: judge packet carries unallowed keys: {sorted(list(p_res.unexpected))}"
+
+    # 8. Write packet
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_file = out_dir / f"{claim_id}.packet.json"
+    out_file.write_text(json.dumps(packet, indent=2) + "\n", encoding="utf-8")
+    return 0, f"BUILT_JUDGE_PACKET: wrote {out_file}"
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="Build judge packet for evaluated claim",
+        prog="build-judge-packet",
+    )
+    parser.add_argument("--feature", required=True, help="feature slug")
+    parser.add_argument("--dir", required=True, help="feature directory path")
+    parser.add_argument("--claim", required=True, help="claim ID")
+    parser.add_argument("--out", required=True, help="output directory path")
+
+    args = parser.parse_args()
+
+    code, msg = build_packet(
+        feature_slug=args.feature,
+        feature_dir=Path(args.dir),
+        claim_id=args.claim,
+        out_dir=Path(args.out),
+    )
+    print(msg)
+    return code
+
+
+if __name__ == "__main__":
+    sys.exit(main())

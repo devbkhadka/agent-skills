@@ -1,0 +1,13 @@
+devkhadka@devk-mac-mini-3 project % codex --no-alt-screen --approve-for-me
+> You are in /private/var/folders/fg/vw_k1d_d5278yc0gz
+
+  Do you trust the contents of this directory? Working
+  with untrusted contents comes with higher risk of
+  prompt injection. Trusting the directory allows
+  project-local config, hooks, and exec policies to
+  load.
+
+› 1. Yes, continue
+  2. No, quit
+
+  Press enter to continue

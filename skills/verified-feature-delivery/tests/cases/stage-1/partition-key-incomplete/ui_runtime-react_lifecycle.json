@@ -1,0 +1,23 @@
+{
+  "schema_version": "1.0.0",
+  "boundary_class": "UI_RUNTIME",
+  "boundary_identifier": "react_19_dom_runtime",
+  "fixture_status": "PROBED_LIVE",
+  "pinned_reprobe_milestone": null,
+  "contract_reference": "src/components/SearchConsole.tsx",
+  "success_samples": [
+    {
+      "sample_id": "mount_clean",
+      "payload": { "mounted": true, "strict_mode_invocations": 2, "portal_target": "document.body" }
+    }
+  ],
+  "failure_envelope_census": [
+    {
+      "envelope_id": "unmount_abort_error",
+      "error_class": "AbortError",
+      "payload_type": "DOMException",
+      "payload": { "name": "AbortError", "message": "The user aborted a request." },
+      "description": "Component unmounted mid-flight aborting active fetch."
+    }
+  ]
+}

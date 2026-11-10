@@ -1,0 +1,212 @@
+{
+  "$comment": "Stage 0 Domain Lexicon Template. Owned by stage-0. Copy and populate under .verified-feature-delivery/<feature-slug>/domain-lexicon.json.",
+  "schema_version": "1.0.0",
+  "feature_slug": "example-feature",
+  "bounded_context": "example_context",
+  "entities": [
+    {
+      "name": "ExampleEntity",
+      "description": "Primary domain aggregate or entity.",
+      "provenance": "FEATURE_INTRODUCED",
+      "repo_reference": null,
+      "glossary_visibility": "INCLUDE",
+      "plain_language_summary": "Primary domain entity tracking state and lifecycle.",
+      "attributes": [
+        {
+          "name": "id",
+          "type": "string",
+          "description": "Unique identifier."
+        },
+        {
+          "name": "status",
+          "type": "enum",
+          "enum_ref": "ExampleStatus",
+          "description": "Lifecycle state."
+        },
+        {
+          "name": "created_at",
+          "type": "int64",
+          "unit_ref": "unix_epoch_seconds",
+          "description": "Creation timestamp."
+        }
+      ]
+    }
+  ],
+  "value_objects": [
+    {
+      "name": "ExampleAmount",
+      "description": "Financial or measurement value object.",
+      "provenance": "FEATURE_INTRODUCED",
+      "repo_reference": null,
+      "glossary_visibility": "INCLUDE",
+      "plain_language_summary": "Financial quantity representing monetary value and currency.",
+      "attributes": [
+        {
+          "name": "amount",
+          "type": "int64",
+          "unit_ref": "integer_cents"
+        },
+        {
+          "name": "currency",
+          "type": "string",
+          "description": "ISO-4217 currency code."
+        }
+      ]
+    }
+  ],
+  "actions": [
+    {
+      "name": "ExampleAction",
+      "description": "Action transitioning entity state.",
+      "provenance": "FEATURE_INTRODUCED",
+      "repo_reference": null,
+      "glossary_visibility": "INCLUDE",
+      "plain_language_summary": "Transitions the primary entity from active to completed state.",
+      "target_entity": "ExampleEntity",
+      "source_state": "ACTIVE",
+      "target_state": "COMPLETED"
+    }
+  ],
+  "state_enums": [
+    {
+      "name": "ExampleStatus",
+      "provenance": "FEATURE_INTRODUCED",
+      "repo_reference": null,
+      "glossary_visibility": "INCLUDE",
+      "plain_language_summary": "Lifecycle statuses for ExampleEntity.",
+      "tokens": ["INITIALIZED", "ACTIVE", "COMPLETED", "FAILED"],
+      "terminal_tokens": ["COMPLETED", "FAILED"]
+    }
+  ],
+  "monotonic_clocks": [
+    {
+      "name": "ExampleEventClock",
+      "source_boundary": "NETWORK_API",
+      "source_field": "event.timestamp",
+      "unit_ref": "unix_epoch_seconds",
+      "comparison_rule": "STRICTLY_GREATER_THAN"
+    }
+  ],
+  "unit_precisions": [
+    {
+      "id": "integer_cents",
+      "quantity_type": "CURRENCY_AMOUNT",
+      "base_unit": "cents",
+      "numeric_type": "int64",
+      "representation": "Integer cents without floating point.",
+      "rounding_mode": "BANKERS_ROUNDING"
+    },
+    {
+      "id": "unix_epoch_seconds",
+      "quantity_type": "TIMESTAMP",
+      "base_unit": "seconds",
+      "numeric_type": "int64",
+      "representation": "Unix epoch in integer seconds.",
+      "rounding_mode": "TRUNCATE"
+    }
+  ],
+  "actors_and_observers": {
+    "actors": [
+      {
+        "id": "Operator",
+        "kind": "TRIGGER",
+        "modality": "rendered_ui",
+        "provenance": "FEATURE_INTRODUCED",
+        "repo_reference": null,
+        "glossary_visibility": "INCLUDE",
+        "plain_language_summary": "Human operator initiating feature actions.",
+        "description": "Human operator initiating feature actions."
+      }
+    ],
+    "observers": [
+      {
+        "id": "Operator",
+        "kind": "ACTIVE",
+        "channels": ["rendered_ui"],
+        "provenance": "FEATURE_INTRODUCED",
+        "repo_reference": null,
+        "glossary_visibility": "INCLUDE",
+        "plain_language_summary": "Operator observing state changes.",
+        "description": "Operator observing state changes."
+      }
+    ]
+  },
+  "alias_pairs": [
+    {
+      "canonical_concept": "ResourceIdentifier",
+      "left": {
+        "boundary_class": "DATASTORE",
+        "token": "resource_id"
+      },
+      "right": {
+        "boundary_class": "NETWORK_API",
+        "token": "id"
+      },
+      "mapping_notes": "Internal database column mapped to public REST payload field."
+    }
+  ],
+  "projection_bindings": [
+    {
+      "projection_id": "status_badge",
+      "quantity_or_label": "Entity Status Badge",
+      "observer_id": "Operator",
+      "source_type": "CONTRACT_FIELD",
+      "source_reference": "ExampleEntity.status",
+      "derivation_expression": "ExampleEntity.status"
+    }
+  ],
+  "value_authorities": [
+    {
+      "value_name": "example_price",
+      "authority_model": "UPSTREAM_AUTHORITATIVE",
+      "upstream_boundary": "NETWORK_API",
+      "local_computation": null,
+      "tolerance_epsilon": null,
+      "divergence_action": "INGEST_VERBATIM_NEVER_OVERWRITE",
+      "rationale": "Upstream engine is sole authority for pricing calculation."
+    }
+  ],
+  "fact_precedences": [
+    {
+      "fact_name": "resource_status",
+      "primary_boundary": "NETWORK_API",
+      "secondary_boundary": "DATASTORE",
+      "precedence_rule": "PRIMARY_WINS",
+      "reconciliation_check": "Overwrites local state if primary returns newer timestamp."
+    }
+  ],
+  "entity_relationships": [
+    {
+      "from_entity": "ExampleEntity",
+      "to_entity": "ExampleEntity",
+      "kind": "REFERENCES",
+      "cardinality": "1:1",
+      "description": "Self-referencing relationship for example hierarchy."
+    }
+  ],
+  "entity_boundaries": [
+    {
+      "boundary_id": "core_boundary",
+      "name": "Core Domain Boundary",
+      "entities": ["ExampleEntity"],
+      "owned_invariants": ["Status transitions follow strict acyclic lifecycle"],
+      "interfaces": [
+        {
+          "interface_id": "core_api",
+          "direction": "INBOUND",
+          "peer": "core_boundary",
+          "contract_ref": "contract-fixtures/core.json",
+          "description": "Core interface contract"
+        }
+      ]
+    }
+  ],
+  "simulated_dependencies": [
+    {
+      "boundary_class": "NETWORK_API",
+      "simulation_strategy": "FIXTURE_REPLAY",
+      "fixture_ref": "contract-fixtures/api.json",
+      "business_logic_under_test": "Entity state transition handling"
+    }
+  ]
+}

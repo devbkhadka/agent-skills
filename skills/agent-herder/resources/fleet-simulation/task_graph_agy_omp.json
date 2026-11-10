@@ -1,0 +1,74 @@
+[
+  {
+    "id": "contract-api",
+    "agent": "OMP-1",
+    "cli": "omp",
+    "model": "litellm/gpt-4.1-nano",
+    "deps": [],
+    "read_only": false,
+    "resources": ["file:src/api.py", "file:src/contracts.py"],
+    "objective": "Add a single comment line to the top of src/api.py and src/contracts.py marking each as a simulation fixture. Change nothing else."
+  },
+  {
+    "id": "docs-audit",
+    "agent": "OMP-2",
+    "cli": "omp",
+    "model": "litellm/gpt-4.1-nano",
+    "deps": [],
+    "read_only": false,
+    "resources": ["file:docs/notes.md"],
+    "objective": "Read docs/notes.md and state in one sentence whether it documents anything. Do not modify any file."
+  },
+  {
+    "id": "smoke-a",
+    "agent": "OMP-3",
+    "cli": "omp",
+    "model": "litellm/gpt-4.1-nano",
+    "deps": [],
+    "read_only": false,
+    "group": "shared:staging",
+    "resources": ["api:staging"],
+    "objective": "Perform the simulated staging smoke check. There is no real service, so just report the check as done. Do not modify any file."
+  },
+  {
+    "id": "smoke-b",
+    "agent": "OMP-4",
+    "cli": "omp",
+    "model": "litellm/gpt-4.1-nano",
+    "deps": [],
+    "read_only": false,
+    "group": "shared:staging",
+    "resources": ["api:staging"],
+    "objective": "Perform a second, independent simulated staging smoke check. There is no real service, so just report the check as done. Do not modify any file."
+  },
+  {
+    "id": "schema-migrate",
+    "agent": "OMP-1",
+    "cli": "omp",
+    "model": "litellm/gpt-4.1-nano",
+    "deps": ["contract-api"],
+    "read_only": false,
+    "resources": ["file:db/schema.sql", "db:test-postgres"],
+    "objective": "Append a single SQL comment line to db/schema.sql recording the simulated migration. Change nothing else."
+  },
+  {
+    "id": "release-review",
+    "agent": "OMP-2",
+    "cli": "omp",
+    "model": "litellm/gpt-4.1-nano",
+    "deps": ["contract-api", "docs-audit", "smoke-a", "schema-migrate"],
+    "read_only": false,
+    "resources": ["file:docs/notes.md"],
+    "objective": "List the files in this fixture and state in one sentence whether the simulated release looks consistent. Do not modify any file."
+  },
+  {
+    "id": "followup-fix",
+    "agent": "OMP-1",
+    "cli": "omp",
+    "model": "litellm/gpt-4.1-nano",
+    "deps": ["release-review"],
+    "read_only": false,
+    "resources": ["file:src/api.py"],
+    "objective": "Append one more comment line to src/api.py noting the release review passed. Change nothing else."
+  }
+]

@@ -1,0 +1,4 @@
+# bash reads $BASH_ENV in every non-interactive shell agy starts; put the real HOME back.
+if [ -n "${AGY_REAL_HOME:-}" ] && [ "$HOME" != "$AGY_REAL_HOME" ]; then
+  export HOME="$AGY_REAL_HOME"
+fi

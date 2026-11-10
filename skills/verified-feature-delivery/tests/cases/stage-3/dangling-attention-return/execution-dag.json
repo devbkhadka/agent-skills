@@ -1,0 +1,44 @@
+{
+  "schema_version": "1.0.0",
+  "feature_slug": "dangling-attention-return-feature",
+  "bootstrap_floor": ["src/main.ts"],
+  "slices": [
+    {
+      "slice_id": "slice_1",
+      "name": "Slice 1",
+      "dependencies": [],
+      "legs": {
+        "trigger": { "type": "USER_ACTION", "description": "Trigger" },
+        "core_pure_logic": { "pure_module_files": [] },
+        "adapter_persistence": { "optional_leg_present": false },
+        "output_verification": {
+          "verification_medium": "rendered_ui",
+          "verification_script": "tests/slices/slice_1_verify.sh"
+        }
+      }
+    },
+    {
+      "slice_id": "slice_2",
+      "name": "Slice 2",
+      "dependencies": ["slice_1"],
+      "legs": {
+        "trigger": { "type": "ERROR", "description": "Error trigger" },
+        "core_pure_logic": { "pure_module_files": [] },
+        "adapter_persistence": { "optional_leg_present": false },
+        "output_verification": {
+          "verification_medium": "rendered_ui",
+          "verification_script": "tests/slices/slice_2_verify.sh"
+        }
+      },
+      "actor_modality": {
+        "observers": ["operator"],
+        "input_modalities": ["pointer"],
+        "attention_return": {
+          "source_slice": "slice_2",
+          "destination_slice": "slice_nonexistent",
+          "focus_target": "input#query"
+        }
+      }
+    }
+  ]
+}

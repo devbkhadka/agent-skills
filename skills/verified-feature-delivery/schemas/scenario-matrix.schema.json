@@ -1,0 +1,361 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ScenarioSimulationMatrix",
+  "description": "Stage 2 Scenario Matrix Schema. Owned by stage-2. Defines flow simulation states, graph egress transitions, branch group A (resource & state) and group B (trigger & observation) coverages, evidence_keys, and structured observable_projections per observer.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "feature_slug",
+    "actors",
+    "observers",
+    "triggers",
+    "branch_coverage",
+    "states",
+    "transitions"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "description": "Semantic schema version string (e.g. 1.0.0)"
+    },
+    "feature_slug": {
+      "type": "string",
+      "description": "Unique slug identifier for the feature under plan"
+    },
+    "updated_at": {
+      "type": "string",
+      "description": "ISO 8601 timestamp of last matrix update"
+    },
+    "actors": {
+      "type": "array",
+      "description": "Registered domain actors initiating triggers in the scenario graph",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["actor_id", "description"],
+        "properties": {
+          "actor_id": { "type": "string" },
+          "description": { "type": "string" }
+        }
+      }
+    },
+    "observers": {
+      "type": "array",
+      "description": "Registered observers perceiving state transitions across verification media",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["observer_id", "medium"],
+        "properties": {
+          "observer_id": { "type": "string" },
+          "medium": {
+            "type": "string",
+            "enum": [
+              "rendered_ui",
+              "api_response",
+              "process_exit",
+              "datastore_state",
+              "device_actuation",
+              "agent_transcript"
+            ]
+          },
+          "modality": { "type": "string" },
+          "description": { "type": "string" }
+        }
+      }
+    },
+    "triggers": {
+      "type": "array",
+      "description": "Declared triggers initiating state transitions",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["trigger_id", "actor_id", "is_actor_repeatable", "description"],
+        "properties": {
+          "trigger_id": { "type": "string" },
+          "actor_id": { "type": "string" },
+          "is_actor_repeatable": {
+            "type": "boolean",
+            "description": "Whether the trigger can be repeated by the actor before prior execution settles"
+          },
+          "description": { "type": "string" }
+        }
+      }
+    },
+    "branch_coverage": {
+      "type": "object",
+      "description": "Systematic coverage across mandatory Branch Class Groups A and B",
+      "additionalProperties": false,
+      "required": ["group_a_resource_and_state", "group_b_trigger_and_observation"],
+      "properties": {
+        "group_a_resource_and_state": {
+          "type": "array",
+          "description": "Coverage rows for canonical Branch Class Group A (Resource & State)",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["class_name", "status"],
+            "properties": {
+              "class_name": {
+                "type": "string",
+                "enum": [
+                  "ORPHANED_DELETED_TARGET_STATES",
+                  "ORPHANED_OR_DELETED_TARGET_STATES",
+                  "RESOURCE_LEAK_AND_TERMINATION_INVARIANTS",
+                  "EVENT_ORDERING_AND_MONOTONIC_SEQUENCE_CLOCKS",
+                  "INGRESS_HANDOFF_DURABILITY",
+                  "TEMPORAL_EGRESS_FROM_FINITE_LIFESPAN_STATES",
+                  "COMPOUND_PUBLICATION_ORDERING",
+                  "OPERATIONAL_EDGE_CASES"
+                ]
+              },
+              "status": {
+                "type": "string",
+                "enum": ["ADDRESSED", "NOT_APPLICABLE", "INAPPLICABLE"]
+              },
+              "inapplicable_reason": {
+                "type": "string",
+                "description": "Mandatory non-empty justification if status is NOT_APPLICABLE"
+              },
+              "handling_description": { "type": "string" },
+              "related_states": {
+                "type": "array",
+                "items": { "type": "string" }
+              }
+            }
+          }
+        },
+        "group_b_trigger_and_observation": {
+          "type": "array",
+          "description": "Coverage rows for canonical Branch Class Group B (Trigger & Observation)",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["class_name", "status"],
+            "properties": {
+              "class_name": {
+                "type": "string",
+                "enum": [
+                  "REPEAT_TRIGGER_OUT_OF_ORDER_SETTLEMENT",
+                  "REPEAT_TRIGGER_WITH_OUT_OF_ORDER_SETTLEMENT",
+                  "DUPLICATE_TRIGGER",
+                  "OBSERVER_TEARDOWN_MID_FLIGHT",
+                  "STALE_OUTPUT_SUPERSESSION",
+                  "SEMANTIC_CONTRADICTION"
+                ]
+              },
+              "status": {
+                "type": "string",
+                "enum": ["ADDRESSED", "NOT_APPLICABLE", "INAPPLICABLE"]
+              },
+              "inapplicable_reason": {
+                "type": "string",
+                "description": "Mandatory non-empty justification if status is NOT_APPLICABLE"
+              },
+              "handling_description": { "type": "string" },
+              "resolution": {
+                "type": "string",
+                "enum": ["CLEARED", "RETAINED", "DIMMED", "MARKED_SUPERSEDED"]
+              },
+              "state_split_applied": { "type": "boolean" },
+              "materialized_states": {
+                "type": "array",
+                "items": { "type": "string" }
+              },
+              "related_states": {
+                "type": "array",
+                "items": { "type": "string" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "states": {
+      "type": "array",
+      "description": "State machine nodes modeled across system and observed states",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["state_id", "evidence_key", "observable_projections"],
+        "properties": {
+          "state_id": {
+            "type": "string",
+            "description": "Unique identifier for this state node"
+          },
+          "evidence_key": {
+            "type": "string",
+            "description": "Stable contract key linking state to Stage 4 captured projection evidence"
+          },
+          "is_initial": { "type": "boolean" },
+          "is_terminal": { "type": "boolean" },
+          "terminal_classification": { "type": "string" },
+          "description": { "type": "string" },
+          "observable_projections": {
+            "type": "array",
+            "description": "Structured perceptual projections per registered observer",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["observer_id", "medium", "discriminator"],
+              "properties": {
+                "observer_id": { "type": "string" },
+                "medium": {
+                  "type": "string",
+                  "enum": [
+                    "rendered_ui",
+                    "api_response",
+                    "process_exit",
+                    "datastore_state",
+                    "device_actuation",
+                    "agent_transcript"
+                  ]
+                },
+                "modality": { "type": "string" },
+                "description": { "type": "string" },
+                "discriminator": {
+                  "type": "object",
+                  "description": "Structured perceptual atoms distinguishing this state (never raw prose)"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "transitions": {
+      "type": "array",
+      "description": "Directed edges defining state machine transitions",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["transition_id", "from_state", "to_state"],
+        "properties": {
+          "transition_id": { "type": "string" },
+          "from_state": { "type": "string" },
+          "to_state": { "type": "string" },
+          "trigger_ref": { "type": ["string", "null"] },
+          "guard": { "type": ["string", "null"] },
+          "description": { "type": "string" }
+        }
+      }
+    },
+    "flow_groups": {
+      "type": "array",
+      "description": "Groups of flows sharing actor, preconditions, and functional area",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "group_id",
+          "name",
+          "actor_id",
+          "shared_preconditions",
+          "functional_area",
+          "summary"
+        ],
+        "properties": {
+          "group_id": { "type": "string" },
+          "name": { "type": "string" },
+          "actor_id": { "type": "string" },
+          "shared_preconditions": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "functional_area": { "type": "string" },
+          "summary": { "type": "string" }
+        }
+      }
+    },
+    "flows": {
+      "type": "array",
+      "description": "Ordered paths through scenario matrix with preconditions, steps, and expected outcomes",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "flow_id",
+          "group_id",
+          "name",
+          "actor_id",
+          "preconditions",
+          "steps",
+          "expected_outcome"
+        ],
+        "properties": {
+          "flow_id": { "type": "string" },
+          "group_id": { "type": "string" },
+          "name": { "type": "string" },
+          "actor_id": { "type": "string" },
+          "preconditions": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "steps": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["step_no", "action", "actor_id", "transition_ref"],
+              "properties": {
+                "step_no": { "type": "integer" },
+                "action": { "type": "string" },
+                "actor_id": { "type": "string" },
+                "transition_ref": { "type": "string" }
+              }
+            }
+          },
+          "expected_outcome": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["description", "evidence_key", "observer_id", "medium"],
+            "properties": {
+              "description": { "type": "string" },
+              "evidence_key": { "type": "string" },
+              "observer_id": { "type": "string" },
+              "medium": {
+                "type": "string",
+                "enum": [
+                  "rendered_ui",
+                  "api_response",
+                  "process_exit",
+                  "datastore_state",
+                  "device_actuation",
+                  "agent_transcript"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "approval": {
+      "type": "object",
+      "description": "Digest-pinned human approval record",
+      "additionalProperties": false,
+      "required": [
+        "milestone_id",
+        "artifact_path",
+        "approved_digest",
+        "digest_scope",
+        "status",
+        "decided_by",
+        "decided_at"
+      ],
+      "properties": {
+        "milestone_id": { "type": "string" },
+        "artifact_path": { "type": "string" },
+        "approved_digest": { "type": "string" },
+        "digest_scope": { "type": "string" },
+        "status": {
+          "type": "string",
+          "enum": ["APPROVED", "STALE"]
+        },
+        "decided_by": { "type": "string" },
+        "decided_at": { "type": "string" },
+        "notes": { "type": "string" }
+      }
+    }
+  }
+}

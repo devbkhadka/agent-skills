@@ -1,0 +1,452 @@
+#!/usr/bin/env python3
+"""Projection checker: the advisory Stage 2 claim and the binding Stage 4 refutation.
+
+Owner: stage-2 (advisory discriminator collision) and stage-4 (binding fingerprint collision).
+
+Stage 2 compares what the planner *described*: it exits zero, names any collision and raises a
+mandatory [Decision Needed]. Stage 4 holds the binding check, because Stage 4 compares the
+captured artifact rather than the planner description.
+
+The Stage 4 half computes, for every capture record, the normalised projection and its
+fingerprint from the artifact the run captured — a capture record that declared its own
+fingerprint would be asserting exactly what this gate exists to establish, so the closed key set
+for a capture record has no such key and a record carrying one is refused. Coverage is likewise
+computed, by differencing the matrix's (evidence_key, observer) projection targets against the
+ones a capture was actually attributed to.
+
+Exit codes and tokens:
+    stage 2, clean          exit 0, prints PROJECTIONS_VERIFIED_STAGE_2
+    stage 2, collision      exit 0, prints DISCRIMINATOR_COLLISION_ADVISORY (advisory)
+    stage 4, clean          exit 0, prints PROJECTIONS_VERIFIED_STAGE_4
+    stage 4, collision      exit 1, prints FINGERPRINT_COLLISION
+    stage 4, coverage gap   exit 1, prints PROJECTION_COVERAGE_GAP
+    artifact missing        exit 1, prints MISSING_GATE_ARTIFACT
+"""
+
+import argparse
+import json
+from pathlib import Path
+import sys
+from typing import Any, Dict, List, Optional, Tuple
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from lib.normalisation import (
+    NormalisationRefused,
+    capture_projection,
+    census_markers,
+    compute_captured_projections,
+    contract_header_names,
+    coverage_gaps,
+    fingerprint_collisions,
+    matrix_projection_targets,
+    observer_media,
+)
+from lib.primitives import is_vacuous_container
+
+MATRIX_FILENAMES = ("flow-simulation-matrix.json", "scenario-matrix.json")
+PROJECTIONS_FILENAME = "projections.json"
+CAPTURES_FILENAME = "captures.json"
+
+
+# ---------------------------------------------------------------------------
+# Loading
+# ---------------------------------------------------------------------------
+
+def load_json(path: Path) -> Tuple[Optional[Any], Optional[str]]:
+    if not path.is_file():
+        return None, "no such file: %s" % path
+    try:
+        return json.loads(path.read_text(encoding="utf-8")), None
+    except ValueError as error:
+        return None, "%s is not valid JSON: %s" % (path, error)
+
+
+def is_projections_doc(doc: Any) -> bool:
+    return isinstance(doc, dict) and "captured_projections" in doc
+
+
+def is_matrix_doc(doc: Any) -> bool:
+    return isinstance(doc, dict) and "states" in doc
+
+
+def feature_dir_candidates(feature: str, root: Optional[str]) -> List[Path]:
+    base = Path(root).resolve() if root else Path.cwd()
+    return [base / ".verified-feature-delivery" / feature, base / feature]
+
+
+def collect_contract_fixtures(directory: Path) -> List[Any]:
+    """Every contract fixture beside the artifacts, for the header names the contract records."""
+    fixtures: List[Any] = []
+    fixture_dir = directory / "contract-fixtures"
+    if not fixture_dir.is_dir():
+        return fixtures
+    for path in sorted(fixture_dir.glob("*.json")):
+        doc, _error = load_json(path)
+        if isinstance(doc, dict) and "boundary_class" in doc:
+            fixtures.append(doc)
+    return fixtures
+
+
+# ---------------------------------------------------------------------------
+# Stage 2: the advisory claim check
+# ---------------------------------------------------------------------------
+
+def check_stage_2_projections(matrix_data: dict) -> Tuple[int, str]:
+    """Pairwise discriminator inequality per observer, over what the matrix describes.
+
+    Advisory by design: it exits zero, names the collision and raises a [Decision Needed]. A
+    collision that blocked Stage 2 would be a gate defect, because the planner's description is
+    a prediction and Stage 4 is what refutes or confirms it.
+    """
+    states = matrix_data.get("states", [])
+    if not isinstance(states, list):
+        return 1, "states must be an array"
+
+    observer_projections: Dict[str, List[Tuple[str, Any]]] = {}
+    for state in states:
+        if not isinstance(state, dict):
+            continue
+        state_id = state.get("state_id", "unnamed")
+        projections = state.get("observable_projections", [])
+        if not isinstance(projections, list):
+            continue
+        for projection in projections:
+            if not isinstance(projection, dict):
+                continue
+            observer_id = projection.get("observer_id", "default")
+            observer_projections.setdefault(observer_id, []).append(
+                (state_id, projection.get("discriminator"))
+            )
+
+    collisions = []
+    for observer_id, entries in observer_projections.items():
+        for i in range(len(entries)):
+            for j in range(i + 1, len(entries)):
+                state_a, discriminator_a = entries[i]
+                state_b, discriminator_b = entries[j]
+                if state_a != state_b and discriminator_a is not None and discriminator_a == discriminator_b:
+                    collisions.append((observer_id, state_a, state_b))
+
+    if collisions:
+        lines = []
+        for observer_id, state_a, state_b in collisions:
+            lines.append(
+                "DISCRIMINATOR_COLLISION_ADVISORY: %s and %s share a discriminator for observer %s"
+                % (state_a, state_b, observer_id)
+            )
+            lines.append(
+                "  [Decision Needed]: states %r and %r are described identically to observer %r. "
+                "Stage 4 holds the binding check, because Stage 4 compares the captured artifact "
+                "rather than the planner description. Resolve a distinct perceptual atom, or "
+                "record the indistinguishability as accepted, before Gate 5."
+                % (state_a, state_b, observer_id)
+            )
+        return 0, "\n".join(lines)
+
+    return 0, "PROJECTIONS_VERIFIED_STAGE_2: all pairwise discriminators distinct (%s)" % (
+        matrix_data.get("feature_slug", "unknown")
+    )
+
+
+# ---------------------------------------------------------------------------
+# Stage 4: the binding refutation
+# ---------------------------------------------------------------------------
+
+def check_stage_4_projections(
+    projections_data: Any,
+    matrix_data: Any,
+    artifact_root: Optional[Path] = None,
+    contract_fixtures: Optional[List[Any]] = None,
+) -> Tuple[int, str]:
+    """The binding Gate 4 check over captured evidence.
+
+    Coverage first, then collision: a gap means a state was never driven, and a collision
+    reported over a partial capture set would be reporting on the evidence rather than the flow.
+    """
+    if not isinstance(projections_data, dict):
+        return 1, "MISSING_GATE_ARTIFACT: the projections artifact is not an object"
+    if not isinstance(matrix_data, dict):
+        return 1, (
+            "MISSING_GATE_ARTIFACT: the Stage 4 check needs the scenario matrix, because coverage "
+            "is the difference between the projections it declares and the ones captured"
+        )
+
+    media_by_observer, observer_problems = observer_media(matrix_data)
+    if observer_problems:
+        return 1, "\n".join("MISSING_GATE_ARTIFACT: %s" % p for p in observer_problems)
+
+    fixtures = contract_fixtures or []
+    markers: List[Tuple[str, str]] = []
+    for fixture in fixtures:
+        for marker in census_markers(fixture):
+            if marker not in markers:
+                markers.append(marker)
+
+    computed, problems = compute_captured_projections(
+        projections_data.get("captured_projections"),
+        media_by_observer,
+        contract_headers=contract_header_names(fixtures),
+        artifact_root=artifact_root,
+        warning_markers=markers,
+    )
+    if problems:
+        return 1, "\n".join(problems)
+
+    targets = matrix_projection_targets(matrix_data)
+    if is_vacuous_container(targets):
+        return 1, (
+            "MISSING_GATE_ARTIFACT: the matrix declares no observable projection to cover, so "
+            "there is nothing for the captured evidence to refute"
+        )
+
+    gaps = coverage_gaps(targets, computed)
+    if gaps:
+        lines = ["PROJECTION_COVERAGE_GAP: %d matrix projection target(s) were never captured" % len(gaps)]
+        for evidence_key, observer_id in gaps:
+            lines.append(
+                "  %s for observer %s has no captured projection across the slice suites"
+                % (evidence_key, observer_id)
+            )
+        return 1, "\n".join(lines)
+
+    collisions = fingerprint_collisions(computed)
+    if collisions:
+        lines = ["FINGERPRINT_COLLISION: %d pair(s) of distinct evidence keys fingerprint alike" % len(collisions)]
+        for observer_id, key_a, key_b, fingerprint in collisions:
+            lines.append(
+                "  %s and %s produced the same projection for observer %s (%s)"
+                % (key_a, key_b, observer_id, fingerprint)
+            )
+        return 1, "\n".join(lines)
+
+    lines = [
+        "PROJECTIONS_VERIFIED_STAGE_4: %d captured projection(s) cover %d matrix target(s) with "
+        "no collision (%s)" % (
+            len(computed), len(targets), projections_data.get("feature_slug", "unknown"),
+        )
+    ]
+    for entry in sorted(computed, key=lambda e: (e["observer_id"], e["evidence_key"])):
+        lines.append("  %s [%s/%s] %s" % (
+            entry["fingerprint"][:16], entry["observer_id"], entry["medium"], entry["evidence_key"],
+        ))
+    return 0, "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# The two masking directions, checked directly against captureProjection
+# ---------------------------------------------------------------------------
+
+def load_capture_set(path: Path) -> Tuple[Optional[dict], Optional[str]]:
+    target = path / CAPTURES_FILENAME if path.is_dir() else path
+    doc, error = load_json(target)
+    if error:
+        return None, error
+    if not isinstance(doc, dict) or is_vacuous_container(doc.get("captures")):
+        return None, "%s records no captures" % target
+    return doc, None
+
+
+def fingerprint_capture_set(doc: dict) -> Tuple[List[Tuple[str, str, str]], Optional[str]]:
+    """Fingerprint every capture in the set, returning (label, normalised, fingerprint) triples."""
+    medium = doc.get("medium")
+    results = []
+    for index, capture in enumerate(doc.get("captures") or []):
+        if not isinstance(capture, dict) or is_vacuous_container(capture.get("captured_artifact")):
+            return [], "captures[%d] captured nothing" % index
+        label = str(capture.get("label") or "captures[%d]" % index)
+        try:
+            normalised, fingerprint = capture_projection(
+                medium,
+                capture["captured_artifact"],
+                recorded_values=capture.get("recorded_fixture_values") or (),
+                contract_headers=doc.get("contract_headers") or (),
+            )
+        except NormalisationRefused as refused:
+            return [], "%s: %s" % (refused.code, refused.detail)
+        results.append((label, normalised, fingerprint))
+    if len(results) < 2:
+        return [], "a masking check needs at least two captures to compare"
+    return results, None
+
+
+def run_data_invariance_check(path: Path) -> Tuple[int, str]:
+    """Two captures of one state differing only in data must fingerprint alike."""
+    doc, error = load_capture_set(path)
+    if error:
+        return 1, "MISSING_GATE_ARTIFACT: %s" % error
+    results, error = fingerprint_capture_set(doc)
+    if error:
+        return 1, error
+
+    distinct = {fingerprint for _label, _normalised, fingerprint in results}
+    lines = ["  %s -> %s" % (label, normalised) for label, normalised, _f in results]
+    if len(distinct) != 1:
+        return 1, "\n".join(
+            ["DATA_INVARIANCE_BROKEN: captures of one state differing only in data fingerprinted "
+             "differently, so the masking rules keep data the observer cannot distinguish"] + lines
+        )
+    return 0, "\n".join(
+        ["s4-fingerprint-data-invariant: %d captures of one state differing only in data share "
+         "fingerprint %s" % (len(results), results[0][2])] + lines
+    )
+
+
+def run_wording_distinctness_check(path: Path) -> Tuple[int, str]:
+    """Two captures differing in wording must not fingerprint alike."""
+    doc, error = load_capture_set(path)
+    if error:
+        return 1, "MISSING_GATE_ARTIFACT: %s" % error
+    results, error = fingerprint_capture_set(doc)
+    if error:
+        return 1, error
+
+    distinct = {fingerprint for _label, _normalised, fingerprint in results}
+    lines = ["  %s -> %s" % (label, normalised) for label, normalised, _f in results]
+    if len(distinct) != len(results):
+        return 1, "\n".join(
+            ["WORDING_DISTINCTNESS_BROKEN: captures differing in wording fingerprinted alike, so "
+             "the masking rules are eating template wording the observer reads"] + lines
+        )
+    return 0, "\n".join(
+        ["s4-fingerprint-wording-distinct: %d captures differing only in wording produced %d "
+         "distinct fingerprints" % (len(results), len(distinct))] + lines
+    )
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Projection checker: advisory at Stage 2, binding at Stage 4",
+        prog="verify-projections",
+    )
+    parser.add_argument("paths", nargs="*", help="projections artifact and/or scenario matrix")
+    parser.add_argument("--projections", "-p", help="path to the captured projections artifact")
+    parser.add_argument("--matrix", "-m", help="path to the scenario matrix")
+    parser.add_argument("--feature", "-s", help="feature slug, resolved under .verified-feature-delivery/")
+    parser.add_argument("--dir", "-d", help="directory holding the feature's artifacts")
+    parser.add_argument("--root", help="target project root")
+    parser.add_argument("--stage", choices=["2", "4"], help="force the stage half to run")
+    parser.add_argument("--test-data-invariance", help="capture set that must fingerprint alike")
+    parser.add_argument("--test-wording-distinct", help="capture set that must fingerprint differently")
+    return parser
+
+
+def resolve_artifacts(args) -> Tuple[Optional[Path], Optional[Path], Optional[Path]]:
+    """Find the projections artifact, the matrix, and the directory they live in."""
+    projections: Optional[Path] = None
+    matrix: Optional[Path] = None
+    directories: List[Path] = []
+
+    named = [(args.projections, "projections"), (args.matrix, "matrix")]
+    for value, kind in named:
+        if not value:
+            continue
+        path = Path(value)
+        if path.is_file():
+            if kind == "projections":
+                projections = path
+            else:
+                matrix = path
+            directories.append(path.parent)
+
+    for value in args.paths or []:
+        path = Path(value)
+        if path.is_dir():
+            directories.append(path)
+            continue
+        doc, _error = load_json(path)
+        if is_projections_doc(doc):
+            projections = path
+            directories.append(path.parent)
+        elif is_matrix_doc(doc):
+            matrix = path
+            directories.append(path.parent)
+
+    if args.dir:
+        directories.append(Path(args.dir))
+    if args.feature:
+        directories.extend(feature_dir_candidates(args.feature, args.root))
+
+    for directory in directories:
+        if projections is None and (directory / PROJECTIONS_FILENAME).is_file():
+            projections = directory / PROJECTIONS_FILENAME
+        if matrix is None:
+            for name in MATRIX_FILENAMES:
+                if (directory / name).is_file():
+                    matrix = directory / name
+                    break
+
+    home = None
+    for candidate in [projections, matrix]:
+        if candidate is not None:
+            home = candidate.parent
+            break
+    return projections, matrix, home
+
+
+def main() -> int:
+    args = build_parser().parse_args()
+
+    if args.test_data_invariance:
+        code, message = run_data_invariance_check(Path(args.test_data_invariance))
+        print(message)
+        return code
+
+    if args.test_wording_distinct:
+        code, message = run_wording_distinctness_check(Path(args.test_wording_distinct))
+        print(message)
+        return code
+
+    projections_path, matrix_path, home = resolve_artifacts(args)
+    stage = args.stage or ("4" if projections_path is not None else "2")
+
+    if stage == "2":
+        if matrix_path is None:
+            print("MISSING_GATE_ARTIFACT")
+            sys.stderr.write("MISSING_GATE_ARTIFACT: no scenario matrix to check\n")
+            return 1
+        matrix_data, error = load_json(matrix_path)
+        if error:
+            print("MISSING_GATE_ARTIFACT")
+            sys.stderr.write("MISSING_GATE_ARTIFACT: %s\n" % error)
+            return 1
+        code, message = check_stage_2_projections(matrix_data)
+        print(message)
+        return code
+
+    if projections_path is None:
+        print("MISSING_GATE_ARTIFACT")
+        sys.stderr.write("MISSING_GATE_ARTIFACT: no captured projections artifact to check\n")
+        return 1
+
+    projections_data, error = load_json(projections_path)
+    if error:
+        print("MISSING_GATE_ARTIFACT")
+        sys.stderr.write("MISSING_GATE_ARTIFACT: %s\n" % error)
+        return 1
+
+    matrix_data = None
+    if matrix_path is not None:
+        matrix_data, error = load_json(matrix_path)
+        if error:
+            print("MISSING_GATE_ARTIFACT")
+            sys.stderr.write("MISSING_GATE_ARTIFACT: %s\n" % error)
+            return 1
+
+    directory = home or projections_path.parent
+    code, message = check_stage_4_projections(
+        projections_data,
+        matrix_data,
+        artifact_root=directory,
+        contract_fixtures=collect_contract_fixtures(directory),
+    )
+    print(message)
+    return code
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,0 +1,55 @@
+{
+  "schema_version": "1.0.0",
+  "feature_slug": "missing-glossary-vis-feature",
+  "bounded_context": "billing",
+  "entities": [
+    {
+      "name": "Subscription",
+      "description": "Subscription entity",
+      "provenance": "FEATURE_INTRODUCED",
+      "plain_language_summary": "Subscription entity summary",
+      "attributes": [
+        { "name": "id", "type": "string" }
+      ]
+    }
+  ],
+  "value_objects": [],
+  "actions": [],
+  "state_enums": [],
+  "monotonic_clocks": [],
+  "unit_precisions": [],
+  "actors_and_observers": {
+    "actors": [
+      { "id": "Operator", "kind": "TRIGGER", "modality": "rendered_ui", "provenance": "FEATURE_INTRODUCED", "glossary_visibility": "INCLUDE" }
+    ],
+    "observers": [
+      { "id": "Operator", "kind": "ACTIVE", "channels": ["rendered_ui"], "provenance": "FEATURE_INTRODUCED", "glossary_visibility": "INCLUDE" }
+    ]
+  },
+  "alias_pairs": [],
+  "projection_bindings": [
+    {
+      "projection_id": "p_sub_status",
+      "quantity_or_label": "Subscription Status",
+      "observer_id": "Operator",
+      "source_type": "CONTRACT_FIELD",
+      "source_reference": "Subscription.id",
+      "derivation_expression": "Subscription.id"
+    }
+  ],
+  "value_authorities": [],
+  "fact_precedences": [],
+  "entity_relationships": [],
+  "entity_boundaries": [
+    {
+      "boundary_id": "b1",
+      "name": "B1",
+      "entities": ["Subscription"],
+      "owned_invariants": ["inv"],
+      "interfaces": [
+        { "interface_id": "i1", "direction": "INBOUND", "peer": "b1", "contract_ref": "c.json", "description": "d" }
+      ]
+    }
+  ],
+  "simulated_dependencies": []
+}

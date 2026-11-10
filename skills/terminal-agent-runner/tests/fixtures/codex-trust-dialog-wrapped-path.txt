@@ -1,0 +1,12 @@
+You are in /private/var/folders/fg/vw_k1d_d5278yc0gz
+2xk_t4c0000gn/T/agent-herder-simulation.TAC1PtRw/
+project
+
+Do you trust the contents of this
+directory?
+
+Files in this folder with untrusted contents come
+with higher risk of prompt injection.
+
+❯ 1. Yes, I trust this directory
+  2. No, exit

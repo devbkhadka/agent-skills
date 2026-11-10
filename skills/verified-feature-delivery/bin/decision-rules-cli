@@ -1,0 +1,295 @@
+#!/usr/bin/env python3
+"""Stage 3 Decision Rules Engine: decision-rules-cli.
+
+Owner: stage-3
+Purpose: Evaluates and locks architectural choices across the 6 Universal Dimensions
+from slicing-decisions.json (or slice-invariants.json), operating declaratively without
+interactive prompting (§7 resolution 2).
+
+Exit Codes:
+- 0: Decision rules validated clean (prints DECISION_RULES_VALIDATED_CLEAN)
+- Non-zero: Emits bare error code token on stderr/stdout
+
+Supported Error Codes:
+- DIMENSION_UNRESOLVED
+- DIMENSION_4_INAPPLICABLE_ON_REPEATABLE_TRIGGER
+"""
+
+import argparse
+import json
+import os
+from pathlib import Path
+import sys
+from typing import Any, Dict, List, Optional, Set, Tuple
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from lib.primitives import (
+    check_closed_key_set,
+    detect_repeatable_trigger,
+    is_reason_meaningful,
+    is_vacuous_container,
+)
+
+CANONICAL_DIMENSIONS = [
+    ("1_slicing_topology", ["1_slicing_topology", "slicing_topology", "slicing_strategy", "dimension_1"]),
+    ("2_execution_semantics", ["2_execution_semantics", "execution_semantics", "dimension_2"]),
+    ("3_state_and_lifecycle", ["3_state_and_lifecycle", "state_and_lifecycle", "state_lifecycle", "dimension_3"]),
+    ("4_idempotency_and_ordering", ["4_idempotency_and_ordering", "idempotency_and_ordering", "idempotency_sequence_ordering", "dimension_4", "ordering_strategy"]),
+    ("5_external_boundaries", ["5_external_boundaries", "external_boundaries", "external_boundaries_resource_lifecycle", "dimension_5"]),
+    ("6_observation_and_actor_modality", ["6_observation_and_actor_modality", "observation_and_actor_modality", "observation_actor_modality", "dimension_6", "actor_modality"]),
+]
+
+VALID_DIMENSION_4_STRATEGIES = {
+    "IDEMPOTENCY_KEY",
+    "MONOTONIC_EVENT_CLOCK",
+    "GENERATION_SEQUENCING",
+    "EXACTLY_ONCE_TRANSPORT",
+    "SYNTHETIC_CONTENT_WATERMARK",
+    "DISTRIBUTED_LEASE_FENCING",
+    "NOT_APPLICABLE",
+    "INAPPLICABLE",
+}
+
+TEMPLATE_DECISION_RULES = {
+    "schema_version": "1.0.0",
+    "feature_slug": "example-feature",
+    "locked_dimensions": {
+        "1_slicing_topology": {
+            "strategy": "SINGLE_TRACER_BULLET_FIRST",
+            "slice_1_anchor": "primary_flow_anchor",
+            "bootstrap_floor": ["index.html", "src/main.ts"],
+            "disallow_in_slice_1": ["secondary_features"]
+        },
+        "2_execution_semantics": {
+            "mode": "SYNC_REQUEST_RESPONSE",
+            "concurrency_model": "SINGLE_THREAD_EVENT_LOOP",
+            "drain_and_cancel_barrier": "ABORT_INFLIGHT_ON_NEW_TRIGGER"
+        },
+        "3_state_and_lifecycle": {
+            "persistence_model": "EPHEMERAL",
+            "temporal_egress": "NOT_APPLICABLE — NO_FINITE_LIFESPAN_STATES"
+        },
+        "4_idempotency_and_ordering": {
+            "strategy": "GENERATION_SEQUENCING",
+            "ordering_key": "generation_id",
+            "justification": "Actor-repeatable triggers require monotonic generation sequencing to discard superseded responses."
+        },
+        "5_external_boundaries": {
+            "boundary_fixtures": ["contract-fixtures/api.json"],
+            "resource_guards": ["inflight_teardown_guard"],
+            "concurrency_budget": {
+                "worker_concurrency": 1,
+                "probed_pool_capacity": 1,
+                "reserved_headroom": 0
+            }
+        },
+        "6_observation_and_actor_modality": {
+            "primary_observer": "operator",
+            "verification_medium": "rendered_ui",
+            "input_modalities": ["pointer", "keyboard"],
+            "environment_floor": "viewport_360x640",
+            "headless_fallback": "NOT_APPLICABLE — attended browser session only"
+        }
+    },
+    "pure_modules": [
+        "src/core/pureLogic.ts"
+    ]
+}
+
+
+def find_dimension_value(data: dict, keys: List[str]) -> Any:
+    """Find dimension value in locked_dimensions, dimensions, rules, or root."""
+    containers = [
+        data.get("locked_dimensions"),
+        data.get("dimensions"),
+        data.get("rules"),
+        data,
+    ]
+    for container in containers:
+        if isinstance(container, dict):
+            for k in keys:
+                if k in container and container[k] is not None:
+                    return container[k]
+    return None
+
+
+
+def validate_decision_rules_dict(data: dict, file_path: Optional[Path] = None) -> Tuple[bool, Optional[str], str]:
+    """Validate slicing-decisions / slice-invariants against 6 Universal Dimensions.
+    
+    Returns (is_valid: bool, error_code: Optional[str], message: str).
+    """
+    if not isinstance(data, dict):
+        return False, "DIMENSION_UNRESOLVED", "Decisions file root must be a JSON object"
+
+    # Check that all 6 universal dimensions are present and resolved
+    resolved_dims = {}
+    for canon_name, aliases in CANONICAL_DIMENSIONS:
+        val = find_dimension_value(data, aliases)
+        if val is None or is_vacuous_container(val):
+            return False, "DIMENSION_UNRESOLVED", f"Universal dimension '{canon_name}' is missing, empty, or vacuous"
+        
+        if isinstance(val, dict):
+            # Check if dict itself has an unresolved status
+            if val.get("status") == "UNRESOLVED" or val.get("strategy") == "UNRESOLVED":
+                return False, "DIMENSION_UNRESOLVED", f"Universal dimension '{canon_name}' is marked UNRESOLVED"
+            if len(val) == 0:
+                return False, "DIMENSION_UNRESOLVED", f"Universal dimension '{canon_name}' is an empty object"
+        elif isinstance(val, str):
+            if not val.strip() or val.strip().upper() == "UNRESOLVED":
+                return False, "DIMENSION_UNRESOLVED", f"Universal dimension '{canon_name}' is unchosen"
+        
+        resolved_dims[canon_name] = val
+
+    # Dimension 4 check: Idempotency & Ordering
+    dim4_val = resolved_dims.get("4_idempotency_and_ordering")
+    dim4_strategy = None
+    if isinstance(dim4_val, dict):
+        dim4_strategy = dim4_val.get("strategy") or dim4_val.get("mode") or dim4_val.get("ordering_strategy")
+    elif isinstance(dim4_val, str):
+        dim4_strategy = dim4_val.strip()
+
+    if not dim4_strategy or is_vacuous_container(dim4_strategy):
+        return False, "DIMENSION_UNRESOLVED", "Dimension 4 strategy is empty or unchosen"
+
+    norm_strategy = str(dim4_strategy).strip().upper()
+
+    closed_res = check_closed_key_set({norm_strategy: None}, VALID_DIMENSION_4_STRATEGIES, label="Dimension 4 strategy")
+    if not closed_res.is_valid:
+        return (
+            False,
+            "DIMENSION_UNRESOLVED",
+            f"Dimension 4 strategy '{dim4_strategy}' is unrecognised; allowed strategies are: {sorted(list(VALID_DIMENSION_4_STRATEGIES))}",
+        )
+
+    # Check if trigger is repeatable
+    is_repeatable = detect_repeatable_trigger(data, file_path)
+    if is_repeatable:
+        if norm_strategy in ["NOT_APPLICABLE", "INAPPLICABLE"]:
+            return (
+                False,
+                "DIMENSION_4_INAPPLICABLE_ON_REPEATABLE_TRIGGER",
+                "Dimension 4 (Idempotency & Sequence Ordering) may not be marked NOT_APPLICABLE while any trigger is actor-repeatable",
+            )
+
+    return True, None, "DECISION_RULES_VALIDATED_CLEAN"
+
+
+def resolve_decision_file_path(
+    path_str: Optional[str],
+    feature_slug: Optional[str] = None,
+    dir_override: Optional[str] = None,
+    root_override: Optional[str] = None,
+) -> Optional[Path]:
+    """Resolve decision rules path robustly."""
+    if path_str:
+        p = Path(path_str)
+        if p.is_file():
+            return p.resolve()
+
+        p_cwd = Path.cwd() / path_str
+        if p_cwd.is_file():
+            return p_cwd.resolve()
+
+        script_dir = Path(__file__).resolve().parent
+        skill_root = script_dir.parent
+        p_skill = skill_root / path_str
+        if p_skill.is_file():
+            return p_skill.resolve()
+
+        if path_str.startswith("skills/verified-feature-delivery/"):
+            stripped = path_str[len("skills/verified-feature-delivery/"):]
+            if (skill_root / stripped).is_file():
+                return (skill_root / stripped).resolve()
+            if (Path.cwd() / stripped).is_file():
+                return (Path.cwd() / stripped).resolve()
+
+        return p_cwd
+
+    if dir_override:
+        p = Path(dir_override)
+        for fname in ["slicing-decisions.json", "slice-invariants.json", "decision-rules.json"]:
+            if (p / fname).is_file():
+                return (p / fname).resolve()
+        return (p / "slicing-decisions.json").resolve()
+
+    if feature_slug:
+        root = Path(root_override).resolve() if root_override else Path.cwd()
+        for fname in ["slicing-decisions.json", "slice-invariants.json", "decision-rules.json"]:
+            cand = root / ".verified-feature-delivery" / feature_slug / fname
+            if cand.is_file():
+                return cand.resolve()
+            cand2 = root / feature_slug / fname
+            if cand2.is_file():
+                return cand2.resolve()
+        return root / ".verified-feature-delivery" / feature_slug / "slicing-decisions.json"
+
+    for fname in ["slicing-decisions.json", "slice-invariants.json", "decision-rules.json"]:
+        cand = Path.cwd() / fname
+        if cand.is_file():
+            return cand.resolve()
+    return Path.cwd() / "slicing-decisions.json"
+
+
+def build_parser():
+    parser = argparse.ArgumentParser(
+        description="Agentic Feature Planner - Stage 3 Decision Rules Engine",
+        prog="decision-rules-cli",
+    )
+    parser.add_argument("path", nargs="?", help="Path to slicing-decisions.json or slice-invariants.json")
+    parser.add_argument("--file", "-f", help="Explicit path to decisions JSON")
+    parser.add_argument("--feature", "-s", help="Feature slug")
+    parser.add_argument("--dir", "-d", help="Directory containing decisions JSON")
+    parser.add_argument("--root", help="Target project root directory")
+    parser.add_argument("--emit-template", "--template", action="store_true", help="Emit blank decision rules template to stdout")
+    parser.add_argument("--out", "-o", help="Output path for validated slice-invariants.json")
+    return parser
+
+
+def main():
+    parser = build_parser()
+    args = parser.parse_args()
+
+    if args.emit_template or (args.path and args.path in ["template", "--template"]):
+        print(json.dumps(TEMPLATE_DECISION_RULES, indent=2))
+        return 0
+
+    target_path_str = args.file or args.path
+    resolved_path = resolve_decision_file_path(target_path_str, args.feature, args.dir, args.root)
+
+    if not resolved_path or not resolved_path.is_file():
+        sys.stderr.write(f"Decisions file not found: {resolved_path}\n")
+        print("DIMENSION_UNRESOLVED")
+        return 1
+
+    try:
+        with open(resolved_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except json.JSONDecodeError as e:
+        sys.stderr.write(f"Invalid JSON in {resolved_path}: {e}\n")
+        print("DIMENSION_UNRESOLVED")
+        return 1
+    except Exception as e:
+        sys.stderr.write(f"Error reading {resolved_path}: {e}\n")
+        return 1
+
+    is_valid, error_code, msg = validate_decision_rules_dict(data, resolved_path)
+
+    if is_valid:
+        feature_slug = data.get("feature_slug") or data.get("feature") or "unknown"
+        if args.out:
+            out_p = Path(args.out)
+            out_p.parent.mkdir(parents=True, exist_ok=True)
+            with open(out_p, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+        print(f"DECISION_RULES_VALIDATED_CLEAN: {feature_slug}")
+        return 0
+    else:
+        print(error_code)
+        sys.stderr.write(f"{error_code}: {msg}\n")
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,0 +1,1516 @@
+{
+  "cases": [
+    {
+      "id": "s-invalid-stage-transition",
+      "stage": "scaffold",
+      "expect": "error",
+      "code": "INVALID_STAGE_TRANSITION",
+      "argv": [
+        "bin/planner-state",
+        "advance",
+        "--feature",
+        "invalid-transition-feature",
+        "--dir",
+        "skills/verified-feature-delivery/tests/cases/scaffold/fixtures/invalid-transition-feature",
+        "--to",
+        "STAGE_3_VERTICAL_SLICING"
+      ],
+      "why": "transition from STAGE_0 to STAGE_3 is absent from Allowed Next States in section 4 table"
+    },
+    {
+      "id": "s-missing-gate-artifact",
+      "stage": "scaffold",
+      "expect": "error",
+      "code": "MISSING_GATE_ARTIFACT",
+      "argv": [
+        "bin/planner-state",
+        "advance",
+        "--feature",
+        "missing-artifact-feature",
+        "--dir",
+        "skills/verified-feature-delivery/tests/cases/scaffold/fixtures/missing-artifact-feature",
+        "--to",
+        "STAGE_1_CONTRACT_PROBING"
+      ],
+      "why": "advancing out of STAGE_0 requires domain-lexicon.json to exist on disk"
+    },
+    {
+      "id": "s-state-assertion-mismatch",
+      "stage": "scaffold",
+      "expect": "error",
+      "code": "STATE_ASSERTION_MISMATCH",
+      "argv": [
+        "bin/planner-state",
+        "advance",
+        "--feature",
+        "state-mismatch-feature",
+        "--dir",
+        "skills/verified-feature-delivery/tests/cases/scaffold/fixtures/state-mismatch-feature",
+        "--from",
+        "STAGE_1_CONTRACT_PROBING",
+        "--to",
+        "STAGE_2_SCENARIO_SIMULATION"
+      ],
+      "why": "asserted --from state contradicts recorded current_state in state.json"
+    },
+    {
+      "id": "s-gate-artifact-path-not-authoritative",
+      "stage": "scaffold",
+      "expect": "error",
+      "code": "GATE_ARTIFACT_PATH_NOT_AUTHORITATIVE",
+      "argv": [
+        "bin/planner-state",
+        "advance",
+        "--feature",
+        "path-not-authoritative-feature",
+        "--dir",
+        "skills/verified-feature-delivery/tests/cases/scaffold/fixtures/path-not-authoritative-feature",
+        "--to",
+        "STAGE_1_CONTRACT_PROBING"
+      ],
+      "why": "state.json artifact path for stage_0_lexicon disagrees with authoritative transition table path"
+    },
+    {
+      "id": "state-init",
+      "stage": "scaffold",
+      "expect": "ok",
+      "code": null,
+      "argv": [
+        "bin/planner-state",
+        "init",
+        "--feature",
+        "init-feature",
+        "--dir",
+        "skills/verified-feature-delivery/tests/cases/scaffold/fixtures/init-feature"
+      ],
+      "why": "planner-state init creates state.json at UNINITIALIZED"
+    },
+    {
+      "id": "state-advance-legal",
+      "stage": "scaffold",
+      "expect": "ok",
+      "code": null,
+      "argv": [
+        "bin/planner-state",
+        "advance",
+        "--feature",
+        "advance-feature",
+        "--dir",
+        "skills/verified-feature-delivery/tests/cases/scaffold/fixtures/advance-feature",
+        "--to",
+        "STAGE_1_CONTRACT_PROBING"
+      ],
+      "why": "transition from STAGE_0 to STAGE_1 present in section 4 table is accepted from recorded state.json with valid exit artifact"
+    },
+    {
+      "id": "state-rollback-stage-4-to-2",
+      "stage": "scaffold",
+      "expect": "ok",
+      "code": null,
+      "argv": [
+        "bin/planner-state",
+        "rollback",
+        "--feature",
+        "rollback-feature",
+        "--dir",
+        "skills/verified-feature-delivery/tests/cases/scaffold/fixtures/rollback-feature",
+        "--to",
+        "STAGE_2_SCENARIO_SIMULATION",
+        "--cause",
+        "PROJECTION_COLLISION"
+      ],
+      "why": "the Stage 4 regression edge back to STAGE_2_SCENARIO_SIMULATION is accepted from recorded STAGE_4_MILESTONE_EXECUTION for PROJECTION_COLLISION"
+    },
+    {
+      "id": "s0-token-collision",
+      "stage": "stage-0",
+      "expect": "error",
+      "code": "LEXICON_TOKEN_COLLISION",
+      "argv": [
+        "bin/validate-lexicon",
+        "skills/verified-feature-delivery/tests/cases/stage-0/token-collision.lexicon.json"
+      ],
+      "why": "duplicate entity identifier in domain dictionary creates lexicon ambiguity"
+    },
+    {
+      "id": "s0-token-collision-cross-register",
+      "stage": "stage-0",
+      "expect": "error",
+      "code": "LEXICON_TOKEN_COLLISION_CROSS_REGISTER",
+      "argv": [
+        "bin/validate-lexicon",
+        "skills/verified-feature-delivery/tests/cases/stage-0/token-collision-cross-register.lexicon.json"
+      ],
+      "why": "entity identifier collides with declared observer identifier across registers"
+    },
+    {
+      "id": "s0-undefined-state-token",
+      "stage": "stage-0",
+      "expect": "error",
+      "code": "UNDEFINED_STATE_TOKEN",
+      "argv": [
+        "bin/validate-lexicon",
+        "skills/verified-feature-delivery/tests/cases/stage-0/undefined-state-token.lexicon.json"
+      ],
+      "why": "attribute default references state token absent from state enum definition"
+    },
+    {
+      "id": "s0-missing-unit-precision",
+      "stage": "stage-0",
+      "expect": "error",
+      "code": "MISSING_UNIT_PRECISION",
+      "argv": [
+        "bin/validate-lexicon",
+        "skills/verified-feature-delivery/tests/cases/stage-0/missing-unit-precision.lexicon.json"
+      ],
+      "why": "quantity attribute references unregistered unit precision ID"
+    },
+    {
+      "id": "s0-empty-observer-register",
+      "stage": "stage-0",
+      "expect": "error",
+      "code": "EMPTY_OBSERVER_REGISTER",
+      "argv": [
+        "bin/validate-lexicon",
+        "skills/verified-feature-delivery/tests/cases/stage-0/empty-observer-register.lexicon.json"
+      ],
+      "why": "actors_and_observers contains an empty observers register"
+    },
+    {
+      "id": "s0-unbound-projection-quantity",
+      "stage": "stage-0",
+      "expect": "error",
+      "code": "UNBOUND_PROJECTION_QUANTITY",
+      "argv": [
+        "bin/validate-lexicon",
+        "skills/verified-feature-delivery/tests/cases/stage-0/unbound-projection-quantity.lexicon.json"
+      ],
+      "why": "observer declares observable quantity with no corresponding projection binding"
+    },
+    {
+      "id": "s0-missing-value-authority",
+      "stage": "stage-0",
+      "expect": "error",
+      "code": "MISSING_VALUE_AUTHORITY",
+      "argv": [
+        "bin/validate-lexicon",
+        "skills/verified-feature-delivery/tests/cases/stage-0/missing-value-authority.lexicon.json"
+      ],
+      "why": "dual-computed boundary value lacks an authority model in value_authorities"
+    },
+    {
+      "id": "s0-missing-fact-precedence",
+      "stage": "stage-0",
+      "expect": "error",
+      "code": "MISSING_FACT_PRECEDENCE",
+      "argv": [
+        "bin/validate-lexicon",
+        "skills/verified-feature-delivery/tests/cases/stage-0/missing-fact-precedence.lexicon.json"
+      ],
+      "why": "fact derivable from two distinct boundaries has no precedence rule in fact_precedences"
+    },
+    {
+      "id": "s0-undeclared-alias",
+      "stage": "stage-0",
+      "expect": "error",
+      "code": "UNDECLARED_ALIAS",
+      "argv": [
+        "bin/validate-lexicon",
+        "skills/verified-feature-delivery/tests/cases/stage-0/undeclared-alias.lexicon.json"
+      ],
+      "why": "divergent boundary tokens represent the same concept without a declared alias pair"
+    },
+    {
+      "id": "s0-valid-lexicon",
+      "stage": "stage-0",
+      "expect": "ok",
+      "code": null,
+      "argv": [
+        "bin/validate-lexicon",
+        "skills/verified-feature-delivery/tests/cases/stage-0/valid.lexicon.json"
+      ],
+      "why": "a complete domain lexicon satisfying every Stage 0 exit-gate clause validates clean"
+    },
+    {
+      "id": "s0-alias-declared",
+      "stage": "stage-0",
+      "expect": "ok",
+      "code": null,
+      "argv": [
+        "bin/validate-lexicon",
+        "skills/verified-feature-delivery/tests/cases/stage-0/alias-declared.lexicon.json"
+      ],
+      "why": "two boundary names for one concept pass when the alias pair is declared"
+    },
+    {
+      "id": "s0-missing-unit-precision-generic-numeric",
+      "stage": "stage-0",
+      "expect": "error",
+      "code": "MISSING_UNIT_PRECISION",
+      "argv": [
+        "bin/validate-lexicon",
+        "skills/verified-feature-delivery/tests/cases/stage-0/s0-missing-unit-precision-generic-numeric.lexicon.json"
+      ],
+      "why": "a numeric-typed attribute typed integer or number without unit_ref and without dimensionless annotation fails MISSING_UNIT_PRECISION"
+    },
+    {
+      "id": "s0-unbound-projection-quantity-untagged",
+      "stage": "stage-0",
+      "expect": "error",
+      "code": "UNBOUND_PROJECTION_QUANTITY",
+      "argv": [
+        "bin/validate-lexicon",
+        "skills/verified-feature-delivery/tests/cases/stage-0/s0-unbound-projection-quantity-untagged.lexicon.json"
+      ],
+      "why": "an observer declared with no annotations and zero projection bindings fails UNBOUND_PROJECTION_QUANTITY"
+    },
+    {
+      "id": "s0-missing-provenance",
+      "stage": "stage-0",
+      "expect": "error",
+      "code": "MISSING_PROVENANCE",
+      "argv": [
+        "bin/validate-lexicon",
+        "skills/verified-feature-delivery/tests/cases/stage-0/missing-provenance.lexicon.json"
+      ],
+      "why": "term missing provenance declaration fails MISSING_PROVENANCE"
+    },
+    {
+      "id": "s0-invalid-provenance-plausible-token",
+      "stage": "stage-0",
+      "expect": "error",
+      "code": "INVALID_PROVENANCE",
+      "argv": [
+        "bin/validate-lexicon",
+        "skills/verified-feature-delivery/tests/cases/stage-0/s0-invalid-provenance-plausible-token.lexicon.json"
+      ],
+      "why": "the token is REPO_BORROWED -- a reordering of a real member, not a malformed string. A closed-set check catches it; a substring or prefix test does not."
+    },
+    {
+      "id": "s0-borrowed-repo-reference-path-absent",
+      "stage": "stage-0",
+      "expect": "error",
+      "code": "BORROWED_WITHOUT_REPO_REFERENCE",
+      "argv": [
+        "bin/validate-lexicon",
+        "skills/verified-feature-delivery/tests/cases/stage-0/s0-borrowed-repo-reference-path-absent.lexicon.json"
+      ],
+      "why": "repo_reference names a path that is plausible for this repository and absent from it. This separates a check that resolves the path from one that only asserts the key is present."
+    },
+    {
+      "id": "s0-missing-glossary-visibility",
+      "stage": "stage-0",
+      "expect": "error",
+      "code": "MISSING_GLOSSARY_VISIBILITY",
+      "argv": [
+        "bin/validate-lexicon",
+        "skills/verified-feature-delivery/tests/cases/stage-0/missing-glossary-visibility.lexicon.json"
+      ],
+      "why": "term missing glossary_visibility fails MISSING_GLOSSARY_VISIBILITY"
+    },
+    {
+      "id": "s0-missing-plain-language-summary",
+      "stage": "stage-0",
+      "expect": "error",
+      "code": "MISSING_PLAIN_LANGUAGE_SUMMARY",
+      "argv": [
+        "bin/validate-lexicon",
+        "skills/verified-feature-delivery/tests/cases/stage-0/missing-plain-language-summary.lexicon.json"
+      ],
+      "why": "entity or action missing plain_language_summary fails MISSING_PLAIN_LANGUAGE_SUMMARY"
+    },
+    {
+      "id": "s0-unknown-entity-in-relationship",
+      "stage": "stage-0",
+      "expect": "error",
+      "code": "UNKNOWN_ENTITY_IN_RELATIONSHIP",
+      "argv": [
+        "bin/validate-lexicon",
+        "skills/verified-feature-delivery/tests/cases/stage-0/unknown-entity-in-relationship.lexicon.json"
+      ],
+      "why": "entity relationship referencing undeclared entity fails UNKNOWN_ENTITY_IN_RELATIONSHIP"
+    },
+    {
+      "id": "s0-entity-outside-every-boundary",
+      "stage": "stage-0",
+      "expect": "error",
+      "code": "ENTITY_OUTSIDE_EVERY_BOUNDARY",
+      "argv": [
+        "bin/validate-lexicon",
+        "skills/verified-feature-delivery/tests/cases/stage-0/entity-outside-every-boundary.lexicon.json"
+      ],
+      "why": "entity not contained in any declared boundary fails ENTITY_OUTSIDE_EVERY_BOUNDARY"
+    },
+    {
+      "id": "s0-boundary-interface-unbound",
+      "stage": "stage-0",
+      "expect": "error",
+      "code": "BOUNDARY_INTERFACE_UNBOUND",
+      "argv": [
+        "bin/validate-lexicon",
+        "skills/verified-feature-delivery/tests/cases/stage-0/boundary-interface-unbound.lexicon.json"
+      ],
+      "why": "boundary interface with unresolvable peer or empty contract_ref fails BOUNDARY_INTERFACE_UNBOUND"
+    },
+    {
+      "id": "s0-simulation-without-fixture-ref",
+      "stage": "stage-0",
+      "expect": "error",
+      "code": "SIMULATION_WITHOUT_FIXTURE_REF",
+      "argv": [
+        "bin/validate-lexicon",
+        "skills/verified-feature-delivery/tests/cases/stage-0/simulation-without-fixture-ref.lexicon.json"
+      ],
+      "why": "simulated dependency without fixture_ref fails SIMULATION_WITHOUT_FIXTURE_REF"
+    },
+    {
+      "id": "s0-common-term-in-use-referenced-by-flow-step",
+      "stage": "stage-0",
+      "expect": "error",
+      "code": "COMMON_TERM_IN_USE",
+      "argv": [
+        "bin/validate-lexicon",
+        "skills/verified-feature-delivery/tests/cases/stage-0/s0-common-term-in-use/domain-lexicon.json"
+      ],
+      "why": "the only reference to the ASSUMED_COMMON term is from a flow step, not an action or a transition. A reference scan that stopped at actions passes this fixture, and the term then vanishes from the glossary a human reads."
+    },
+    {
+      "id": "s0-feature-term-assumed-common",
+      "stage": "stage-0",
+      "expect": "error",
+      "code": "FEATURE_TERM_ASSUMED_COMMON",
+      "argv": [
+        "bin/validate-lexicon",
+        "skills/verified-feature-delivery/tests/cases/stage-0/feature-term-assumed-common.lexicon.json"
+      ],
+      "why": "feature-introduced term declared ASSUMED_COMMON fails FEATURE_TERM_ASSUMED_COMMON"
+    },
+    {
+      "id": "s0-assumed-common-unreferenced-borrowed-term-accepted",
+      "stage": "stage-0",
+      "expect": "ok",
+      "code": null,
+      "argv": [
+        "bin/validate-lexicon",
+        "skills/verified-feature-delivery/tests/cases/stage-0/s0-assumed-common-unreferenced-borrowed-term-accepted.lexicon.json"
+      ],
+      "why": "a BORROWED_FROM_REPO term that no action, transition, flow step or relationship references validates clean as ASSUMED_COMMON, so the derivation is a computation rather than a blanket refusal. Without this case, a validator that rejects every ASSUMED_COMMON scores full marks."
+    },
+    {
+      "id": "s0-entity-boundaries-partitioned-accepted",
+      "stage": "stage-0",
+      "expect": "ok",
+      "code": null,
+      "argv": [
+        "bin/validate-lexicon",
+        "skills/verified-feature-delivery/tests/cases/stage-0/s0-entity-boundaries-partitioned-accepted.lexicon.json"
+      ],
+      "why": "a lexicon whose entities are wholly covered by declared boundaries, with every interface peer and contract_ref resolving, validates clean."
+    },
+    {
+      "id": "s1-manifest-class-missing",
+      "stage": "stage-1",
+      "expect": "error",
+      "code": "MANIFEST_CLASS_MISSING",
+      "argv": [
+        "bin/verify-fixture-variance",
+        "skills/verified-feature-delivery/tests/cases/stage-1/manifest-class-missing/manifest.json"
+      ],
+      "why": "manifest omits canonical boundary class VERIFICATION_HARNESS"
+    },
+    {
+      "id": "s1-manifest-absence-unreasoned",
+      "stage": "stage-1",
+      "expect": "error",
+      "code": "MANIFEST_ABSENCE_UNREASONED",
+      "argv": [
+        "bin/verify-fixture-variance",
+        "skills/verified-feature-delivery/tests/cases/stage-1/manifest-absence-unreasoned/manifest.json"
+      ],
+      "why": "class DEVICE_IO marked NOT_PRESENT has empty absence_reason"
+    },
+    {
+      "id": "s1-property-verdict-missing",
+      "stage": "stage-1",
+      "expect": "error",
+      "code": "PROPERTY_VERDICT_MISSING",
+      "argv": [
+        "bin/verify-fixture-variance",
+        "skills/verified-feature-delivery/tests/cases/stage-1/property-verdict-missing/manifest.json"
+      ],
+      "why": "present class UI_RUNTIME omits canonical property verdict development_mode_double_invocation"
+    },
+    {
+      "id": "s1-missing-success-sample",
+      "stage": "stage-1",
+      "expect": "error",
+      "code": "MISSING_SUCCESS_SAMPLE",
+      "argv": [
+        "bin/verify-fixture-variance",
+        "skills/verified-feature-delivery/tests/cases/stage-1/missing-success-sample/manifest.json"
+      ],
+      "why": "probed property fixture has empty success_samples list"
+    },
+    {
+      "id": "s1-empty-failure-envelope-census",
+      "stage": "stage-1",
+      "expect": "error",
+      "code": "EMPTY_FAILURE_ENVELOPE_CENSUS",
+      "argv": [
+        "bin/verify-fixture-variance",
+        "skills/verified-feature-delivery/tests/cases/stage-1/empty-failure-envelope-census/manifest.json"
+      ],
+      "why": "probed property fixture has empty failure_envelope_census list"
+    },
+    {
+      "id": "s1-empty-failure-envelope-entry",
+      "stage": "stage-1",
+      "expect": "error",
+      "code": "EMPTY_FAILURE_ENVELOPE_ENTRY",
+      "argv": [
+        "bin/verify-fixture-variance",
+        "skills/verified-feature-delivery/tests/cases/stage-1/empty-failure-envelope-entry/manifest.json"
+      ],
+      "why": "probed property fixture has empty dictionary [{}] in failure_envelope_census"
+    },
+    {
+      "id": "s1-missing-fixture-status",
+      "stage": "stage-1",
+      "expect": "error",
+      "code": "MISSING_FIXTURE_STATUS",
+      "argv": [
+        "bin/verify-fixture-variance",
+        "skills/verified-feature-delivery/tests/cases/stage-1/missing-fixture-status/manifest.json"
+      ],
+      "why": "fixture lacks valid provenance fixture_status token"
+    },
+    {
+      "id": "s1-provisional-without-reprobe",
+      "stage": "stage-1",
+      "expect": "error",
+      "code": "PROVISIONAL_WITHOUT_REPROBE",
+      "argv": [
+        "bin/verify-fixture-variance",
+        "skills/verified-feature-delivery/tests/cases/stage-1/provisional-without-reprobe/manifest.json"
+      ],
+      "why": "PROVISIONAL_FROM_SCHEMA fixture has null pinned_reprobe_milestone"
+    },
+    {
+      "id": "s1-unbounded-region-unpartitioned",
+      "stage": "stage-1",
+      "expect": "error",
+      "code": "UNBOUNDED_REGION_UNPARTITIONED",
+      "argv": [
+        "bin/verify-fixture-variance",
+        "skills/verified-feature-delivery/tests/cases/stage-1/unbounded-region-unpartitioned/manifest.json"
+      ],
+      "why": "fixture declares unbounded regions but has empty partition_cells_evaluated"
+    },
+    {
+      "id": "s1-variance-census-homogeneous",
+      "stage": "stage-1",
+      "expect": "error",
+      "code": "VARIANCE_CENSUS_HOMOGENEOUS",
+      "argv": [
+        "bin/verify-fixture-variance",
+        "skills/verified-feature-delivery/tests/cases/stage-1/variance-census-homogeneous/manifest.json"
+      ],
+      "why": "sample corpus for unbounded region has key intersection equal to union with zero optional variance"
+    },
+    {
+      "id": "s1-partition-key-incomplete",
+      "stage": "stage-1",
+      "expect": "error",
+      "code": "PARTITION_KEY_INCOMPLETE",
+      "argv": [
+        "bin/verify-fixture-variance",
+        "skills/verified-feature-delivery/tests/cases/stage-1/partition-key-incomplete/manifest.json"
+      ],
+      "why": "declared partition key omits contract variant selector is_promoted"
+    },
+    {
+      "id": "s1-partition-key-unjustified",
+      "stage": "stage-1",
+      "expect": "error",
+      "code": "PARTITION_KEY_UNJUSTIFIED",
+      "argv": [
+        "bin/verify-fixture-variance",
+        "skills/verified-feature-delivery/tests/cases/stage-1/partition-key-unjustified/manifest.json"
+      ],
+      "why": "declared partition key supplied where contract variant selectors exist in boundary schema"
+    },
+    {
+      "id": "s1-harness-fidelity-drift",
+      "stage": "stage-1",
+      "expect": "error",
+      "code": "HARNESS_FIDELITY_DRIFT",
+      "argv": [
+        "bin/verify-fixture-variance",
+        "skills/verified-feature-delivery/tests/cases/stage-1/harness-fidelity-drift/manifest.json"
+      ],
+      "why": "verification harness substitute failure envelope drifts from live boundary error response"
+    },
+    {
+      "id": "s1-variance-cell-uncovered",
+      "stage": "stage-1",
+      "expect": "error",
+      "code": "VARIANCE_CELL_UNCOVERED",
+      "argv": [
+        "bin/verify-fixture-variance",
+        "skills/verified-feature-delivery/tests/cases/stage-1/variance-cell-uncovered/manifest.json"
+      ],
+      "why": "a cell of the derived partition has no sample assigned"
+    },
+    {
+      "id": "s1-variance-sample-floor-unmet",
+      "stage": "stage-1",
+      "expect": "error",
+      "code": "VARIANCE_SAMPLE_FLOOR_UNMET",
+      "argv": [
+        "bin/verify-fixture-variance",
+        "skills/verified-feature-delivery/tests/cases/stage-1/variance-sample-floor-unmet/manifest.json"
+      ],
+      "why": "fewer than three samples across the census fails the total floor"
+    },
+    {
+      "id": "s1-valid-manifest",
+      "stage": "stage-1",
+      "expect": "ok",
+      "code": null,
+      "argv": [
+        "bin/verify-fixture-variance",
+        "skills/verified-feature-delivery/tests/cases/stage-1/valid/manifest.json"
+      ],
+      "why": "a complete boundary manifest with all 10 register classes, per-property verdicts, and stamped fixtures validates clean"
+    },
+    {
+      "id": "s1-provisional-with-pinned-reprobe",
+      "stage": "stage-1",
+      "expect": "ok",
+      "code": null,
+      "argv": [
+        "bin/verify-fixture-variance",
+        "skills/verified-feature-delivery/tests/cases/stage-1/provisional-reprobe/manifest.json"
+      ],
+      "why": "a PROVISIONAL_FROM_SCHEMA fixture with a pinned Stage 4 re-probe milestone passes Gate 1"
+    },
+    {
+      "id": "s1-partition-cell-of-one-sample",
+      "stage": "stage-1",
+      "expect": "ok",
+      "code": null,
+      "argv": [
+        "bin/verify-fixture-variance",
+        "skills/verified-feature-delivery/tests/cases/stage-1/partition-cell-of-one-sample/manifest.json"
+      ],
+      "why": "a contract-derived partition whose cells hold one sample each, three samples total, passes validation"
+    },
+    {
+      "id": "s1-partition-derived-without-declared-key",
+      "stage": "stage-1",
+      "expect": "ok",
+      "code": null,
+      "argv": [
+        "bin/verify-fixture-variance",
+        "skills/verified-feature-delivery/tests/cases/stage-1/partition-derived-without-declared-key/manifest.json"
+      ],
+      "why": "a fixture that records contract variant selectors and declares no partition key of its own validates clean"
+    },
+    {
+      "id": "s1-homogeneous-inside-declared-region",
+      "stage": "stage-1",
+      "expect": "error",
+      "code": "VARIANCE_CENSUS_HOMOGENEOUS",
+      "argv": [
+        "bin/verify-fixture-variance",
+        "skills/verified-feature-delivery/tests/cases/stage-1/s1-homogeneous-inside-declared-region/manifest.json"
+      ],
+      "why": "homogeneity is scoped to each declared entry in unbounded_regions; samples differing only in unrelated payload fields fail when the declared unbounded region is homogeneous"
+    },
+    {
+      "id": "s1-manifest-absence-unreasoned-single-char",
+      "stage": "stage-1",
+      "expect": "error",
+      "code": "MANIFEST_ABSENCE_UNREASONED",
+      "argv": [
+        "bin/verify-fixture-variance",
+        "skills/verified-feature-delivery/tests/cases/stage-1/s1-manifest-absence-unreasoned-single-char/manifest.json"
+      ],
+      "why": "absence reason with a single character or placeholder lacks required prose architectural justification"
+    },
+    {
+      "id": "s2-hanging-state",
+      "stage": "stage-2",
+      "expect": "error",
+      "code": "HANGING_STATE",
+      "argv": [
+        "bin/validate-scenario-matrix",
+        "skills/verified-feature-delivery/tests/cases/stage-2/hanging-state/scenario-matrix.json"
+      ],
+      "why": "non-terminal state in scenario matrix has zero outbound egress transitions"
+    },
+    {
+      "id": "s2-missing-discriminator",
+      "stage": "stage-2",
+      "expect": "error",
+      "code": "MISSING_DISCRIMINATOR",
+      "argv": [
+        "bin/validate-scenario-matrix",
+        "skills/verified-feature-delivery/tests/cases/stage-2/missing-discriminator/scenario-matrix.json"
+      ],
+      "why": "state observable projection omits structured discriminator object"
+    },
+    {
+      "id": "s2-missing-evidence-key",
+      "stage": "stage-2",
+      "expect": "error",
+      "code": "MISSING_EVIDENCE_KEY",
+      "argv": [
+        "bin/validate-scenario-matrix",
+        "skills/verified-feature-delivery/tests/cases/stage-2/missing-evidence-key/scenario-matrix.json"
+      ],
+      "why": "state node omits mandatory contract evidence key"
+    },
+    {
+      "id": "s2-branch-class-unaddressed",
+      "stage": "stage-2",
+      "expect": "error",
+      "code": "BRANCH_CLASS_UNADDRESSED",
+      "argv": [
+        "bin/validate-scenario-matrix",
+        "skills/verified-feature-delivery/tests/cases/stage-2/branch-class-unaddressed/scenario-matrix.json"
+      ],
+      "why": "branch coverage omits canonical Group A class TEMPORAL_EGRESS_FROM_FINITE_LIFESPAN_STATES"
+    },
+    {
+      "id": "s2-branch-inapplicable-unreasoned",
+      "stage": "stage-2",
+      "expect": "error",
+      "code": "BRANCH_INAPPLICABLE_UNREASONED",
+      "argv": [
+        "bin/validate-scenario-matrix",
+        "skills/verified-feature-delivery/tests/cases/stage-2/branch-inapplicable-unreasoned/scenario-matrix.json"
+      ],
+      "why": "Group A branch class marked NOT_APPLICABLE lacks non-empty reason"
+    },
+    {
+      "id": "s2-group-b-required-on-repeatable-trigger",
+      "stage": "stage-2",
+      "expect": "error",
+      "code": "GROUP_B_REQUIRED_ON_REPEATABLE_TRIGGER",
+      "argv": [
+        "bin/validate-scenario-matrix",
+        "skills/verified-feature-delivery/tests/cases/stage-2/group-b-required-on-repeatable-trigger/scenario-matrix.json"
+      ],
+      "why": "feature with repeatable trigger omits mandatory Branch Class Group B"
+    },
+    {
+      "id": "s2-supersession-not-materialised",
+      "stage": "stage-2",
+      "expect": "error",
+      "code": "SUPERSESSION_NOT_MATERIALISED",
+      "argv": [
+        "bin/validate-scenario-matrix",
+        "skills/verified-feature-delivery/tests/cases/stage-2/supersession-not-materialised/scenario-matrix.json"
+      ],
+      "why": "supersession resolution other than cleared recorded as state attribute instead of split states"
+    },
+    {
+      "id": "DISCRIMINATOR_COLLISION_ADVISORY",
+      "stage": "stage-2",
+      "expect": "advisory",
+      "code": "DISCRIMINATOR_COLLISION_ADVISORY",
+      "argv": [
+        "bin/verify-projections",
+        "skills/verified-feature-delivery/tests/cases/stage-2/discriminator-collision-advisory/scenario-matrix.json"
+      ],
+      "why": "pairwise discriminator collision at Stage 2 emits advisory warning and exits 0 raising [Decision Needed]"
+    },
+    {
+      "id": "s2-valid-matrix",
+      "stage": "stage-2",
+      "expect": "ok",
+      "code": null,
+      "argv": [
+        "bin/validate-scenario-matrix",
+        "skills/verified-feature-delivery/tests/cases/stage-2/valid/scenario-matrix.json"
+      ],
+      "why": "a matrix with full egress coverage, both branch groups addressed, and distinct discriminators validates clean"
+    },
+    {
+      "id": "s2-branch-class-declared-inapplicable",
+      "stage": "stage-2",
+      "expect": "ok",
+      "code": null,
+      "argv": [
+        "bin/validate-scenario-matrix",
+        "skills/verified-feature-delivery/tests/cases/stage-2/branch-class-inapplicable/scenario-matrix.json"
+      ],
+      "why": "a Group A class marked inapplicable with a one-line reason passes"
+    },
+    {
+      "id": "s2-unknown-state-attribute",
+      "stage": "stage-2",
+      "expect": "error",
+      "code": "UNKNOWN_STATE_ATTRIBUTE",
+      "argv": [
+        "bin/validate-scenario-matrix",
+        "skills/verified-feature-delivery/tests/cases/stage-2/unknown-state-attribute/scenario-matrix.json"
+      ],
+      "why": "state object contains unrecognised attribute superseded_by_mode outside closed state key set"
+    },
+    {
+      "id": "s2-state-optional-keys-accepted",
+      "stage": "stage-2",
+      "expect": "ok",
+      "code": null,
+      "argv": [
+        "bin/validate-scenario-matrix",
+        "skills/verified-feature-delivery/tests/cases/stage-2/state-optional-keys-accepted/scenario-matrix.json"
+      ],
+      "why": "a state using every optional key the closed set allows validates clean"
+    },
+    {
+      "id": "s2-dangling-transition-target",
+      "stage": "stage-2",
+      "expect": "error",
+      "code": "DANGLING_TRANSITION_TARGET",
+      "argv": [
+        "bin/validate-scenario-matrix",
+        "skills/verified-feature-delivery/tests/cases/stage-2/dangling-transition-target/scenario-matrix.json"
+      ],
+      "why": "transition whose to_state names a state absent from the state set fails DANGLING_TRANSITION_TARGET"
+    },
+    {
+      "id": "s2-self-loop-only-egress",
+      "stage": "stage-2",
+      "expect": "error",
+      "code": "SELF_LOOP_ONLY_EGRESS",
+      "argv": [
+        "bin/validate-scenario-matrix",
+        "skills/verified-feature-delivery/tests/cases/stage-2/self-loop-only-egress/scenario-matrix.json"
+      ],
+      "why": "state whose only outbound edge points at itself fails SELF_LOOP_ONLY_EGRESS"
+    },
+    {
+      "id": "s2-terminal-state-has-egress",
+      "stage": "stage-2",
+      "expect": "error",
+      "code": "TERMINAL_STATE_HAS_EGRESS",
+      "argv": [
+        "bin/validate-scenario-matrix",
+        "skills/verified-feature-delivery/tests/cases/stage-2/terminal-state-has-egress/scenario-matrix.json"
+      ],
+      "why": "state marked terminal with an outbound transition fails TERMINAL_STATE_HAS_EGRESS"
+    },
+    {
+      "id": "s2-invalid-branch-status-token",
+      "stage": "stage-2",
+      "expect": "error",
+      "code": "INVALID_BRANCH_STATUS_TOKEN",
+      "argv": [
+        "bin/validate-scenario-matrix",
+        "skills/verified-feature-delivery/tests/cases/stage-2/invalid-branch-status-token/scenario-matrix.json"
+      ],
+      "why": "branch coverage row with status token outside closed set fails INVALID_BRANCH_STATUS_TOKEN"
+    },
+    {
+      "id": "s2-unknown-actor-attribute",
+      "stage": "stage-2",
+      "expect": "error",
+      "code": "UNKNOWN_ACTOR_ATTRIBUTE",
+      "argv": [
+        "bin/validate-scenario-matrix",
+        "skills/verified-feature-delivery/tests/cases/stage-2/unknown-actor-attribute/scenario-matrix.json"
+      ],
+      "why": "actor object with unlisted attribute outside closed set fails UNKNOWN_ACTOR_ATTRIBUTE"
+    },
+    {
+      "id": "s2-missing-discriminator-empty-values",
+      "stage": "stage-2",
+      "expect": "error",
+      "code": "MISSING_DISCRIMINATOR",
+      "argv": [
+        "bin/validate-scenario-matrix",
+        "skills/verified-feature-delivery/tests/cases/stage-2/s2-missing-discriminator-empty-values/scenario-matrix.json"
+      ],
+      "why": "discriminator whose values are all empty strings fails MISSING_DISCRIMINATOR via is_vacuous_container"
+    },
+    {
+      "id": "s2-branch-inapplicable-unreasoned-single-char",
+      "stage": "stage-2",
+      "expect": "error",
+      "code": "BRANCH_INAPPLICABLE_UNREASONED",
+      "argv": [
+        "bin/validate-scenario-matrix",
+        "skills/verified-feature-delivery/tests/cases/stage-2/s2-branch-inapplicable-unreasoned-single-char/scenario-matrix.json"
+      ],
+      "why": "single hyphen in inapplicable_reason fails BRANCH_INAPPLICABLE_UNREASONED via shared is_reason_meaningful"
+    },
+    {
+      "id": "s2-empty-flow-group",
+      "stage": "stage-2",
+      "expect": "error",
+      "code": "EMPTY_FLOW_GROUP",
+      "argv": [
+        "bin/validate-scenario-matrix",
+        "skills/verified-feature-delivery/tests/cases/stage-2/empty-flow-group/scenario-matrix.json"
+      ],
+      "why": "flow group with no flows in flows[] fails EMPTY_FLOW_GROUP"
+    },
+    {
+      "id": "s2-flow-steps-discontinuous-real-transitions-wrong-order",
+      "stage": "stage-2",
+      "expect": "error",
+      "code": "FLOW_STEPS_DISCONTINUOUS",
+      "argv": [
+        "bin/validate-scenario-matrix",
+        "skills/verified-feature-delivery/tests/cases/stage-2/s2-flow-steps-discontinuous-real-transitions-wrong-order/scenario-matrix.json"
+      ],
+      "why": "every step names a transition that genuinely exists in the graph; only their order breaks the path. A check that validates each transition_ref individually passes this, and the flow reads plausibly to a human while asserting a path the system cannot take."
+    },
+    {
+      "id": "s2-state-not-covered-by-flow",
+      "stage": "stage-2",
+      "expect": "error",
+      "code": "STATE_NOT_COVERED_BY_FLOW",
+      "argv": [
+        "bin/validate-scenario-matrix",
+        "skills/verified-feature-delivery/tests/cases/stage-2/state-not-covered-by-flow/scenario-matrix.json"
+      ],
+      "why": "state not covered by any flow in flows[] fails STATE_NOT_COVERED_BY_FLOW"
+    },
+    {
+      "id": "s2-flow-outcome-evidence-key-declared-on-another-state",
+      "stage": "stage-2",
+      "expect": "error",
+      "code": "FLOW_OUTCOME_EVIDENCE_UNDECLARED",
+      "argv": [
+        "bin/validate-scenario-matrix",
+        "skills/verified-feature-delivery/tests/cases/stage-2/s2-flow-outcome-evidence-key-declared-on-another-state/scenario-matrix.json"
+      ],
+      "why": "the evidence_key is declared -- on a state the flow does not terminate in. This separates a check that resolves the key against the flow's terminal state from one that asks only whether the key exists somewhere in the matrix."
+    },
+    {
+      "id": "s2-precondition-duplicated-from-group-verbatim",
+      "stage": "stage-2",
+      "expect": "error",
+      "code": "PRECONDITION_DUPLICATED_FROM_GROUP",
+      "argv": [
+        "bin/validate-scenario-matrix",
+        "skills/verified-feature-delivery/tests/cases/stage-2/s2-precondition-duplicated-from-group-verbatim/scenario-matrix.json"
+      ],
+      "why": "the flow restates one of its group's shared preconditions verbatim while adding a second precondition of its own, so the flow's precondition list is non-empty and legitimate-looking. A cardinality check passes it."
+    },
+    {
+      "id": "s2-flows-cover-every-state-accepted",
+      "stage": "stage-2",
+      "expect": "ok",
+      "code": null,
+      "argv": [
+        "bin/validate-scenario-matrix",
+        "skills/verified-feature-delivery/tests/cases/stage-2/s2-flows-cover-every-state-accepted/scenario-matrix.json"
+      ],
+      "why": "a matrix whose flows compose real paths and together reach every declared state validates clean, so the coverage and continuity checks are computations rather than blanket refusals."
+    },
+    {
+      "id": "s3-dag-cycle",
+      "stage": "stage-3",
+      "expect": "error",
+      "code": "DAG_CYCLE",
+      "argv": [
+        "bin/validate-execution-dag",
+        "skills/verified-feature-delivery/tests/cases/stage-3/dag-cycle/execution-dag.json"
+      ],
+      "why": "DAG contains directed dependency cycle between slice_a and slice_b"
+    },
+    {
+      "id": "s3-dimension-unresolved",
+      "stage": "stage-3",
+      "expect": "error",
+      "code": "DIMENSION_UNRESOLVED",
+      "argv": [
+        "bin/decision-rules-cli",
+        "skills/verified-feature-delivery/tests/cases/stage-3/dimension-unresolved/slice-invariants.json"
+      ],
+      "why": "decision rules omit universal dimension 6 (observation and actor modality)"
+    },
+    {
+      "id": "s3-dimension-4-inapplicable",
+      "stage": "stage-3",
+      "expect": "error",
+      "code": "DIMENSION_4_INAPPLICABLE_ON_REPEATABLE_TRIGGER",
+      "argv": [
+        "bin/decision-rules-cli",
+        "skills/verified-feature-delivery/tests/cases/stage-3/dimension-4-inapplicable/slice-invariants.json"
+      ],
+      "why": "Dimension 4 marked NOT_APPLICABLE on an actor-repeatable trigger"
+    },
+    {
+      "id": "s3-slice-1-composition-violation",
+      "stage": "stage-3",
+      "expect": "error",
+      "code": "SLICE_1_COMPOSITION_VIOLATION",
+      "argv": [
+        "bin/validate-execution-dag",
+        "skills/verified-feature-delivery/tests/cases/stage-3/slice-1-composition-violation/execution-dag.json"
+      ],
+      "why": "Slice 1 includes disallowed secondary file outside anchor and bootstrap floor"
+    },
+    {
+      "id": "s3-horizontal-layer-rejected",
+      "stage": "stage-3",
+      "expect": "error",
+      "code": "HORIZONTAL_LAYER_REJECTED",
+      "argv": [
+        "bin/validate-execution-dag",
+        "skills/verified-feature-delivery/tests/cases/stage-3/horizontal-layer-rejected/execution-dag.json"
+      ],
+      "why": "horizontal module read by only one slice outside bootstrap floor and derived substrate"
+    },
+    {
+      "id": "s3-shared-substrate-declared",
+      "stage": "stage-3",
+      "expect": "error",
+      "code": "SHARED_SUBSTRATE_DECLARED",
+      "argv": [
+        "bin/validate-execution-dag",
+        "skills/verified-feature-delivery/tests/cases/stage-3/shared-substrate-declared/execution-dag.json"
+      ],
+      "why": "shared_substrate field is self-declared rather than computed from DAG topology"
+    },
+    {
+      "id": "s3-impure-pure-module",
+      "stage": "stage-3",
+      "expect": "error",
+      "code": "IMPURE_PURE_MODULE",
+      "argv": [
+        "bin/validate-execution-dag",
+        "skills/verified-feature-delivery/tests/cases/stage-3/impure-pure-module/execution-dag.json"
+      ],
+      "why": "declared pure module transitively imports network transport library axios"
+    },
+    {
+      "id": "s3-impure-test-import",
+      "stage": "stage-3",
+      "expect": "error",
+      "code": "IMPURE_TEST_IMPORT",
+      "argv": [
+        "bin/validate-execution-dag",
+        "skills/verified-feature-delivery/tests/cases/stage-3/impure-test-import/execution-dag.json"
+      ],
+      "why": "criterion tagged assertable-without-rendering has test file importing @testing-library/react"
+    },
+    {
+      "id": "s3-missing-verification-medium",
+      "stage": "stage-3",
+      "expect": "error",
+      "code": "MISSING_VERIFICATION_MEDIUM",
+      "argv": [
+        "bin/validate-execution-dag",
+        "skills/verified-feature-delivery/tests/cases/stage-3/missing-verification-medium/execution-dag.json"
+      ],
+      "why": "slice declares unknown verification medium log_output outside canonical 6 media"
+    },
+    {
+      "id": "s3-slice-missing-verification-script",
+      "stage": "stage-3",
+      "expect": "error",
+      "code": "SLICE_MISSING_VERIFICATION_SCRIPT",
+      "argv": [
+        "bin/validate-execution-dag",
+        "skills/verified-feature-delivery/tests/cases/stage-3/slice-missing-verification-script/execution-dag.json"
+      ],
+      "why": "slice points to verification script that does not exist on disk"
+    },
+    {
+      "id": "s3-dangling-attention-return",
+      "stage": "stage-3",
+      "expect": "error",
+      "code": "DANGLING_ATTENTION_RETURN",
+      "argv": [
+        "bin/validate-execution-dag",
+        "skills/verified-feature-delivery/tests/cases/stage-3/dangling-attention-return/execution-dag.json"
+      ],
+      "why": "attention_return targets destination_slice slice_nonexistent that does not exist in DAG"
+    },
+    {
+      "id": "s3-concurrency-over-capacity",
+      "stage": "stage-3",
+      "expect": "error",
+      "code": "CONCURRENCY_OVER_PROBED_CAPACITY",
+      "argv": [
+        "bin/validate-execution-dag",
+        "skills/verified-feature-delivery/tests/cases/stage-3/concurrency-over-capacity/execution-dag.json"
+      ],
+      "why": "worker concurrency (20) exceeds probed capacity (10) minus reserved headroom (2)"
+    },
+    {
+      "id": "s3-transaction-boundary-split",
+      "stage": "stage-3",
+      "expect": "error",
+      "code": "TRANSACTION_BOUNDARY_SPLIT",
+      "argv": [
+        "bin/validate-execution-dag",
+        "skills/verified-feature-delivery/tests/cases/stage-3/transaction-boundary-split/execution-dag.json"
+      ],
+      "why": "atomic state mutations split across slices without atomic transaction block or compensation"
+    },
+    {
+      "id": "s3-valid-dag",
+      "stage": "stage-3",
+      "expect": "ok",
+      "code": null,
+      "argv": [
+        "bin/validate-execution-dag",
+        "skills/verified-feature-delivery/tests/cases/stage-3/s3-valid-dag/execution-dag.json"
+      ],
+      "why": "DAG with all six dimensions locked, acyclic graph, declared media, and clean purity validates"
+    },
+    {
+      "id": "s3-substrate-exemption-derived",
+      "stage": "stage-3",
+      "expect": "ok",
+      "code": null,
+      "argv": [
+        "bin/validate-execution-dag",
+        "skills/verified-feature-delivery/tests/cases/stage-3/s3-substrate-derived/execution-dag.json"
+      ],
+      "why": "file read by two or more slices is exempt from horizontal-layer rejection without declaration"
+    },
+    {
+      "id": "s3-no-persistence-slice",
+      "stage": "stage-3",
+      "expect": "ok",
+      "code": null,
+      "argv": [
+        "bin/validate-execution-dag",
+        "skills/verified-feature-delivery/tests/cases/stage-3/s3-no-persistence-slice/execution-dag.json"
+      ],
+      "why": "slice with no adapter/persistence leg passes, proving the optional leg is optional"
+    },
+    {
+      "id": "s3-horizontal-layer-rejected-by-missing-legs",
+      "stage": "stage-3",
+      "expect": "error",
+      "code": "HORIZONTAL_LAYER_REJECTED",
+      "argv": [
+        "bin/validate-execution-dag",
+        "skills/verified-feature-delivery/tests/cases/stage-3/horizontal-missing-legs/execution-dag.json"
+      ],
+      "why": "slice touches unexempt files while failing to span trigger -> pure logic -> output verification"
+    },
+    {
+      "id": "s3-substrate-work-without-full-legs-accepted",
+      "stage": "stage-3",
+      "expect": "ok",
+      "code": null,
+      "argv": [
+        "bin/validate-execution-dag",
+        "skills/verified-feature-delivery/tests/cases/stage-3/substrate-work-accepted/execution-dag.json"
+      ],
+      "why": "slice whose touched files are all in derived substrate is accepted even though it does not span full legs"
+    },
+    {
+      "id": "s3-dim4-unlisted-strategy-refused",
+      "stage": "stage-3",
+      "expect": "error",
+      "code": "DIMENSION_UNRESOLVED",
+      "argv": [
+        "bin/decision-rules-cli",
+        "skills/verified-feature-delivery/tests/cases/stage-3/s3-dim4-unlisted-strategy-refused/slice-invariants.json"
+      ],
+      "why": "Dimension 4 strategy 'N/A' outside VALID_DIMENSION_4_STRATEGIES is refused with DIMENSION_UNRESOLVED"
+    },
+    {
+      "id": "s3-pure-module-prefix-collision-accepted",
+      "stage": "stage-3",
+      "expect": "ok",
+      "code": null,
+      "argv": [
+        "bin/validate-execution-dag",
+        "skills/verified-feature-delivery/tests/cases/stage-3/s3-pure-module-prefix-collision-accepted/execution-dag.json"
+      ],
+      "why": "pure module importing wsdl-parser sharing prefix with impure ws package is accepted"
+    },
+    {
+      "id": "s3-missing-slice-level",
+      "stage": "stage-3",
+      "expect": "error",
+      "code": "MISSING_SLICE_LEVEL",
+      "argv": [
+        "bin/validate-execution-dag",
+        "skills/verified-feature-delivery/tests/cases/stage-3/s3-missing-slice-level/execution-dag.json"
+      ],
+      "why": "slice missing slice_level declaration fails MISSING_SLICE_LEVEL"
+    },
+    {
+      "id": "s3-flow-slice-without-outcome",
+      "stage": "stage-3",
+      "expect": "error",
+      "code": "FLOW_SLICE_WITHOUT_OUTCOME",
+      "argv": [
+        "bin/validate-execution-dag",
+        "skills/verified-feature-delivery/tests/cases/stage-3/s3-flow-slice-without-outcome/execution-dag.json"
+      ],
+      "why": "FLOW slice missing user_visible_outcome fails FLOW_SLICE_WITHOUT_OUTCOME"
+    },
+    {
+      "id": "s3-slice-flow-ref-unknown",
+      "stage": "stage-3",
+      "expect": "error",
+      "code": "SLICE_FLOW_REF_UNKNOWN",
+      "argv": [
+        "bin/validate-execution-dag",
+        "skills/verified-feature-delivery/tests/cases/stage-3/s3-slice-flow-ref-unknown/execution-dag.json"
+      ],
+      "why": "slice referencing flow_id absent from companion scenario matrix flows fails SLICE_FLOW_REF_UNKNOWN"
+    },
+    {
+      "id": "s3-orphan-subtask-reachable-only-from-subtask",
+      "stage": "stage-3",
+      "expect": "error",
+      "code": "ORPHAN_SUBTASK_SLICE",
+      "argv": [
+        "bin/validate-execution-dag",
+        "skills/verified-feature-delivery/tests/cases/stage-3/s3-orphan-subtask-reachable-only-from-subtask/execution-dag.json"
+      ],
+      "why": "the subtask has an inbound edge -- from another SUBTASK, with no FLOW slice anywhere upstream. An in-degree test passes it; only a traversal to a FLOW slice catches it, and that is the property section 4.3 states."
+    },
+    {
+      "id": "s3-ui-slice-without-layout",
+      "stage": "stage-3",
+      "expect": "error",
+      "code": "UI_SLICE_WITHOUT_LAYOUT",
+      "argv": [
+        "bin/validate-execution-dag",
+        "skills/verified-feature-delivery/tests/cases/stage-3/s3-ui-slice-without-layout/execution-dag.json"
+      ],
+      "why": "slice whose verification medium is rendered_ui missing ui_layout fails UI_SLICE_WITHOUT_LAYOUT"
+    },
+    {
+      "id": "s3-subtask-reachable-from-flow-slice-accepted",
+      "stage": "stage-3",
+      "expect": "ok",
+      "code": null,
+      "argv": [
+        "bin/validate-execution-dag",
+        "skills/verified-feature-delivery/tests/cases/stage-3/s3-subtask-reachable-from-flow-slice-accepted/execution-dag.json"
+      ],
+      "why": "a DAG whose SUBTASK slices are each reachable from a FLOW slice validates clean, so the reachability check is a traversal rather than a ban on subtasks."
+    },
+    {
+      "id": "s4-fingerprint-collision",
+      "stage": "stage-4",
+      "expect": "error",
+      "code": "FINGERPRINT_COLLISION",
+      "argv": [
+        "bin/verify-projections",
+        "skills/verified-feature-delivery/tests/cases/stage-4/fingerprint-collision/projections.json",
+        "skills/verified-feature-delivery/tests/cases/stage-4/fingerprint-collision/scenario-matrix.json"
+      ],
+      "why": "two states the plan models separately render the same empty region, so their captured artifacts normalise to one projection and fingerprint alike for the operator; the raw markup differs, so a raw hash would pass this"
+    },
+    {
+      "id": "s4-projection-coverage-gap",
+      "stage": "stage-4",
+      "expect": "error",
+      "code": "PROJECTION_COVERAGE_GAP",
+      "argv": [
+        "bin/verify-projections",
+        "skills/verified-feature-delivery/tests/cases/stage-4/projection-coverage-gap/projections.json",
+        "skills/verified-feature-delivery/tests/cases/stage-4/projection-coverage-gap/scenario-matrix.json"
+      ],
+      "why": "the matrix declares an error state the suites never drove, so differencing its projection targets against the captured ones leaves one uncovered; the two captures that were taken fingerprint distinctly"
+    },
+    {
+      "id": "s4-provisional-fixture-outstanding",
+      "stage": "stage-4",
+      "expect": "error",
+      "code": "PROVISIONAL_FIXTURE_OUTSTANDING",
+      "argv": [
+        "bin/milestone-harness",
+        "skills/verified-feature-delivery/tests/cases/stage-4/provisional-outstanding"
+      ],
+      "why": "a PROVISIONAL_FROM_SCHEMA fixture pins a Stage 4 re-probe milestone that never ran, computed by differencing the pin against the milestones that ran and succeeded; every other obligation of the run is met"
+    },
+    {
+      "id": "s4-silent-boundary-degradation",
+      "stage": "stage-4",
+      "expect": "error",
+      "code": "SILENT_BOUNDARY_DEGRADATION",
+      "argv": [
+        "bin/milestone-harness",
+        "skills/verified-feature-delivery/tests/cases/stage-4/silent-boundary-degradation"
+      ],
+      "why": "a milestone answers 200 while its warning header carries the text the boundary's failure envelope census recorded for PartialResultTruncation, so the success signal and the census entry are matched from the capture rather than from a declared warning list"
+    },
+    {
+      "id": "s4-variance-shape-unexercised",
+      "stage": "stage-4",
+      "expect": "error",
+      "code": "VARIANCE_SHAPE_UNEXERCISED",
+      "argv": [
+        "bin/milestone-harness",
+        "skills/verified-feature-delivery/tests/cases/stage-4/variance-shape-unexercised"
+      ],
+      "why": "the fixture's samples recorded two shapes of one UNBOUNDED region and the suite asserted against one, with both sides computed as type signatures from the samples and the assertions rather than read from shape names"
+    },
+    {
+      "id": "s4-unclassified-boundary",
+      "stage": "stage-4",
+      "expect": "error",
+      "code": "UNCLASSIFIED_BOUNDARY",
+      "argv": [
+        "bin/milestone-harness",
+        "--evaluate-rollback",
+        "skills/verified-feature-delivery/tests/cases/stage-4/unclassified-boundary"
+      ],
+      "why": "a failed milestone traces to a UI runtime property no register row names, so nothing probed it; the cause is computed by differencing the traced property against the register, and the run records it under OTHER and raises an amendment"
+    },
+    {
+      "id": "s4-fingerprint-data-invariant",
+      "stage": "stage-4",
+      "expect": "ok",
+      "code": null,
+      "argv": [
+        "bin/verify-projections",
+        "--test-data-invariance",
+        "skills/verified-feature-delivery/tests/cases/stage-4/positive/data-invariant"
+      ],
+      "why": "two captures of one state differing only in data — count, query, result title, styling and test attributes — normalise to one projection and fingerprint alike; hashing either raw artifact gives two hashes, which is what makes this the direction that matters"
+    },
+    {
+      "id": "s4-fingerprint-wording-distinct",
+      "stage": "stage-4",
+      "expect": "ok",
+      "code": null,
+      "argv": [
+        "bin/verify-projections",
+        "--test-wording-distinct",
+        "skills/verified-feature-delivery/tests/cases/stage-4/positive/wording-distinct"
+      ],
+      "why": "two captures from one build differing only in the wording the operator reads fingerprint differently, which is what a normaliser that masks the visible text away would fail"
+    },
+    {
+      "id": "s4-capture-per-medium",
+      "stage": "stage-4",
+      "expect": "ok",
+      "code": null,
+      "argv": [
+        "bin/milestone-harness",
+        "--verify-all-media",
+        "skills/verified-feature-delivery/tests/cases/stage-4/positive/all-media"
+      ],
+      "why": "captureProjection fingerprints one real capture per medium — markup, a recorded response, a process result, a mutation record, a bus trace and a transcript — and the six are a closed set, so a missing one is refused"
+    },
+    {
+      "id": "s4-rollback-cause-routing",
+      "stage": "stage-4",
+      "expect": "ok",
+      "code": null,
+      "argv": [
+        "bin/milestone-harness",
+        "--test-rollback-routing",
+        "skills/verified-feature-delivery/tests/cases/stage-4/positive/rollback-routing"
+      ],
+      "why": "four scenarios, one per regression edge: each cause is computed from that scenario's artifacts, the target is looked up in bin/planner-state's transition table, and the state file is read back after the transition to see where it landed"
+    },
+    {
+      "id": "s4-valid-milestone-execution",
+      "stage": "stage-4",
+      "expect": "ok",
+      "code": null,
+      "argv": [
+        "bin/milestone-harness",
+        "skills/verified-feature-delivery/tests/cases/stage-4/positive/valid-milestone"
+      ],
+      "why": "a run that meets every Stage 4 obligation validates and writes its gate artifact, so the harness is not simply refusing everything"
+    },
+    {
+      "id": "s4-valid-projections",
+      "stage": "stage-4",
+      "expect": "ok",
+      "code": null,
+      "argv": [
+        "bin/verify-projections",
+        "skills/verified-feature-delivery/tests/cases/stage-4/positive/valid-projections/projections.json",
+        "skills/verified-feature-delivery/tests/cases/stage-4/positive/valid-projections/scenario-matrix.json"
+      ],
+      "why": "three states captured for two observers of different media cover every matrix target and fingerprint distinctly, so per-observer coverage and the collision check both pass on real captures"
+    },
+    {
+      "id": "s4-provisional-discharged-by-attributed-reprobe",
+      "stage": "stage-4",
+      "expect": "ok",
+      "code": null,
+      "argv": [
+        "bin/milestone-harness",
+        "skills/verified-feature-delivery/tests/cases/stage-4/positive/provisional-discharged-by-attributed-reprobe"
+      ],
+      "why": "a PROVISIONAL_FROM_SCHEMA fixture pins M2_UI_REPROBE, which execution-dag.json declares (passing the DAG-membership check) and whose milestones/executions.json record exits zero while attributing its capture to the fixture's own boundary_identifier react_client_runtime (passing the attribution check) -- discharging the fixture and letting the run pass. Removing M2_UI_REPROBE from execution-dag.json alone, with attribution unchanged, flips this same fixture to PINNED_REPROBE_MILESTONE_UNDECLARED: the DAG check runs first and is independent of attribution, so the two obligations do not substitute for each other."
+    },
+    {
+      "id": "s4-provisional-discharge-unattributed",
+      "stage": "stage-4",
+      "expect": "error",
+      "code": "PROVISIONAL_DISCHARGE_UNATTRIBUTED",
+      "argv": [
+        "bin/milestone-harness",
+        "skills/verified-feature-delivery/tests/cases/stage-4/provisional-discharge-unattributed"
+      ],
+      "why": "the same PROVISIONAL_FROM_SCHEMA fixture pins M2_UI_REPROBE, which execution-dag.json declares (passing the DAG-membership check), and a same-named record exits zero -- but that record's boundary_identifier is POST /v1/search, not the fixture's own react_client_runtime, so the fixture stays outstanding rather than being discharged by a zero exit that observed a different boundary"
+    },
+    {
+      "id": "s5-invalid-intent-header",
+      "stage": "stage-5",
+      "expect": "error",
+      "code": "INVALID_INTENT_HEADER",
+      "argv": [
+        "bin/verify-evidence",
+        "lint-intent",
+        "skills/verified-feature-delivery/tests/cases/stage-5/invalid-intent-header/delivery-report.json"
+      ],
+      "why": "an open ordering question filed under an invented [Update] heading instead of [Decision Needed] — the bleed that lets an unmade choice pass a delivery gate that only looks at the five headers"
+    },
+    {
+      "id": "s5-unresolved-decision-needed",
+      "stage": "stage-5",
+      "expect": "error",
+      "code": "UNRESOLVED_DECISION_NEEDED",
+      "argv": [
+        "bin/verify-evidence",
+        "check-gates",
+        "skills/verified-feature-delivery/tests/cases/stage-5/unresolved-decision/delivery-report.json"
+      ],
+      "why": "a [Decision Needed] offering two options and choosing neither; the open count is differenced from the sections themselves, so the report cannot state that it has none"
+    },
+    {
+      "id": "s5-unresolved-blocker",
+      "stage": "stage-5",
+      "expect": "error",
+      "code": "UNRESOLVED_BLOCKER",
+      "argv": [
+        "bin/verify-evidence",
+        "check-gates",
+        "skills/verified-feature-delivery/tests/cases/stage-5/unresolved-blocker/delivery-report.json"
+      ],
+      "why": "a [Blocker] with nothing recording that it was cleared; §4 refuses STAGE_5_DELIVERY to COMPLETED while one stands"
+    },
+    {
+      "id": "s5-missing-milestone-evidence",
+      "stage": "stage-5",
+      "expect": "error",
+      "code": "MISSING_MILESTONE_EVIDENCE",
+      "argv": [
+        "bin/verify-evidence",
+        "verify-medium",
+        "skills/verified-feature-delivery/tests/cases/stage-5/missing-milestone-evidence/delivery-report.json",
+        "skills/verified-feature-delivery/tests/cases/stage-5/missing-milestone-evidence/execution-dag.json"
+      ],
+      "why": "the plan commits two milestones and the report attaches an artifact for one; the census is the plan's, so a slice reported delivered on a green test run with nothing captured is visible"
+    },
+    {
+      "id": "s5-evidence-medium-mismatch",
+      "stage": "stage-5",
+      "expect": "error",
+      "code": "EVIDENCE_MEDIUM_MISMATCH",
+      "argv": [
+        "bin/verify-evidence",
+        "verify-medium",
+        "skills/verified-feature-delivery/tests/cases/stage-5/evidence-medium-mismatch/delivery-report.json",
+        "skills/verified-feature-delivery/tests/cases/stage-5/evidence-medium-mismatch/execution-dag.json"
+      ],
+      "why": "a rendered_ui milestone evidenced by its test runner's exit code and stdout; the artifact exists and is non-empty, and fails only because a log line that a test passed is not evidence that a state was observable"
+    },
+    {
+      "id": "s5-evidence-claim-inadmissible",
+      "stage": "stage-5",
+      "expect": "error",
+      "code": "EVIDENCE_CLAIM_INADMISSIBLE",
+      "argv": [
+        "bin/verify-evidence",
+        "verify-claim",
+        "skills/verified-feature-delivery/tests/cases/stage-5/medium-match-claim-mismatch/delivery-report.json",
+        "skills/verified-feature-delivery/tests/cases/stage-5/medium-match-claim-mismatch/execution-dag.json"
+      ],
+      "why": "the same fixture s5-medium-match-claim-mismatch accepts on the medium axis, refused here on the claim axis: the snapshot carries no geometry, so it reads identically at every viewport and cannot evidence a viewport floor"
+    },
+    {
+      "id": "s5-claim-without-accepted-constraint",
+      "stage": "stage-5",
+      "expect": "error",
+      "code": "CLAIM_WITHOUT_ACCEPTED_CONSTRAINT",
+      "argv": [
+        "bin/verify-evidence",
+        "verify-claim",
+        "skills/verified-feature-delivery/tests/cases/stage-5/claim-without-accepted-constraint/delivery-report.json",
+        "skills/verified-feature-delivery/tests/cases/stage-5/claim-without-accepted-constraint/execution-dag.json"
+      ],
+      "why": "the plan commits the milestone to a viewport-floor claim and the delivery neither offers evidence for it nor emits it as an [Accepted Constraint]; every claim it does evaluate is admissible, so the only defect is the one it dropped"
+    },
+    {
+      "id": "s5-low-level-code-noise",
+      "stage": "stage-5",
+      "expect": "error",
+      "code": "LOW_LEVEL_CODE_NOISE",
+      "argv": [
+        "bin/verify-evidence",
+        "lint-abstraction",
+        "skills/verified-feature-delivery/tests/cases/stage-5/low-level-code-noise/delivery-report.json"
+      ],
+      "why": "a [Milestone] summary that is a line of source with a state hook and a request call in it; refused on code-syntax density, not on a keyword, so a summary naming a boundary binding in prose still passes"
+    },
+    {
+      "id": "s5-valid-report",
+      "stage": "stage-5",
+      "expect": "ok",
+      "code": null,
+      "argv": [
+        "bin/verify-evidence",
+        "check-all",
+        "skills/verified-feature-delivery/tests/cases/stage-5/valid-report/delivery-report.json",
+        "skills/verified-feature-delivery/tests/cases/stage-5/valid-report/execution-dag.json"
+      ],
+      "why": "three milestones across three media, every header from the closed five, a resolved [Decision Needed], and a viewport-floor claim carrying real geometry measured at 360 pixels — so the layout claim is shown to be admissible when the harness can actually measure it, not refused on principle"
+    },
+    {
+      "id": "s5-accepted-constraint-discharges-claim",
+      "stage": "stage-5",
+      "expect": "ok",
+      "code": null,
+      "argv": [
+        "bin/verify-evidence",
+        "check-all",
+        "skills/verified-feature-delivery/tests/cases/stage-5/accepted-constraint/delivery-report.json",
+        "skills/verified-feature-delivery/tests/cases/stage-5/accepted-constraint/execution-dag.json"
+      ],
+      "why": "the same undischargeable viewport-floor claim as s5-evidence-claim-inadmissible, this time emitted as an [Accepted Constraint] naming what was not verified and how it was checked instead — the escape hatch is a first-class outcome and passes the whole exit gate, not a broken gate to be switched off"
+    },
+    {
+      "id": "s5-medium-match-claim-mismatch",
+      "stage": "stage-5",
+      "expect": "ok",
+      "code": null,
+      "argv": [
+        "bin/verify-evidence",
+        "prove-axis-independence",
+        "skills/verified-feature-delivery/tests/cases/stage-5/medium-match-claim-mismatch/delivery-report.json",
+        "skills/verified-feature-delivery/tests/cases/stage-5/medium-match-claim-mismatch/execution-dag.json"
+      ],
+      "why": "one fixture run through both axes: the medium axis accepts the rendered_ui snapshot and the claim axis refuses the layout claim on it, and the run succeeds only when the two disagree — a checker that ran one axis, or ran the second as a copy of the first, fails here"
+    },
+    {
+      "id": "s5-changelog-from-evidence",
+      "stage": "stage-5",
+      "expect": "ok",
+      "code": null,
+      "argv": [
+        "bin/generate-changelog",
+        "skills/verified-feature-delivery/tests/cases/stage-5/valid-report/delivery-report.json",
+        "skills/verified-feature-delivery/tests/cases/stage-5/valid-report/execution-dag.json"
+      ],
+      "why": "the release record is compiled from the verified milestone evidence record and never from the version-control log, so only a flow slice with an admissible artifact behind it reaches it"
+    }
+  ]
+}

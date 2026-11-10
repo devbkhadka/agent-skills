@@ -1,0 +1,80 @@
+{
+  "schema_version": "1.0.0",
+  "feature_slug": "unknown-state-attribute-fixture",
+  "updated_at": "2026-08-22T11:00:00Z",
+  "actors": [
+    {
+      "actor_id": "operator",
+      "description": "Interactive user"
+    }
+  ],
+  "observers": [
+    {
+      "observer_id": "operator",
+      "medium": "rendered_ui"
+    }
+  ],
+  "triggers": [
+    {
+      "trigger_id": "submit_query",
+      "actor_id": "operator",
+      "is_actor_repeatable": false,
+      "description": "Submit query"
+    }
+  ],
+  "branch_coverage": {
+    "group_a_resource_and_state": [
+      { "class_name": "ORPHANED_DELETED_TARGET_STATES", "status": "NOT_APPLICABLE", "inapplicable_reason": "No entities deleted." },
+      { "class_name": "RESOURCE_LEAK_AND_TERMINATION_INVARIANTS", "status": "ADDRESSED", "handling_description": "Clean disposal." },
+      { "class_name": "EVENT_ORDERING_AND_MONOTONIC_SEQUENCE_CLOCKS", "status": "NOT_APPLICABLE", "inapplicable_reason": "Linear flow." },
+      { "class_name": "INGRESS_HANDOFF_DURABILITY", "status": "NOT_APPLICABLE", "inapplicable_reason": "Synchronous call." },
+      { "class_name": "TEMPORAL_EGRESS_FROM_FINITE_LIFESPAN_STATES", "status": "NOT_APPLICABLE", "inapplicable_reason": "No timeouts." },
+      { "class_name": "COMPOUND_PUBLICATION_ORDERING", "status": "NOT_APPLICABLE", "inapplicable_reason": "Single entity." },
+      { "class_name": "OPERATIONAL_EDGE_CASES", "status": "ADDRESSED", "handling_description": "Error mapping." }
+    ],
+    "group_b_trigger_and_observation": [
+      { "class_name": "REPEAT_TRIGGER_OUT_OF_ORDER_SETTLEMENT", "status": "NOT_APPLICABLE", "inapplicable_reason": "Non-repeatable trigger." },
+      { "class_name": "DUPLICATE_TRIGGER", "status": "NOT_APPLICABLE", "inapplicable_reason": "Non-repeatable trigger." },
+      { "class_name": "OBSERVER_TEARDOWN_MID_FLIGHT", "status": "ADDRESSED", "handling_description": "Cleanup hook." },
+      { "class_name": "STALE_OUTPUT_SUPERSESSION", "status": "NOT_APPLICABLE", "inapplicable_reason": "Non-repeatable trigger." },
+      { "class_name": "SEMANTIC_CONTRADICTION", "status": "NOT_APPLICABLE", "inapplicable_reason": "No conflicting filters." }
+    ]
+  },
+  "states": [
+    {
+      "state_id": "IDLE",
+      "evidence_key": "state:IDLE",
+      "is_initial": true,
+      "is_terminal": false,
+      "observable_projections": [
+        {
+          "observer_id": "operator",
+          "medium": "rendered_ui",
+          "discriminator": { "template": "idle" }
+        }
+      ]
+    },
+    {
+      "state_id": "SEARCHING",
+      "evidence_key": "state:SEARCHING",
+      "superseded_by_mode": "DIMMED",
+      "is_initial": false,
+      "is_terminal": true,
+      "terminal_classification": "TERMINAL_SUCCESS",
+      "observable_projections": [
+        {
+          "observer_id": "operator",
+          "medium": "rendered_ui",
+          "discriminator": { "template": "searching" }
+        }
+      ]
+    }
+  ],
+  "transitions": [
+    {
+      "transition_id": "t1",
+      "from_state": "IDLE",
+      "to_state": "SEARCHING"
+    }
+  ]
+}

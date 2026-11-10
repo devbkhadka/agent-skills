@@ -1,0 +1,41 @@
+{
+  "schema_version": "1.0.0",
+  "boundary_class": "NETWORK_API",
+  "boundary_identifier": "GET /rest/api/3/search/jql",
+  "property_name": "error_envelope_shapes",
+  "fixture_status": "PROBED_LIVE",
+  "pinned_reprobe_milestone": null,
+  "contract_reference": "https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issue-search/#api-rest-api-3-search-jql-get",
+  "contract_variant_selectors": [],
+  "success_samples": [
+    {
+      "sample_id": "sample_search_ok",
+      "partition_cell": {},
+      "status_code": 200,
+      "exit_code": null,
+      "headers": {
+        "content-type": "application/json"
+      },
+      "payload": {
+        "status": "ok",
+        "total": 1
+      }
+    }
+  ],
+  "failure_envelope_census": [
+    {
+      "envelope_id": "jira_error_envelope_format",
+      "error_class": "VALIDATION_ERROR",
+      "status_code": 400,
+      "exit_code": null,
+      "payload_type": "JSON",
+      "payload": {
+        "errorMessages": [
+          "Error in the JQL Query"
+        ],
+        "errors": {}
+      },
+      "description": "Canonical Jira Cloud REST API v3 error envelope containing errorMessages array and errors object."
+    }
+  ]
+}

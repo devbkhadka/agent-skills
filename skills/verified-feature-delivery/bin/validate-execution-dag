@@ -1,0 +1,924 @@
+#!/usr/bin/env python3
+"""Stage 3 Gate Validator: validate-execution-dag.
+
+Owner: stage-3
+Purpose: Validates execution DAG for strict acyclicity, Slice 1 composition against bootstrap floor,
+derived substrate exemptions, computed module purity, attention-return edges, concurrency budgets,
+and transaction/compensation boundaries.
+
+Exit Codes:
+- 0: Execution DAG validated clean (prints EXECUTION_DAG_VALIDATED_CLEAN)
+- Non-zero: Emits bare error code token on stderr/stdout
+
+Supported Error Codes:
+- CONCURRENCY_OVER_PROBED_CAPACITY
+- DAG_CYCLE
+- DANGLING_ATTENTION_RETURN
+- DIMENSION_4_INAPPLICABLE_ON_REPEATABLE_TRIGGER
+- DIMENSION_UNRESOLVED
+- HORIZONTAL_LAYER_REJECTED
+- IMPURE_PURE_MODULE
+- IMPURE_TEST_IMPORT
+- MISSING_VERIFICATION_MEDIUM
+- SHARED_SUBSTRATE_DECLARED
+- SLICE_1_COMPOSITION_VIOLATION
+- SLICE_MISSING_VERIFICATION_SCRIPT
+- TRANSACTION_BOUNDARY_SPLIT
+"""
+
+import argparse
+import json
+import os
+from pathlib import Path
+import re
+import sys
+from typing import Any, Dict, List, Optional, Set, Tuple
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from lib.primitives import (
+    check_closed_key_set,
+    detect_repeatable_trigger,
+    is_reason_meaningful,
+    is_vacuous_container,
+)
+
+CANONICAL_VERIFICATION_MEDIA = {
+    "rendered_ui",
+    "api_response",
+    "process_exit",
+    "datastore_state",
+    "device_actuation",
+    "agent_transcript",
+}
+
+CANONICAL_DIMENSIONS = [
+    ("1_slicing_topology", ["1_slicing_topology", "slicing_topology", "slicing_strategy", "dimension_1"]),
+    ("2_execution_semantics", ["2_execution_semantics", "execution_semantics", "dimension_2"]),
+    ("3_state_and_lifecycle", ["3_state_and_lifecycle", "state_and_lifecycle", "state_lifecycle", "dimension_3"]),
+    ("4_idempotency_and_ordering", ["4_idempotency_and_ordering", "idempotency_and_ordering", "idempotency_sequence_ordering", "dimension_4", "ordering_strategy"]),
+    ("5_external_boundaries", ["5_external_boundaries", "external_boundaries", "external_boundaries_resource_lifecycle", "dimension_5"]),
+    ("6_observation_and_actor_modality", ["6_observation_and_actor_modality", "observation_and_actor_modality", "observation_actor_modality", "dimension_6", "actor_modality"]),
+]
+
+IMPURE_FRAMEWORKS = {
+    "react", "react-dom", "@angular", "vue", "svelte", "express", "fastify",
+    "koa", "nestjs", "@nestjs", "next", "nuxt", "django", "flask", "fastapi",
+    "spring", "fiber", "gin"
+}
+
+IMPURE_TRANSPORTS = {
+    "axios", "fetch", "node-fetch", "got", "superagent", "urllib", "requests",
+    "aiohttp", "httpx", "http", "https", "ws", "websocket", "grpc", "@grpc",
+    "socket.io", "socket.io-client", "amqplib", "bullmq", "redis", "ioredis",
+    "pg", "mysql", "mysql2", "sqlite3", "@prisma/client", "prisma", "typeorm",
+    "sequelize", "mongoose"
+}
+
+IMPURE_DEVICES = {
+    "serial", "serialport", "ble", "bluetooth", "noble", "camera", "i2c",
+    "gpio", "onoff", "usb", "webusb", "webbluetooth"
+}
+
+IMPURE_MODELS = {
+    "openai", "@openai", "anthropic", "@anthropic-ai/sdk", "langchain", "llama",
+    "torch", "tensorflow", "transformers", "huggingface", "@google/generative-ai"
+}
+
+IMPURE_TEST_PACKAGES = {
+    "@testing-library", "@testing-library/react", "@testing-library/dom",
+    "@testing-library/vue", "@testing-library/svelte", "jsdom", "happy-dom",
+    "cypress", "playwright", "puppeteer", "selenium", "react-dom"
+}
+
+
+def extract_imports_from_source(source_code: str) -> List[str]:
+    """Extract imported package and module paths from JS/TS/Python source."""
+    imports = []
+    # JS/TS import ... from '...'; import '...'; export ... from '...';
+    js_import_pattern = r'''(?:import|export)\s+(?:(?:[\w*\s{},$]+)\s+from\s+)?['"]([^'"]+)['"]'''
+    for match in re.finditer(js_import_pattern, source_code):
+        imports.append(match.group(1))
+    # JS require('...') and import('...')
+    require_pattern = r'''(?:require|import)\s*\(\s*['"]([^'"]+)['"]\s*\)'''
+    for match in re.finditer(require_pattern, source_code):
+        imports.append(match.group(1))
+    # Python import x, from x import y
+    py_import_pattern = r'''^\s*(?:from\s+([a-zA-Z0-9_.]+)\s+import|import\s+([a-zA-Z0-9_.,\s]+))'''
+    for match in re.finditer(py_import_pattern, source_code, re.MULTILINE):
+        if match.group(1):
+            imports.append(match.group(1))
+        elif match.group(2):
+            for part in match.group(2).split(','):
+                pkg = part.strip().split()[0] if part.strip() else ""
+                if pkg:
+                    imports.append(pkg)
+    return imports
+
+
+def resolve_file_on_disk(rel_path: str, search_roots: List[Path]) -> Optional[Path]:
+    """Try to find an existing file matching rel_path under candidate search roots."""
+    p = Path(rel_path)
+    if p.is_file():
+        return p.resolve()
+
+    extensions = ["", ".ts", ".tsx", ".js", ".jsx", ".py", "/index.ts", "/index.tsx", "/index.js", "/index.jsx"]
+    for root in search_roots:
+        for ext in extensions:
+            cand = (root / f"{rel_path}{ext}").resolve()
+            if cand.is_file():
+                return cand
+            cand_direct = root / rel_path
+            if cand_direct.is_file():
+                return cand_direct.resolve()
+    return None
+
+
+def get_transitive_imports(file_path: Path, search_roots: List[Path]) -> Tuple[Set[str], Set[Path]]:
+    """Recursively walk local import graph and collect all external package imports and visited files."""
+    visited_files: Set[Path] = set()
+    external_packages: Set[str] = set()
+    queue: List[Path] = [file_path]
+
+    while queue:
+        current_file = queue.pop(0)
+        resolved_current = current_file.resolve()
+        if resolved_current in visited_files:
+            continue
+        visited_files.add(resolved_current)
+
+        try:
+            source = resolved_current.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            continue
+
+        raw_imports = extract_imports_from_source(source)
+        file_parent = resolved_current.parent
+
+        for imp in raw_imports:
+            if imp.startswith(".") or imp.startswith("/"):
+                resolved_local = resolve_file_on_disk(imp, [file_parent] + search_roots)
+                if resolved_local and resolved_local not in visited_files:
+                    queue.append(resolved_local)
+            else:
+                external_packages.add(imp)
+    
+    return external_packages, visited_files
+
+
+def extract_package_names(pkg_name: str) -> Set[str]:
+    """Extract candidate package identifiers from import path.
+
+    For scoped package specifiers (e.g. '@angular/core/subpath', '@testing-library/react'):
+    returns {'@angular', '@angular/core'} or {'@testing-library', '@testing-library/react'}.
+    For non-scoped package specifiers (e.g. 'express/router', 'wsdl-parser'):
+    returns {'express'} or {'wsdl-parser'}.
+    """
+    norm = pkg_name.lower().strip()
+    if not norm:
+        return set()
+    parts = norm.split("/")
+    if norm.startswith("@"):
+        names = {parts[0]}
+        if len(parts) >= 2:
+            names.add(f"{parts[0]}/{parts[1]}")
+        return names
+    return {parts[0]}
+
+
+def is_package_impure(pkg_name: str) -> Optional[str]:
+    """Check if package name belongs to framework, transport, device, or model libraries."""
+    pkgs = extract_package_names(pkg_name)
+    
+    for fw in IMPURE_FRAMEWORKS:
+        if fw in pkgs:
+            return f"Framework package '{pkg_name}'"
+    for tr in IMPURE_TRANSPORTS:
+        if tr in pkgs:
+            return f"Transport/I/O package '{pkg_name}'"
+    for dev in IMPURE_DEVICES:
+        if dev in pkgs:
+            return f"Device package '{pkg_name}'"
+    for mdl in IMPURE_MODELS:
+        if mdl in pkgs:
+            return f"Model/AI package '{pkg_name}'"
+    return None
+
+
+def is_test_package_impure(pkg_name: str) -> Optional[str]:
+    """Check if test package belongs to DOM renderers, frameworks, or transports."""
+    pkgs = extract_package_names(pkg_name)
+
+    for tp in IMPURE_TEST_PACKAGES:
+        if tp in pkgs:
+            return f"DOM/rendering test package '{pkg_name}'"
+    general_impure = is_package_impure(pkg_name)
+    if general_impure:
+        return general_impure
+    return None
+
+
+def find_dimension_value(data: dict, keys: List[str]) -> Any:
+    """Find dimension value across locked_dimensions, dimensions, rules, or root."""
+    containers = [
+        data.get("locked_dimensions"),
+        data.get("dimensions"),
+        data.get("rules"),
+        data,
+    ]
+    for container in containers:
+        if isinstance(container, dict):
+            for k in keys:
+                if k in container and container[k] is not None:
+                    return container[k]
+    return None
+
+
+def check_shared_substrate_declared(data: Any) -> bool:
+    """Recursively check if shared_substrate was declared anywhere in the data."""
+    if isinstance(data, dict):
+        if "shared_substrate" in data:
+            return True
+        for k, v in data.items():
+            if check_shared_substrate_declared(v):
+                return True
+    elif isinstance(data, list):
+        for item in data:
+            if check_shared_substrate_declared(item):
+                return True
+    return False
+
+
+def check_slice_spans_vertical_legs(sl: dict) -> bool:
+    """Check if a slice spans the required vertical legs: Trigger -> Core Pure Logic -> Output Verification."""
+    legs = sl.get("legs")
+    if not isinstance(legs, dict) or is_vacuous_container(legs):
+        # Also check if legs are top-level properties on slice
+        trig = sl.get("trigger")
+        core = sl.get("core_pure_logic")
+        out = sl.get("output_verification")
+        if trig and not is_vacuous_container(trig) and core and not is_vacuous_container(core) and out and not is_vacuous_container(out):
+            return True
+        return False
+
+    trigger = legs.get("trigger")
+    if trigger is None or is_vacuous_container(trigger):
+        return False
+
+    core_logic = legs.get("core_pure_logic")
+    if core_logic is None or is_vacuous_container(core_logic):
+        return False
+
+    out_verif = legs.get("output_verification")
+    if out_verif is None or is_vacuous_container(out_verif):
+        return False
+
+    return True
+
+
+def validate_execution_dag_dict(data: dict, file_path: Optional[Path] = None) -> Tuple[bool, Optional[str], str]:
+    """Validate execution DAG against Stage 3 architectural specifications.
+
+    Returns (is_valid: bool, error_code: Optional[str], message: str).
+    """
+    if not isinstance(data, dict):
+        return False, "MISSING_GATE_ARTIFACT", "Execution DAG root must be a JSON object"
+
+    # -------------------------------------------------------------
+    # 1. Check: SHARED_SUBSTRATE_DECLARED (Self-declared substrate is banned)
+    # -------------------------------------------------------------
+    if check_shared_substrate_declared(data):
+        return (
+            False,
+            "SHARED_SUBSTRATE_DECLARED",
+            "shared_substrate is absent by design and computed by DAG validator; declared shared_substrate is rejected",
+        )
+
+    if file_path and file_path.is_file():
+        companion_invariants = file_path.parent / "slice-invariants.json"
+        if companion_invariants.is_file():
+            try:
+                with open(companion_invariants, "r", encoding="utf-8") as f:
+                    inv_data = json.load(f)
+                if check_shared_substrate_declared(inv_data):
+                    return (
+                        False,
+                        "SHARED_SUBSTRATE_DECLARED",
+                        "shared_substrate declared in slice-invariants.json; substrate must be computed from DAG",
+                    )
+            except Exception:
+                pass
+
+    # -------------------------------------------------------------
+    # 2. Check Dimensions & DIMENSION_4_INAPPLICABLE_ON_REPEATABLE_TRIGGER
+    # -------------------------------------------------------------
+    locked_dims = data.get("locked_dimensions")
+    if locked_dims is None and file_path and file_path.is_file():
+        companion_invariants = file_path.parent / "slice-invariants.json"
+        if companion_invariants.is_file():
+            try:
+                with open(companion_invariants, "r", encoding="utf-8") as f:
+                    inv_data = json.load(f)
+                if isinstance(inv_data, dict):
+                    locked_dims = inv_data.get("locked_dimensions")
+            except Exception:
+                pass
+
+    if isinstance(locked_dims, dict):
+        dim4_val = find_dimension_value(locked_dims, ["4_idempotency_and_ordering", "idempotency_and_ordering", "dimension_4", "ordering_strategy"])
+        if dim4_val:
+            dim4_strategy = dim4_val.get("strategy") if isinstance(dim4_val, dict) else str(dim4_val)
+            if dim4_strategy and str(dim4_strategy).strip().upper() in ["NOT_APPLICABLE", "INAPPLICABLE"]:
+                if detect_repeatable_trigger(data, file_path):
+                    return (
+                        False,
+                        "DIMENSION_4_INAPPLICABLE_ON_REPEATABLE_TRIGGER",
+                        "Dimension 4 may not be marked NOT_APPLICABLE while any trigger is actor-repeatable",
+                    )
+
+    # -------------------------------------------------------------
+    # 3. Check Slices Structure & DAG Acyclicity (DAG_CYCLE)
+    # -------------------------------------------------------------
+    slices = data.get("slices")
+    if not isinstance(slices, list) or len(slices) == 0 or is_vacuous_container(slices):
+        return False, "MISSING_GATE_ARTIFACT", "Execution DAG requires non-empty slices array"
+
+    slice_ids: Set[str] = set()
+    slice_map: Dict[str, dict] = {}
+    graph: Dict[str, List[str]] = {}
+
+    for sl in slices:
+        if not isinstance(sl, dict):
+            return False, "MISSING_GATE_ARTIFACT", "Slice item must be a JSON object"
+        sid = sl.get("slice_id")
+        if not sid or not isinstance(sid, str) or is_vacuous_container(sid):
+            return False, "MISSING_GATE_ARTIFACT", "Slice item missing valid non-empty slice_id"
+        slice_ids.add(sid)
+        slice_map[sid] = sl
+        graph[sid] = []
+
+    for sid, sl in slice_map.items():
+        deps = sl.get("dependencies", [])
+        if isinstance(deps, list):
+            for dep in deps:
+                if dep in slice_map:
+                    graph[sid].append(dep)
+
+    # Cycle Detection via DFS (0 = unvisited, 1 = visiting, 2 = visited)
+    visited_state: Dict[str, int] = {sid: 0 for sid in slice_ids}
+
+    def has_cycle(node: str) -> bool:
+        visited_state[node] = 1
+        for neighbor in graph.get(node, []):
+            if visited_state.get(neighbor) == 1:
+                return True
+            if visited_state.get(neighbor) == 0:
+                if has_cycle(neighbor):
+                    return True
+        visited_state[node] = 2
+        return False
+
+    for sid in slice_ids:
+        if visited_state[sid] == 0:
+            if has_cycle(sid):
+                return (
+                    False,
+                    "DAG_CYCLE",
+                    f"Directed cycle detected in DAG slice dependencies starting at slice '{sid}'",
+                )
+
+    search_roots: List[Path] = []
+    if file_path and file_path.is_file():
+        search_roots.append(file_path.parent)
+        if file_path.parent.parent.is_dir():
+            search_roots.append(file_path.parent.parent)
+    search_roots.append(Path.cwd())
+    skill_root = Path(__file__).resolve().parent.parent
+    search_roots.append(skill_root)
+
+    bootstrap_floor = data.get("bootstrap_floor", [])
+    bootstrap_set = set(bootstrap_floor) if isinstance(bootstrap_floor, list) else set()
+
+    # -------------------------------------------------------------
+    # 4. Compute Derived Substrate from Multi-Slice Reads
+    # -------------------------------------------------------------
+    file_readers: Dict[str, Set[str]] = {}
+    for sl in slices:
+        sid = sl.get("slice_id")
+        reads = sl.get("files_read", [])
+        if isinstance(reads, list):
+            for rf in reads:
+                if rf not in file_readers:
+                    file_readers[rf] = set()
+                file_readers[rf].add(sid)
+
+    derived_substrate_files = {f for f, rset in file_readers.items() if len(rset) >= 2}
+
+    # -------------------------------------------------------------
+    # 5. Check: SLICE_1_COMPOSITION_VIOLATION
+    # -------------------------------------------------------------
+    if bootstrap_set:
+        slice_1 = None
+        for sl in slices:
+            if sl.get("is_slice_1") is True:
+                slice_1 = sl
+                break
+        if not slice_1 and len(slices) > 0:
+            for sl in slices:
+                if len(sl.get("dependencies", [])) == 0:
+                    slice_1 = sl
+                    break
+            if not slice_1:
+                slice_1 = slices[0]
+
+        if slice_1:
+            slice_1_touched = set(slice_1.get("files_touched", []))
+            slice_1_read = set(slice_1.get("files_read", []))
+            slice_1_all_files = slice_1_touched | slice_1_read
+
+            disallow_set: Set[str] = set()
+            if isinstance(data.get("rules"), dict):
+                disallow_set.update(data["rules"].get("disallow_in_slice_1", []))
+            if isinstance(data.get("validation"), dict):
+                disallow_set.update(data["validation"].get("reject_if_touches", []))
+            if isinstance(locked_dims, dict):
+                top_dim = locked_dims.get("1_slicing_topology", {})
+                if isinstance(top_dim, dict):
+                    disallow_set.update(top_dim.get("disallow_in_slice_1", []))
+
+            for f in slice_1_all_files:
+                for dis in disallow_set:
+                    dis_clean = dis.rstrip("*")
+                    if f == dis_clean or f.startswith(dis_clean):
+                        return (
+                            False,
+                            "SLICE_1_COMPOSITION_VIOLATION",
+                            f"Slice 1 includes disallowed file '{f}' matching pattern '{dis}'",
+                        )
+
+    # -------------------------------------------------------------
+    # 6. Check: Computed Horizontality (HORIZONTAL_LAYER_REJECTED)
+    #    A slice that touches files while failing to span Trigger -> Pure Logic -> Output Verification
+    #    is layering, and is rejected UNLESS every file it touches is in derived substrate or bootstrap floor.
+    # -------------------------------------------------------------
+    allowed_foundation = derived_substrate_files | bootstrap_set
+    for sl in slices:
+        sid = sl.get("slice_id")
+        spans_legs = check_slice_spans_vertical_legs(sl)
+        touched = set(sl.get("files_touched", [])) | set(sl.get("files_written", [])) | set(sl.get("files_read", []))
+
+        if not spans_legs:
+            if touched:
+                unexempt_files = touched - allowed_foundation
+                if unexempt_files:
+                    return (
+                        False,
+                        "HORIZONTAL_LAYER_REJECTED",
+                        f"Slice '{sid}' touches unexempt files {sorted(list(unexempt_files))} without spanning full vertical legs (Trigger -> Pure Logic -> Output Verification)",
+                    )
+
+    # -------------------------------------------------------------
+    # 7. Check: Computed Purity (IMPURE_PURE_MODULE) & (IMPURE_TEST_IMPORT)
+    # -------------------------------------------------------------
+    declared_pure_modules: Set[str] = set(data.get("pure_modules", []))
+    for sl in slices:
+        legs = sl.get("legs", {})
+        if isinstance(legs, dict):
+            core = legs.get("core_pure_logic", {})
+            if isinstance(core, dict):
+                for pm in core.get("pure_module_files", []):
+                    declared_pure_modules.add(pm)
+        if isinstance(sl.get("pure_modules"), list):
+            for pm in sl["pure_modules"]:
+                declared_pure_modules.add(pm)
+
+    for pm in declared_pure_modules:
+        resolved_pm = resolve_file_on_disk(pm, search_roots)
+        if resolved_pm:
+            external_pkgs, visited = get_transitive_imports(resolved_pm, search_roots)
+            for pkg in external_pkgs:
+                impure_reason = is_package_impure(pkg)
+                if impure_reason:
+                    return (
+                        False,
+                        "IMPURE_PURE_MODULE",
+                        f"Declared pure module '{pm}' transitively reaches impure {impure_reason}",
+                    )
+
+    for sl in slices:
+        legs = sl.get("legs", {})
+        core = legs.get("core_pure_logic", {}) if isinstance(legs, dict) else {}
+        is_pure_assertable = (
+            (isinstance(core, dict) and core.get("assertable_without_rendering") is True) or
+            sl.get("assertable_without_rendering") is True
+        )
+        if is_pure_assertable:
+            test_files: List[str] = []
+            if isinstance(core, dict) and core.get("test_file"):
+                test_files.append(core["test_file"])
+            for f in sl.get("files_touched", []) + sl.get("files_read", []):
+                if "test" in f.lower() or "spec" in f.lower():
+                    test_files.append(f)
+
+            for tf in test_files:
+                resolved_tf = resolve_file_on_disk(tf, search_roots)
+                if resolved_tf:
+                    external_pkgs, _ = get_transitive_imports(resolved_tf, search_roots)
+                    for pkg in external_pkgs:
+                        test_impure_reason = is_test_package_impure(pkg)
+                        if test_impure_reason:
+                            return (
+                                False,
+                                "IMPURE_TEST_IMPORT",
+                                f"Criterion assertable-without-rendering test '{tf}' imports impure {test_impure_reason}",
+                            )
+
+    # -------------------------------------------------------------
+    # 8. Check: Output Verification Medium (MISSING_VERIFICATION_MEDIUM)
+    # -------------------------------------------------------------
+    for sl in slices:
+        sid = sl.get("slice_id")
+        spans_legs = check_slice_spans_vertical_legs(sl)
+        legs = sl.get("legs", {})
+        out_verif = legs.get("output_verification", {}) if isinstance(legs, dict) else {}
+        medium = None
+        if isinstance(out_verif, dict):
+            medium = out_verif.get("verification_medium") or out_verif.get("medium")
+        if not medium:
+            medium = sl.get("verification_medium")
+
+        # Required on all full vertical slices or any slice that defines output verification
+        if spans_legs or out_verif or medium:
+            if not medium or is_vacuous_container(medium) or medium not in CANONICAL_VERIFICATION_MEDIA:
+                return (
+                    False,
+                    "MISSING_VERIFICATION_MEDIUM",
+                    f"Slice '{sid}' lacks valid verification_medium; allowed media are: {sorted(list(CANONICAL_VERIFICATION_MEDIA))}",
+                )
+
+    # -------------------------------------------------------------
+    # 9. Check: Verification Script on Disk (SLICE_MISSING_VERIFICATION_SCRIPT)
+    # -------------------------------------------------------------
+    for sl in slices:
+        sid = sl.get("slice_id")
+        spans_legs = check_slice_spans_vertical_legs(sl)
+        legs = sl.get("legs", {})
+        out_verif = legs.get("output_verification", {}) if isinstance(legs, dict) else {}
+        script_path = None
+        if isinstance(out_verif, dict):
+            script_path = out_verif.get("verification_script")
+        if not script_path:
+            script_path = sl.get("verification_script")
+
+        if spans_legs or out_verif or script_path:
+            if not script_path or is_vacuous_container(script_path):
+                return (
+                    False,
+                    "SLICE_MISSING_VERIFICATION_SCRIPT",
+                    f"Slice '{sid}' missing verification_script path",
+                )
+
+            resolved_script = resolve_file_on_disk(script_path, search_roots)
+            if not resolved_script or not resolved_script.is_file():
+                return (
+                    False,
+                    "SLICE_MISSING_VERIFICATION_SCRIPT",
+                    f"Slice '{sid}' verification script '{script_path}' does not exist on disk",
+                )
+
+    # -------------------------------------------------------------
+    # 10. Check: Attention Return Edges (DANGLING_ATTENTION_RETURN)
+    # -------------------------------------------------------------
+    for sl in slices:
+        sid = sl.get("slice_id")
+        actor_mod = sl.get("actor_modality", {})
+        att_return = actor_mod.get("attention_return") if isinstance(actor_mod, dict) else sl.get("attention_return")
+        if att_return and isinstance(att_return, dict) and not is_vacuous_container(att_return):
+            dest_slice = att_return.get("destination_slice") or att_return.get("to_slice")
+            if not dest_slice or is_vacuous_container(dest_slice) or dest_slice not in slice_ids:
+                return (
+                    False,
+                    "DANGLING_ATTENTION_RETURN",
+                    f"Slice '{sid}' attention_return targets non-existent destination slice '{dest_slice}'",
+                )
+
+    # -------------------------------------------------------------
+    # 11. Check: Concurrency Budget (CONCURRENCY_OVER_PROBED_CAPACITY)
+    # -------------------------------------------------------------
+    budget = data.get("concurrency_budget")
+    if not budget:
+        for sl in slices:
+            if isinstance(sl.get("concurrency_budget"), dict):
+                budget = sl.get("concurrency_budget")
+                break
+
+    if isinstance(budget, dict) and not is_vacuous_container(budget):
+        worker_conc = budget.get("declared_worker_concurrency")
+        if worker_conc is None:
+            worker_conc = budget.get("worker_concurrency")
+        probed_cap = budget.get("probed_boundary_capacity")
+        if probed_cap is None:
+            probed_cap = budget.get("probed_pool_capacity")
+        headroom = budget.get("reserved_headroom", 0)
+
+        if isinstance(worker_conc, (int, float)) and isinstance(probed_cap, (int, float)) and isinstance(headroom, (int, float)):
+            allowed_cap = probed_cap - headroom
+            if worker_conc > allowed_cap:
+                return (
+                    False,
+                    "CONCURRENCY_OVER_PROBED_CAPACITY",
+                    f"Declared worker concurrency ({worker_conc}) exceeds probed capacity minus headroom ({probed_cap} - {headroom} = {allowed_cap})",
+                )
+
+    # -------------------------------------------------------------
+    # 12. Check: Transaction & Compensation Boundaries (TRANSACTION_BOUNDARY_SPLIT)
+    # -------------------------------------------------------------
+    tx_boundaries = data.get("transaction_boundaries") or data.get("transaction_boundary")
+    if not tx_boundaries:
+        for sl in slices:
+            if sl.get("transaction_boundaries") or sl.get("transaction_boundary"):
+                tx_boundaries = sl.get("transaction_boundaries") or sl.get("transaction_boundary")
+                break
+
+    if isinstance(tx_boundaries, dict):
+        is_split = tx_boundaries.get("split_across_slices", False)
+        atomic_mutations = tx_boundaries.get("atomic_mutations", [])
+        if is_split or (isinstance(atomic_mutations, list) and len(atomic_mutations) > 1 and tx_boundaries.get("split_mutations") is True):
+            has_atomic = tx_boundaries.get("has_atomic_step") or tx_boundaries.get("atomic_transaction_boundary")
+            has_comp = tx_boundaries.get("has_compensation_step") or tx_boundaries.get("compensation_step")
+            if not has_atomic and not has_comp:
+                return (
+                    False,
+                    "TRANSACTION_BOUNDARY_SPLIT",
+                    "Atomic mutations split across slices without an atomic transaction block or compensating rollback step",
+                )
+
+    for sl in slices:
+        sl_tx = sl.get("transaction_boundaries") or sl.get("transaction_boundary")
+        if isinstance(sl_tx, dict):
+            if sl_tx.get("split_across_slices") is True:
+                has_atomic = sl_tx.get("has_atomic_step") or sl_tx.get("atomic_transaction_boundary")
+    # -------------------------------------------------------------
+    # 13. Round 2 Checks: slice_level, flow_refs, reachability, ui_layout
+    # -------------------------------------------------------------
+    # Companion scenario matrix flows discovery
+    known_flow_ids = set()
+    for sdir in search_roots:
+        for fname in ["scenario-matrix.json", "flow-simulation-matrix.json"]:
+            cand = sdir / fname
+            if cand.is_file():
+                try:
+                    with open(cand, "r", encoding="utf-8") as f:
+                        mdata = json.load(f)
+                    if isinstance(mdata, dict):
+                        for fl in mdata.get("flows", []):
+                            if isinstance(fl, dict) and fl.get("flow_id"):
+                                known_flow_ids.add(fl["flow_id"])
+                except Exception:
+                    pass
+
+    # Build adjacency for reachability traversal
+    adj = {sid: set() for sid in slice_ids}
+    for sl in slices:
+        sid = sl.get("slice_id")
+        for dep in sl.get("dependencies", []):
+            if dep in adj:
+                adj[sid].add(dep)
+                adj[dep].add(sid)
+
+    for sl in slices:
+        sid = sl.get("slice_id")
+        slevel = sl.get("slice_level")
+        if slevel is None:
+            return False, "MISSING_SLICE_LEVEL", f"Slice '{sid}' missing slice_level declaration"
+        if slevel not in ["FLOW", "SUBTASK"]:
+            return False, "MISSING_SLICE_LEVEL", f"Slice '{sid}' has invalid slice_level '{slevel}'; allowed are ['FLOW', 'SUBTASK']"
+
+        if slevel == "FLOW":
+            outcome = sl.get("user_visible_outcome")
+            if not outcome or not isinstance(outcome, str) or is_vacuous_container(outcome):
+                return False, "FLOW_SLICE_WITHOUT_OUTCOME", f"FLOW slice '{sid}' missing user_visible_outcome"
+
+        # Check flow_refs
+        flow_refs = sl.get("flow_refs", [])
+        if flow_refs:
+            for fr in flow_refs:
+                if known_flow_ids and fr not in known_flow_ids:
+                    return False, "SLICE_FLOW_REF_UNKNOWN", f"Slice '{sid}' references unknown flow '{fr}'"
+
+        # Check UI Layout if verification medium is rendered_ui
+        legs = sl.get("legs", {})
+        out_verif = legs.get("output_verification", {}) if isinstance(legs, dict) else {}
+        medium = None
+        if isinstance(out_verif, dict):
+            medium = out_verif.get("verification_medium") or out_verif.get("medium")
+        if not medium:
+            medium = sl.get("verification_medium") or sl.get("medium")
+        if not medium and isinstance(data.get("locked_dimensions"), dict):
+            dim6 = data.get("locked_dimensions", {}).get("6_observation_and_actor_modality", {})
+            if isinstance(dim6, dict):
+                medium = dim6.get("verification_medium")
+        if medium == "rendered_ui":
+            ui_layout = sl.get("ui_layout")
+            if not ui_layout or not isinstance(ui_layout, dict) or is_vacuous_container(ui_layout):
+                return False, "UI_SLICE_WITHOUT_LAYOUT", f"Slice '{sid}' has rendered_ui verification medium but missing ui_layout"
+            src = ui_layout.get("source")
+            if not src or src not in ["FIGMA", "SCREENSHOT", "AGENT_MOCKUP"]:
+                return False, "UI_SLICE_WITHOUT_LAYOUT", f"Slice '{sid}' ui_layout source '{src}' is invalid; allowed: ['FIGMA', 'SCREENSHOT', 'AGENT_MOCKUP']"
+
+    # Check: ORPHAN_SUBTASK_SLICE (every SUBTASK must reach a FLOW node)
+    flow_slice_ids = {sl.get("slice_id") for sl in slices if sl.get("slice_level") == "FLOW"}
+    for sl in slices:
+        sid = sl.get("slice_id")
+        if sl.get("slice_level") == "SUBTASK":
+            visited = set()
+            queue = [sid]
+            visited.add(sid)
+            has_flow = False
+            while queue:
+                curr = queue.pop(0)
+                if curr in flow_slice_ids:
+                    has_flow = True
+                    break
+                for neighbor in adj.get(curr, []):
+                    if neighbor not in visited:
+                        visited.add(neighbor)
+                        queue.append(neighbor)
+            if not has_flow:
+                return False, "ORPHAN_SUBTASK_SLICE", f"Subtask slice '{sid}' is not connected to any FLOW slice"
+
+    # -------------------------------------------------------------
+    # Check: Slice Milestones Census (if declared)
+    # -------------------------------------------------------------
+    seen_milestone_ids = set()
+    for sl in slices:
+        sid = sl.get("slice_id")
+        milestones = sl.get("milestones")
+        if milestones is not None:
+            if not isinstance(milestones, list) or is_vacuous_container(milestones):
+                return (
+                    False,
+                    "MISSING_GATE_ARTIFACT",
+                    f"Slice '{sid}' declares milestones array with no valid milestone entries",
+                )
+            for m_idx, m in enumerate(milestones):
+                if not isinstance(m, dict) or is_vacuous_container(m):
+                    return (
+                        False,
+                        "MISSING_GATE_ARTIFACT",
+                        f"Slice '{sid}' milestones[{m_idx}] is empty or invalid",
+                    )
+                closed = check_closed_key_set(m, ("milestone_id", "verification_medium", "claims"), label=f"slice '{sid}' milestones[{m_idx}]")
+                if not closed.is_valid:
+                    return False, "UNKNOWN_DELIVERY_ATTRIBUTE", closed.message
+                mid = m.get("milestone_id")
+                if not mid or not isinstance(mid, str) or not mid.strip():
+                    return False, "MISSING_GATE_ARTIFACT", f"Slice '{sid}' milestones[{m_idx}] missing milestone_id"
+                mid = mid.strip()
+                if mid in seen_milestone_ids:
+                    return False, "DUPLICATE_MILESTONE_ID", f"Duplicate milestone_id '{mid}' declared in slice '{sid}'"
+                seen_milestone_ids.add(mid)
+                med = m.get("verification_medium")
+                if not med or med not in CANONICAL_VERIFICATION_MEDIA:
+                    return (
+                        False,
+                        "UNKNOWN_VERIFICATION_MEDIUM",
+                        f"Milestone '{mid}' in slice '{sid}' declares invalid medium '{med}'; allowed: {sorted(list(CANONICAL_VERIFICATION_MEDIA))}",
+                    )
+                claims = m.get("claims")
+                if not isinstance(claims, list) or is_vacuous_container(claims):
+                    return (
+                        False,
+                        "MISSING_GATE_ARTIFACT",
+                        f"Milestone '{mid}' in slice '{sid}' commits to no claims",
+                    )
+                for cid in claims:
+                    if not isinstance(cid, str) or not cid.strip():
+                        return (
+                            False,
+                            "MISSING_GATE_ARTIFACT",
+                            f"Milestone '{mid}' in slice '{sid}' contains empty claim identifier",
+                        )
+
+    # -------------------------------------------------------------
+    # Positive Case Evidence Output
+    # -------------------------------------------------------------
+    msgs = ["EXECUTION_DAG_VALIDATED_CLEAN"]
+    if len(derived_substrate_files) > 0:
+        msgs.append("SUBSTRATE_EXEMPTION_DERIVED_FROM_DAG")
+    for sl in slices:
+        legs = sl.get("legs", {})
+        adapter = legs.get("adapter_persistence", {}) if isinstance(legs, dict) else {}
+        if isinstance(adapter, dict) and adapter.get("optional_leg_present") is False:
+            msgs.append("OPTIONAL_ADAPTER_LEG_OMITTED_VALID")
+            break
+
+    feature_slug = data.get("feature_slug") or data.get("feature") or "unknown"
+    return True, None, f"{' | '.join(msgs)}: {feature_slug}"
+
+
+def resolve_dag_file_path(
+    path_str: Optional[str],
+    feature_slug: Optional[str] = None,
+    dir_override: Optional[str] = None,
+    root_override: Optional[str] = None,
+) -> Optional[Path]:
+    """Resolve target execution DAG path robustly."""
+    if path_str:
+        p = Path(path_str)
+        if p.is_file():
+            return p.resolve()
+
+        p_cwd = Path.cwd() / path_str
+        if p_cwd.is_file():
+            return p_cwd.resolve()
+
+        script_dir = Path(__file__).resolve().parent
+        skill_root = script_dir.parent
+        p_skill = skill_root / path_str
+        if p_skill.is_file():
+            return p_skill.resolve()
+
+        if path_str.startswith("skills/verified-feature-delivery/"):
+            stripped = path_str[len("skills/verified-feature-delivery/"):]
+            if (skill_root / stripped).is_file():
+                return (skill_root / stripped).resolve()
+            if (Path.cwd() / stripped).is_file():
+                return (Path.cwd() / stripped).resolve()
+
+        return p_cwd
+
+    if dir_override:
+        p = Path(dir_override)
+        for fname in ["execution-dag.json", "dag.json"]:
+            if (p / fname).is_file():
+                return (p / fname).resolve()
+        return (p / "execution-dag.json").resolve()
+
+    if feature_slug:
+        root = Path(root_override).resolve() if root_override else Path.cwd()
+        for fname in ["execution-dag.json", "dag.json"]:
+            cand = root / ".verified-feature-delivery" / feature_slug / fname
+            if cand.is_file():
+                return cand.resolve()
+            cand2 = root / feature_slug / fname
+            if cand2.is_file():
+                return cand2.resolve()
+        return root / ".verified-feature-delivery" / feature_slug / "execution-dag.json"
+
+    for fname in ["execution-dag.json", "dag.json"]:
+        cand = Path.cwd() / fname
+        if cand.is_file():
+            return cand.resolve()
+    return Path.cwd() / "execution-dag.json"
+
+
+def build_parser():
+    parser = argparse.ArgumentParser(
+        description="Verified Feature Delivery - Stage 3 Execution DAG Validator",
+        prog="validate-execution-dag",
+    )
+    parser.add_argument("path", nargs="?", help="Path to execution-dag.json")
+    parser.add_argument("--file", "-f", help="Explicit path to execution DAG JSON")
+    parser.add_argument("--feature", "-s", help="Feature slug")
+    parser.add_argument("--dir", "-d", help="Directory containing execution DAG JSON")
+    parser.add_argument("--root", help="Target project root directory")
+    return parser
+
+
+def main():
+    parser = build_parser()
+    args = parser.parse_args()
+
+    target_path_str = args.file or args.path
+    resolved_path = resolve_dag_file_path(target_path_str, args.feature, args.dir, args.root)
+
+    if not resolved_path or not resolved_path.is_file():
+        sys.stderr.write(f"Execution DAG file not found: {resolved_path}\n")
+        print("MISSING_GATE_ARTIFACT")
+        return 1
+
+    try:
+        with open(resolved_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except json.JSONDecodeError as e:
+        sys.stderr.write(f"Invalid JSON in {resolved_path}: {e}\n")
+        print("DAG_CYCLE")
+        return 1
+    except Exception as e:
+        sys.stderr.write(f"Error reading {resolved_path}: {e}\n")
+        return 1
+
+    is_valid, error_code, msg = validate_execution_dag_dict(data, resolved_path)
+
+    if is_valid:
+        print(msg)
+        return 0
+    else:
+        print(error_code)
+        sys.stderr.write(f"{error_code}: {msg}\n")
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

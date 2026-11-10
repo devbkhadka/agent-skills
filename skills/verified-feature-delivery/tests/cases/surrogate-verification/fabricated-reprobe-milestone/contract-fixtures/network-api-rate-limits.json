@@ -1,0 +1,43 @@
+{
+  "schema_version": "1.0.0",
+  "boundary_class": "NETWORK_API",
+  "boundary_identifier": "GET /rest/api/3/search/jql",
+  "property_name": "rate_limit_headers",
+  "fixture_status": "PROBED_LIVE",
+  "pinned_reprobe_milestone": null,
+  "contract_reference": "https://developer.atlassian.com/cloud/jira/platform/rate-limiting/",
+  "contract_variant_selectors": [],
+  "success_samples": [
+    {
+      "sample_id": "sample_rate_limit_observed",
+      "partition_cell": {},
+      "status_code": 200,
+      "exit_code": null,
+      "headers": {
+        "ratelimit-policy": "\"jira-burst-based\";q=100;w=1",
+        "ratelimit": "\"jira-burst-based\";r=349;t=1",
+        "x-ratelimit-limit": "350",
+        "x-ratelimit-remaining": "349"
+      },
+      "payload": {
+        "rate_limiting_active": true
+      }
+    }
+  ],
+  "failure_envelope_census": [
+    {
+      "envelope_id": "jira_rate_limit_429",
+      "error_class": "RATE_LIMIT_EXCEEDED",
+      "status_code": 429,
+      "exit_code": null,
+      "payload_type": "JSON",
+      "payload": {
+        "errorMessages": [
+          "Rate limit exceeded"
+        ],
+        "errors": {}
+      },
+      "description": "Jira 429 Too Many Requests response envelope."
+    }
+  ]
+}

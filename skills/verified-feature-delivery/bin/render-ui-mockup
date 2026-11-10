@@ -1,0 +1,244 @@
+#!/usr/bin/env python3
+"""Renderer: render-ui-mockup.
+
+Owner: agent-skills-afp-ui-1co. Produces `ui-mockup-<slice_id>.html` from one slice's declared
+`ui_layout` in `execution-dag.json`, via the shared harness in `lib/render.py`. Improvement plan
+§5.2: the mockup is unstyled HTML -- semantic elements only, no CSS, no classes, no scripts, no
+event handlers, no images -- built from one of the six closed layout templates in
+`templates/mockups/`, or the slice's bare `layout_tree` when no template fits. The renderer
+decides nothing beyond that closed choice: every label a reader sees is a declared `role` or
+`component` on the tree, read as-is, never inferred or filled in when absent.
+
+CLI: --artifact <execution-dag.json> --slice <slice_id> --out <dir>
+
+Exit Codes:
+- 0: Document written (prints UI_MOCKUP_RENDERED)
+- Non-zero: Emits bare error code token on stdout, detail on stderr
+
+Supported Error Codes:
+- ARTIFACT_NOT_FOUND
+- ARTIFACT_INVALID_JSON
+- SLICE_NOT_FOUND
+- UI_SLICE_WITHOUT_LAYOUT
+- UI_LAYOUT_SOURCE_NOT_AGENT_MOCKUP
+- UNKNOWN_LAYOUT_TEMPLATE
+- MISSING_LAYOUT_REGION
+- MISSING_LAYOUT_ROLE
+- MISSING_LAYOUT_COMPONENT
+- UI_LAYOUT_WITHOUT_TREE
+- TEMPLATE_CONTEXT_MISMATCH
+"""
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from lib.render import render_document, RenderError
+from lib.primitives import check_closed_key_set
+
+MOCKUP_TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "templates" / "mockups"
+RENDERER_NAME = "render-ui-mockup"
+
+# The closed set of six reusable layout shapes (improvement plan §5.2). Each name maps to its own
+# skeleton file in templates/mockups/ and the named regions that skeleton exposes for content. Not
+# a blacklist of bad names: a layout_template outside this dict is refused, not filtered out of a
+# list of known-bad ones (SURROGATE-VERIFICATION.md Face 2).
+TEMPLATE_REGIONS = {
+    "list-detail": ["list", "detail"],
+    "form": ["fields", "actions"],
+    "table-with-filters": ["filters", "table"],
+    "wizard-steps": ["steps"],
+    "dashboard-tiles": ["tiles"],
+    "empty-and-error": ["empty", "error"],
+}
+TEMPLATE_FILES = {name: "%s.html.tmpl" % name for name in TEMPLATE_REGIONS}
+# Not a seventh named layout shape: a plain pass-through shell for the bare `layout_tree` a slice
+# declares when none of the six fits. It carries no region vocabulary of its own.
+BARE_TEMPLATE_FILE = "bare-tree.html.tmpl"
+
+
+class MockupError(Exception):
+    def __init__(self, code, detail):
+        super().__init__(detail)
+        self.code = code
+        self.detail = detail
+
+
+def build_parser():
+    parser = argparse.ArgumentParser(
+        description="Render ui-mockup-<slice_id>.html from a slice's ui_layout in execution-dag.json"
+    )
+    parser.add_argument("--artifact", required=True, help="Path to execution-dag.json")
+    parser.add_argument("--slice", required=True, dest="slice_id", help="slice_id to render")
+    parser.add_argument("--out", required=True, help="Output directory")
+    return parser
+
+
+def escape(text):
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def find_region(node, region_name):
+    """Depth-first search of the declared tree for the first node naming this region."""
+    if not isinstance(node, dict):
+        return None
+    if node.get("region") == region_name:
+        return node
+    for child in node.get("children") or []:
+        found = find_region(child, region_name)
+        if found is not None:
+            return found
+    return None
+
+
+def render_node(node, path):
+    """Nested boxes with labels: a <section> per node, its declared role as the label, its
+    declared component as a secondary line, and its children nested inside. `role` is the one
+    field every displayed node must carry -- absent, this refuses rather than rendering an
+    unlabeled box."""
+    if not isinstance(node, dict):
+        raise MockupError("MISSING_LAYOUT_ROLE", "layout_tree node at %s is not an object" % path)
+    role = node.get("role")
+    if not isinstance(role, str) or not role.strip():
+        raise MockupError("MISSING_LAYOUT_ROLE", "layout_tree node at %s has no declared role" % path)
+
+    component = node.get("component")
+    if not isinstance(component, str) or not component.strip():
+        raise MockupError(
+            "MISSING_LAYOUT_COMPONENT", "layout_tree node at %s has no declared component" % path
+        )
+
+    parts = ["<section>", "<h3>%s</h3>" % escape(role.strip()), "<p>%s</p>" % escape(component.strip())]
+
+    children = node.get("children") or []
+    if children:
+        items = []
+        for i, child in enumerate(children):
+            items.append("<li>%s</li>" % render_node(child, "%s.children[%d]" % (path, i)))
+        parts.append("<ul>%s</ul>" % "".join(items))
+    parts.append("</section>")
+    return "".join(parts)
+
+
+def find_slice(dag, slice_id):
+    for sl in dag.get("slices", []) or []:
+        if isinstance(sl, dict) and sl.get("slice_id") == slice_id:
+            return sl
+    return None
+
+
+def build_context(ui_layout):
+    """Returns (template_file, context) or raises MockupError."""
+    layout_template = ui_layout.get("layout_template")
+    if isinstance(layout_template, str) and layout_template.strip():
+        name = layout_template.strip()
+        closed = check_closed_key_set(
+            {name: None}, TEMPLATE_REGIONS.keys(), label="ui_layout.layout_template"
+        )
+        if not closed.is_valid:
+            raise MockupError(
+                "UNKNOWN_LAYOUT_TEMPLATE",
+                "ui_layout.layout_template %r names no template in the closed set; the template "
+                "set is closed and improvising a layout is the renderer deciding what the screen "
+                "looks like. allowed: %s" % (name, ", ".join(sorted(TEMPLATE_REGIONS))),
+            )
+        tree = ui_layout.get("layout_tree")
+        if not isinstance(tree, dict):
+            raise MockupError(
+                "UI_LAYOUT_WITHOUT_TREE",
+                "ui_layout names layout_template %r but declares no layout_tree to supply its "
+                "region content" % name,
+            )
+        context = {}
+        for region in TEMPLATE_REGIONS[name]:
+            node = find_region(tree, region)
+            if node is None:
+                raise MockupError(
+                    "MISSING_LAYOUT_REGION",
+                    "layout_template %r requires region %r; no node in layout_tree declares it"
+                    % (name, region),
+                )
+            context["%s_region" % region] = render_node(node, "layout_tree[region=%s]" % region)
+        return TEMPLATE_FILES[name], context
+
+    tree = ui_layout.get("layout_tree")
+    if not isinstance(tree, dict) or not tree:
+        raise MockupError(
+            "UI_LAYOUT_WITHOUT_TREE",
+            "ui_layout names no layout_template and declares no usable layout_tree either",
+        )
+    return BARE_TEMPLATE_FILE, {"tree_region": render_node(tree, "layout_tree")}
+
+
+def main():
+    parser = build_parser()
+    args = parser.parse_args()
+
+    artifact_path = Path(args.artifact)
+    if not artifact_path.is_file():
+        sys.stderr.write("Execution DAG artifact not found: %s\n" % artifact_path)
+        print("ARTIFACT_NOT_FOUND")
+        return 1
+
+    try:
+        with open(artifact_path, "r", encoding="utf-8") as f:
+            dag = json.load(f)
+    except json.JSONDecodeError as e:
+        sys.stderr.write("Invalid JSON in %s: %s\n" % (artifact_path, e))
+        print("ARTIFACT_INVALID_JSON")
+        return 1
+
+    sl = find_slice(dag, args.slice_id)
+    if sl is None:
+        sys.stderr.write("No slice %r in %s\n" % (args.slice_id, artifact_path))
+        print("SLICE_NOT_FOUND")
+        return 1
+
+    ui_layout = sl.get("ui_layout")
+    if not isinstance(ui_layout, dict) or not ui_layout:
+        sys.stderr.write("Slice %r declares no ui_layout\n" % args.slice_id)
+        print("UI_SLICE_WITHOUT_LAYOUT")
+        return 1
+
+    if ui_layout.get("source") != "AGENT_MOCKUP":
+        sys.stderr.write(
+            "Slice %r ui_layout.source is %r, not AGENT_MOCKUP; this renderer only produces the "
+            "agent-mockup path, and nobody declared the layout came from an agent\n"
+            % (args.slice_id, ui_layout.get("source"))
+        )
+        print("UI_LAYOUT_SOURCE_NOT_AGENT_MOCKUP")
+        return 1
+
+    try:
+        template_file, context = build_context(ui_layout)
+    except MockupError as e:
+        sys.stderr.write("%s\n" % e.detail)
+        print(e.code)
+        return 1
+
+    doc_name = "ui-mockup-%s.html" % args.slice_id
+
+    try:
+        render_document(
+            template_name=template_file,
+            context=context,
+            out_dir=args.out,
+            doc_name=doc_name,
+            artifact_path=artifact_path.name,
+            renderer_name=RENDERER_NAME,
+            template_dir=MOCKUP_TEMPLATE_DIR,
+        )
+    except RenderError as e:
+        sys.stderr.write("%s\n" % e)
+        print("TEMPLATE_CONTEXT_MISMATCH")
+        return 1
+
+    print("UI_MOCKUP_RENDERED")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

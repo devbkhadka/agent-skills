@@ -1,0 +1,38 @@
+{
+  "schema_version": "1.0.0",
+  "feature_slug": "search-console-web-ui",
+  "updated_at": "2026-08-22T11:50:00Z",
+  "observers": [
+    {"observer_id": "operator", "medium": "rendered_ui", "modality": "browser_dom"}
+  ],
+  "states": [
+    {
+      "state_id": "IDLE",
+      "evidence_key": "state:IDLE",
+      "is_initial": true,
+      "is_terminal": false,
+      "description": "Console mounted with no query executed yet.",
+      "observable_projections": [
+        {
+          "observer_id": "operator",
+          "medium": "rendered_ui",
+          "discriminator": {"region": "results_pane", "atom": "prompt_to_run_search"}
+        }
+      ]
+    },
+    {
+      "state_id": "RESULTS_EMPTY",
+      "evidence_key": "state:RESULTS_EMPTY",
+      "is_initial": false,
+      "is_terminal": false,
+      "description": "Query settled with zero matches and explicit zero-result guidance.",
+      "observable_projections": [
+        {
+          "observer_id": "operator",
+          "medium": "rendered_ui",
+          "discriminator": {"region": "results_pane", "atom": "zero_result_guidance"}
+        }
+      ]
+    }
+  ]
+}

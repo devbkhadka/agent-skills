@@ -1,0 +1,105 @@
+{
+  "schema_version": "1.0.0",
+  "feature_slug": "monthly-timelog-viewer",
+  "current_state": "COMPLETED",
+  "updated_at": "2026-08-23T12:33:06Z",
+  "artifacts": {
+    "stage_0_lexicon": "domain-lexicon.json",
+    "stage_1_manifest": "contract-fixtures/manifest.json",
+    "stage_2_scenario_matrix": "flow-simulation-matrix.json",
+    "stage_3_execution_dag": "execution-dag.json",
+    "stage_3_invariants": "slice-invariants.json",
+    "stage_4_milestone_evidence": "milestones/evidence-summary.json",
+    "stage_5_delivery_report": "delivery-report.md"
+  },
+  "history": [
+    {
+      "from_state": null,
+      "to_state": "UNINITIALIZED",
+      "transition_type": "INIT",
+      "timestamp": "2026-08-23T12:06:08Z",
+      "gate_artifact_verified": null,
+      "rollback_cause": null
+    },
+    {
+      "from_state": "UNINITIALIZED",
+      "to_state": "STAGE_0_DOMAIN_INGESTION",
+      "transition_type": "ADVANCE",
+      "timestamp": "2026-08-23T12:12:52Z",
+      "gate_artifact_verified": null,
+      "rollback_cause": null
+    },
+    {
+      "from_state": "STAGE_0_DOMAIN_INGESTION",
+      "to_state": "STAGE_1_CONTRACT_PROBING",
+      "transition_type": "ADVANCE",
+      "timestamp": "2026-08-23T12:13:38Z",
+      "gate_artifact_verified": "domain-lexicon.json",
+      "rollback_cause": null
+    },
+    {
+      "from_state": "STAGE_1_CONTRACT_PROBING",
+      "to_state": "STAGE_2_SCENARIO_SIMULATION",
+      "transition_type": "ADVANCE",
+      "timestamp": "2026-08-23T12:20:22Z",
+      "gate_artifact_verified": "contract-fixtures/manifest.json",
+      "rollback_cause": null
+    },
+    {
+      "from_state": "STAGE_2_SCENARIO_SIMULATION",
+      "to_state": "AWAITING_FLOW_SIMULATION_APPROVAL",
+      "transition_type": "ADVANCE",
+      "timestamp": "2026-08-23T12:24:32Z",
+      "gate_artifact_verified": "flow-simulation-matrix.json",
+      "rollback_cause": null
+    },
+    {
+      "from_state": "AWAITING_FLOW_SIMULATION_APPROVAL",
+      "to_state": "AWAITING_ENTITY_BOUNDARIES_APPROVAL",
+      "transition_type": "ADVANCE",
+      "timestamp": "2026-08-23T12:24:56Z",
+      "gate_artifact_verified": null,
+      "rollback_cause": null
+    },
+    {
+      "from_state": "AWAITING_ENTITY_BOUNDARIES_APPROVAL",
+      "to_state": "STAGE_3_VERTICAL_SLICING",
+      "transition_type": "ADVANCE",
+      "timestamp": "2026-08-23T12:25:02Z",
+      "gate_artifact_verified": null,
+      "rollback_cause": null
+    },
+    {
+      "from_state": "STAGE_3_VERTICAL_SLICING",
+      "to_state": "AWAITING_UI_LAYOUT_APPROVAL",
+      "transition_type": "ADVANCE",
+      "timestamp": "2026-08-23T12:26:19Z",
+      "gate_artifact_verified": "execution-dag.json",
+      "rollback_cause": null
+    },
+    {
+      "from_state": "AWAITING_UI_LAYOUT_APPROVAL",
+      "to_state": "STAGE_4_MILESTONE_EXECUTION",
+      "transition_type": "ADVANCE",
+      "timestamp": "2026-08-23T12:26:28Z",
+      "gate_artifact_verified": null,
+      "rollback_cause": null
+    },
+    {
+      "from_state": "STAGE_4_MILESTONE_EXECUTION",
+      "to_state": "STAGE_5_DELIVERY",
+      "transition_type": "ADVANCE",
+      "timestamp": "2026-08-23T12:31:26Z",
+      "gate_artifact_verified": "milestones/evidence-summary.json",
+      "rollback_cause": null
+    },
+    {
+      "from_state": "STAGE_5_DELIVERY",
+      "to_state": "COMPLETED",
+      "transition_type": "ADVANCE",
+      "timestamp": "2026-08-23T12:33:06Z",
+      "gate_artifact_verified": "delivery-report.md",
+      "rollback_cause": null
+    }
+  ]
+}

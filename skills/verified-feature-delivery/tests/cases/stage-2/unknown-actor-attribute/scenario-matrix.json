@@ -1,0 +1,429 @@
+{
+  "schema_version": "1.0.0",
+  "feature_slug": "search-console-web-ui",
+  "updated_at": "2026-08-22T11:00:00Z",
+  "actors": [
+    {
+      "actor_id": "operator",
+      "description": "Interactive search console user issuing queries via keyboard and pointer.",
+      "unlisted_custom_actor_property": "bypass"
+    }
+  ],
+  "observers": [
+    {
+      "observer_id": "operator",
+      "medium": "rendered_ui",
+      "modality": "browser_dom"
+    },
+    {
+      "observer_id": "system_telemetry",
+      "medium": "agent_transcript",
+      "modality": "structured_events"
+    }
+  ],
+  "triggers": [
+    {
+      "trigger_id": "submit_query",
+      "actor_id": "operator",
+      "is_actor_repeatable": true,
+      "description": "User clicks search button or presses Enter in search box."
+    }
+  ],
+  "branch_coverage": {
+    "group_a_resource_and_state": [
+      {
+        "class_name": "ORPHANED_DELETED_TARGET_STATES",
+        "status": "NOT_APPLICABLE",
+        "inapplicable_reason": "Client application owns no persistent server entity deleted mid-flight."
+      },
+      {
+        "class_name": "RESOURCE_LEAK_AND_TERMINATION_INVARIANTS",
+        "status": "ADDRESSED",
+        "handling_description": "In-flight XHR aborted on component unmount; generation counter discards late arrivals.",
+        "related_states": ["SEARCHING_FROM_IDLE", "SEARCHING_OVER_STALE", "TERMINAL_UNMOUNTED"]
+      },
+      {
+        "class_name": "EVENT_ORDERING_AND_MONOTONIC_SEQUENCE_CLOCKS",
+        "status": "ADDRESSED",
+        "handling_description": "RequestGeneration monotonic integer sequence counter discards out-of-order settlements.",
+        "related_states": ["SEARCHING_OVER_STALE", "RESULTS_POPULATED"]
+      },
+      {
+        "class_name": "INGRESS_HANDOFF_DURABILITY",
+        "status": "NOT_APPLICABLE",
+        "inapplicable_reason": "Stateless client query with synchronous HTTP request-response flow; no background queue handoff."
+      },
+      {
+        "class_name": "TEMPORAL_EGRESS_FROM_FINITE_LIFESPAN_STATES",
+        "status": "ADDRESSED",
+        "handling_description": "Error banner auto-dismisses after 6000ms via fake-timer advance in test harness.",
+        "related_states": ["ERROR_SHOWN", "IDLE"]
+      },
+      {
+        "class_name": "COMPOUND_PUBLICATION_ORDERING",
+        "status": "NOT_APPLICABLE",
+        "inapplicable_reason": "Client issues single read-only queries with no multi-resource publication dependencies."
+      },
+      {
+        "class_name": "OPERATIONAL_EDGE_CASES",
+        "status": "ADDRESSED",
+        "handling_description": "Network connection drops and 502 Bad Gateway handled via distinct error envelopes.",
+        "related_states": ["ERROR_SHOWN"]
+      }
+    ],
+    "group_b_trigger_and_observation": [
+      {
+        "class_name": "REPEAT_TRIGGER_OUT_OF_ORDER_SETTLEMENT",
+        "status": "ADDRESSED",
+        "handling_description": "Monotonic generation counter ensures only the latest initiated query updates state.",
+        "related_states": ["SEARCHING_OVER_STALE", "RESULTS_POPULATED"]
+      },
+      {
+        "class_name": "DUPLICATE_TRIGGER",
+        "status": "ADDRESSED",
+        "handling_description": "Double click creates generation N+1 immediately, abandoning generation N in-flight.",
+        "related_states": ["SEARCHING_OVER_STALE"]
+      },
+      {
+        "class_name": "OBSERVER_TEARDOWN_MID_FLIGHT",
+        "status": "ADDRESSED",
+        "handling_description": "Unmount cleanup hook aborts controller and prevents setState on unmounted tree.",
+        "related_states": ["TERMINAL_UNMOUNTED"]
+      },
+      {
+        "class_name": "STALE_OUTPUT_SUPERSESSION",
+        "status": "ADDRESSED",
+        "resolution": "DIMMED",
+        "state_split_applied": true,
+        "materialized_states": ["SEARCHING_FROM_IDLE", "SEARCHING_OVER_STALE"],
+        "handling_description": "Prior query result cards are retained and dimmed while new query executes; state split into SEARCHING_FROM_IDLE and SEARCHING_OVER_STALE."
+      },
+      {
+        "class_name": "SEMANTIC_CONTRADICTION",
+        "status": "ADDRESSED",
+        "handling_description": "Mutually exclusive ad-hoc filter rows evaluated as flat AND; explained as empty result set.",
+        "related_states": ["RESULTS_EMPTY"]
+      }
+    ]
+  },
+  "states": [
+    {
+      "state_id": "IDLE",
+      "evidence_key": "state:IDLE",
+      "is_initial": true,
+      "is_terminal": false,
+      "description": "Search console mounted with empty search input and zero executed queries.",
+      "observable_projections": [
+        {
+          "observer_id": "operator",
+          "medium": "rendered_ui",
+          "discriminator": {
+            "region": "query_container",
+            "template": "search_invitation_prompt",
+            "affordances": ["input_query_text", "click_search"]
+          }
+        },
+        {
+          "observer_id": "system_telemetry",
+          "medium": "agent_transcript",
+          "discriminator": {
+            "event_name": "CONSOLE_INITIALIZED",
+            "payload_template": "idle_ready"
+          }
+        }
+      ]
+    },
+    {
+      "state_id": "SEARCHING_FROM_IDLE",
+      "evidence_key": "state:SEARCHING_FROM_IDLE",
+      "is_initial": false,
+      "is_terminal": false,
+      "description": "Initial search executing from pristine IDLE state; progress bar displayed over empty container.",
+      "observable_projections": [
+        {
+          "observer_id": "operator",
+          "medium": "rendered_ui",
+          "discriminator": {
+            "region": "result_container",
+            "template": "progress_bar_indeterminate",
+            "affordances": ["cancel_query"]
+          }
+        },
+        {
+          "observer_id": "system_telemetry",
+          "medium": "agent_transcript",
+          "discriminator": {
+            "event_name": "QUERY_DISPATCHED",
+            "payload_template": "generation_1_initial"
+          }
+        }
+      ]
+    },
+    {
+      "state_id": "SEARCHING_OVER_STALE",
+      "evidence_key": "state:SEARCHING_OVER_STALE",
+      "is_initial": false,
+      "is_terminal": false,
+      "description": "Subsequent search executing; prior result cards remain visible on screen with dimmed opacity (aria-busy).",
+      "observable_projections": [
+        {
+          "observer_id": "operator",
+          "medium": "rendered_ui",
+          "discriminator": {
+            "region": "result_container",
+            "template": "dimmed_stale_cards_with_progress",
+            "affordances": ["cancel_query", "dimmed_card_click"]
+          }
+        },
+        {
+          "observer_id": "system_telemetry",
+          "medium": "agent_transcript",
+          "discriminator": {
+            "event_name": "QUERY_DISPATCHED",
+            "payload_template": "generation_N_superseded"
+          }
+        }
+      ]
+    },
+    {
+      "state_id": "RESULTS_POPULATED",
+      "evidence_key": "state:RESULTS_POPULATED",
+      "is_initial": false,
+      "is_terminal": false,
+      "description": "Query settled with > 0 matching result cards and total match count header.",
+      "observable_projections": [
+        {
+          "observer_id": "operator",
+          "medium": "rendered_ui",
+          "discriminator": {
+            "region": "result_list",
+            "template": "ranked_cards_with_count_header",
+            "affordances": ["click_card_link", "paginate_results", "edit_filters"]
+          }
+        },
+        {
+          "observer_id": "system_telemetry",
+          "medium": "agent_transcript",
+          "discriminator": {
+            "event_name": "RESULTS_RENDERED",
+            "payload_template": "count_populated"
+          }
+        }
+      ]
+    },
+    {
+      "state_id": "RESULTS_EMPTY",
+      "evidence_key": "state:RESULTS_EMPTY",
+      "is_initial": false,
+      "is_terminal": false,
+      "description": "Query settled with 0 matching records; displays explicit zero-results guidance.",
+      "observable_projections": [
+        {
+          "observer_id": "operator",
+          "medium": "rendered_ui",
+          "discriminator": {
+            "region": "result_list",
+            "template": "no_matches_guidance_message",
+            "affordances": ["clear_filters", "modify_search_term"]
+          }
+        },
+        {
+          "observer_id": "system_telemetry",
+          "medium": "agent_transcript",
+          "discriminator": {
+            "event_name": "RESULTS_RENDERED",
+            "payload_template": "zero_matches"
+          }
+        }
+      ]
+    },
+    {
+      "state_id": "ERROR_SHOWN",
+      "evidence_key": "state:ERROR_SHOWN",
+      "is_initial": false,
+      "is_terminal": false,
+      "description": "Network drop, 400 validation error, or 502 bad gateway error alert portal displayed.",
+      "observable_projections": [
+        {
+          "observer_id": "operator",
+          "medium": "rendered_ui",
+          "discriminator": {
+            "region": "alert_portal",
+            "template": "error_banner_with_detail",
+            "affordances": ["dismiss_error", "retry_query"]
+          }
+        },
+        {
+          "observer_id": "system_telemetry",
+          "medium": "agent_transcript",
+          "discriminator": {
+            "event_name": "ERROR_ENCOUNTERED",
+            "payload_template": "error_alert_active"
+          }
+        }
+      ]
+    },
+    {
+      "state_id": "TERMINAL_UNMOUNTED",
+      "evidence_key": "state:TERMINAL_UNMOUNTED",
+      "is_initial": false,
+      "is_terminal": true,
+      "terminal_classification": "TERMINAL_CLEANUP",
+      "description": "Component unmounted from DOM; in-flight requests aborted and listeners cleaned up.",
+      "observable_projections": [
+        {
+          "observer_id": "operator",
+          "medium": "rendered_ui",
+          "discriminator": {
+            "region": "root_dom",
+            "template": "dom_unmounted_empty",
+            "affordances": []
+          }
+        },
+        {
+          "observer_id": "system_telemetry",
+          "medium": "agent_transcript",
+          "discriminator": {
+            "event_name": "COMPONENT_TEARDOWN",
+            "payload_template": "unmounted_clean"
+          }
+        }
+      ]
+    }
+  ],
+  "transitions": [
+    {
+      "transition_id": "t_init_to_search",
+      "from_state": "IDLE",
+      "to_state": "SEARCHING_FROM_IDLE",
+      "trigger_ref": "submit_query",
+      "guard": "query_text.trim().length > 0"
+    },
+    {
+      "transition_id": "t_idle_unmount",
+      "from_state": "IDLE",
+      "to_state": "TERMINAL_UNMOUNTED",
+      "trigger_ref": "component_unmount",
+      "guard": null
+    },
+    {
+      "transition_id": "t_search_idle_to_populated",
+      "from_state": "SEARCHING_FROM_IDLE",
+      "to_state": "RESULTS_POPULATED",
+      "trigger_ref": "query_settled_success",
+      "guard": "response.total_results > 0"
+    },
+    {
+      "transition_id": "t_search_idle_to_empty",
+      "from_state": "SEARCHING_FROM_IDLE",
+      "to_state": "RESULTS_EMPTY",
+      "trigger_ref": "query_settled_success",
+      "guard": "response.total_results == 0"
+    },
+    {
+      "transition_id": "t_search_idle_to_error",
+      "from_state": "SEARCHING_FROM_IDLE",
+      "to_state": "ERROR_SHOWN",
+      "trigger_ref": "query_settled_error",
+      "guard": null
+    },
+    {
+      "transition_id": "t_search_idle_resubmit",
+      "from_state": "SEARCHING_FROM_IDLE",
+      "to_state": "SEARCHING_OVER_STALE",
+      "trigger_ref": "submit_query",
+      "guard": null
+    },
+    {
+      "transition_id": "t_search_idle_unmount",
+      "from_state": "SEARCHING_FROM_IDLE",
+      "to_state": "TERMINAL_UNMOUNTED",
+      "trigger_ref": "component_unmount",
+      "guard": null
+    },
+    {
+      "transition_id": "t_search_stale_to_populated",
+      "from_state": "SEARCHING_OVER_STALE",
+      "to_state": "RESULTS_POPULATED",
+      "trigger_ref": "query_settled_success",
+      "guard": "response.total_results > 0 && response.generation == current_generation"
+    },
+    {
+      "transition_id": "t_search_stale_to_empty",
+      "from_state": "SEARCHING_OVER_STALE",
+      "to_state": "RESULTS_EMPTY",
+      "trigger_ref": "query_settled_success",
+      "guard": "response.total_results == 0 && response.generation == current_generation"
+    },
+    {
+      "transition_id": "t_search_stale_to_error",
+      "from_state": "SEARCHING_OVER_STALE",
+      "to_state": "ERROR_SHOWN",
+      "trigger_ref": "query_settled_error",
+      "guard": "response.generation == current_generation"
+    },
+    {
+      "transition_id": "t_search_stale_resubmit",
+      "from_state": "SEARCHING_OVER_STALE",
+      "to_state": "SEARCHING_OVER_STALE",
+      "trigger_ref": "submit_query",
+      "guard": null
+    },
+    {
+      "transition_id": "t_search_stale_unmount",
+      "from_state": "SEARCHING_OVER_STALE",
+      "to_state": "TERMINAL_UNMOUNTED",
+      "trigger_ref": "component_unmount",
+      "guard": null
+    },
+    {
+      "transition_id": "t_populated_to_search",
+      "from_state": "RESULTS_POPULATED",
+      "to_state": "SEARCHING_OVER_STALE",
+      "trigger_ref": "submit_query",
+      "guard": null
+    },
+    {
+      "transition_id": "t_populated_unmount",
+      "from_state": "RESULTS_POPULATED",
+      "to_state": "TERMINAL_UNMOUNTED",
+      "trigger_ref": "component_unmount",
+      "guard": null
+    },
+    {
+      "transition_id": "t_empty_to_search",
+      "from_state": "RESULTS_EMPTY",
+      "to_state": "SEARCHING_FROM_IDLE",
+      "trigger_ref": "submit_query",
+      "guard": null
+    },
+    {
+      "transition_id": "t_empty_unmount",
+      "from_state": "RESULTS_EMPTY",
+      "to_state": "TERMINAL_UNMOUNTED",
+      "trigger_ref": "component_unmount",
+      "guard": null
+    },
+    {
+      "transition_id": "t_error_to_search",
+      "from_state": "ERROR_SHOWN",
+      "to_state": "SEARCHING_FROM_IDLE",
+      "trigger_ref": "submit_query",
+      "guard": null
+    },
+    {
+      "transition_id": "t_error_temporal_dismiss",
+      "from_state": "ERROR_SHOWN",
+      "to_state": "IDLE",
+      "trigger_ref": "auto_dismiss_timeout",
+      "guard": "elapsed_ms >= 6000"
+    },
+    {
+      "transition_id": "t_error_unmount",
+      "from_state": "ERROR_SHOWN",
+      "to_state": "TERMINAL_UNMOUNTED",
+      "trigger_ref": "component_unmount",
+      "guard": null
+    }
+  ]
+}

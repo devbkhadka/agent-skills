@@ -1,0 +1,25 @@
+{
+  "_why": "The four regression edges of Stage 4, one scenario each. Each scenario directory holds a real run whose recorded artifacts are what the cause is computed from; the expected_target_state here is the oracle the run is checked against, and the harness reads the state file back after the transition to see where it actually landed. The routing itself is looked up in the transition table in bin/planner-state, never restated.",
+  "edges": [
+    {
+      "scenario": "projection-collision",
+      "expected_target_state": "STAGE_2_SCENARIO_SIMULATION",
+      "why": "two states the graph models separately fingerprint alike from their captured renderings, so the graph, not the code, is what has to change"
+    },
+    {
+      "scenario": "contract-drift",
+      "expected_target_state": "STAGE_1_CONTRACT_PROBING",
+      "why": "the boundary answered with an envelope matching none its contract fixture recorded, so the contract has to be re-probed"
+    },
+    {
+      "scenario": "unclassified-boundary",
+      "expected_target_state": "STAGE_1_CONTRACT_PROBING",
+      "why": "the failure traces to a boundary property no register row names, so nothing probed it; it is recorded under OTHER and a register amendment is raised"
+    },
+    {
+      "scenario": "domain-precision-mismatch",
+      "expected_target_state": "STAGE_0_DOMAIN_INGESTION",
+      "why": "the value observed at the boundary contradicts the unit precision the lexicon declares for its domain term"
+    }
+  ]
+}

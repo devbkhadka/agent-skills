@@ -1,0 +1,146 @@
+#!/usr/bin/env python3
+"""Renderer: render-slice-plan.
+
+Owner: agent-skills-afp-slice-kfa. Produces `vertical-slice-plan.md` from `execution-dag.json`
+via the shared harness in `lib/render.py`. Renders only `FLOW` slices (per improvement plan
+§4.3); decides nothing else — the declared fields `slice_level`, `user_visible_outcome` and
+`flow_refs` are read as-is, never inferred or filtered by anything but slice_level itself.
+
+Exit Codes:
+- 0: Document written (prints VERTICAL_SLICE_PLAN_RENDERED)
+- Non-zero: Emits bare error code token on stdout, detail on stderr
+
+Supported Error Codes:
+- ARTIFACT_NOT_FOUND
+- ARTIFACT_INVALID_JSON
+- MISSING_FEATURE_SLUG
+- MISSING_SLICE_LEVEL
+- FLOW_SLICE_WITHOUT_OUTCOME
+- SLICE_FLOW_REF_UNKNOWN
+- TEMPLATE_CONTEXT_MISMATCH
+"""
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from lib.render import render_document, RenderError
+
+TEMPLATE_NAME = "slice-plan.md.tmpl"
+DOC_NAME = "vertical-slice-plan.md"
+RENDERER_NAME = "render-slice-plan"
+
+
+def build_parser():
+    parser = argparse.ArgumentParser(description="Render vertical-slice-plan.md from execution-dag.json")
+    parser.add_argument("--artifact", required=True, help="Path to execution-dag.json")
+    parser.add_argument("--out", required=True, help="Output directory")
+    return parser
+
+
+def render_slice_section(sid, name, outcome, flow_refs):
+    heading = "## `%s`" % sid
+    if isinstance(name, str) and name.strip():
+        heading += " — %s" % name.strip()
+    flows_line = "**Flows:** " + ", ".join("`%s`" % fr for fr in flow_refs)
+    return "\n\n".join([
+        heading,
+        "**User-visible outcome:** %s" % outcome.strip(),
+        flows_line,
+    ])
+
+
+def main():
+    parser = build_parser()
+    args = parser.parse_args()
+
+    artifact_path = Path(args.artifact)
+    if not artifact_path.is_file():
+        sys.stderr.write("Execution DAG artifact not found: %s\n" % artifact_path)
+        print("ARTIFACT_NOT_FOUND")
+        return 1
+
+    try:
+        with open(artifact_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except json.JSONDecodeError as e:
+        sys.stderr.write("Invalid JSON in %s: %s\n" % (artifact_path, e))
+        print("ARTIFACT_INVALID_JSON")
+        return 1
+
+    feature_slug = data.get("feature_slug")
+    if not isinstance(feature_slug, str) or not feature_slug.strip():
+        sys.stderr.write("%s missing feature_slug\n" % artifact_path)
+        print("MISSING_FEATURE_SLUG")
+        return 1
+
+    slices = data.get("slices")
+    if not isinstance(slices, list):
+        slices = []
+
+    sections = []
+    for sl in slices:
+        if not isinstance(sl, dict):
+            continue
+        sid = sl.get("slice_id")
+
+        if "slice_level" not in sl:
+            sys.stderr.write("Slice '%s' missing slice_level declaration\n" % sid)
+            print("MISSING_SLICE_LEVEL")
+            return 1
+        slevel = sl.get("slice_level")
+        if slevel not in ("FLOW", "SUBTASK"):
+            sys.stderr.write("Slice '%s' has invalid slice_level '%s'\n" % (sid, slevel))
+            print("MISSING_SLICE_LEVEL")
+            return 1
+        if slevel != "FLOW":
+            continue
+
+        outcome = sl.get("user_visible_outcome")
+        if not isinstance(outcome, str) or not outcome.strip():
+            sys.stderr.write("FLOW slice '%s' missing user_visible_outcome\n" % sid)
+            print("FLOW_SLICE_WITHOUT_OUTCOME")
+            return 1
+
+        flow_refs = sl.get("flow_refs")
+        if (
+            not isinstance(flow_refs, list)
+            or not flow_refs
+            or any(not isinstance(fr, str) or not fr.strip() for fr in flow_refs)
+        ):
+            sys.stderr.write("FLOW slice '%s' has no usable flow_refs\n" % sid)
+            print("SLICE_FLOW_REF_UNKNOWN")
+            return 1
+
+        sections.append(render_slice_section(sid, sl.get("name"), outcome, flow_refs))
+
+    slices_md = "\n\n".join(sections) if sections else "_No flow-level slices declared in this execution DAG._"
+
+    context = {
+        "feature_slug": feature_slug.strip(),
+        "slices": slices_md,
+    }
+
+    try:
+        render_document(
+            template_name=TEMPLATE_NAME,
+            context=context,
+            out_dir=args.out,
+            doc_name=DOC_NAME,
+            artifact_path=artifact_path.name,
+            renderer_name=RENDERER_NAME,
+        )
+    except RenderError as e:
+        sys.stderr.write("%s\n" % e)
+        print("TEMPLATE_CONTEXT_MISMATCH")
+        return 1
+
+    print("VERTICAL_SLICE_PLAN_RENDERED")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

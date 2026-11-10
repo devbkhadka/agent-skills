@@ -1,0 +1,32 @@
+{
+  "schema_version": "1.0.0",
+  "boundary_class": "NETWORK_API",
+  "boundary_identifier": "GET /rest/api/3/worklog/monthly-summary",
+  "fixture_status": "PROBED_LIVE",
+  "success_samples": [
+    {
+      "sample_id": "month-2026-07",
+      "partition_cell": { "month": "2026-07" },
+      "status_code": 200,
+      "exit_code": null,
+      "headers": {},
+      "payload": {
+        "month": "2026-07",
+        "total_hours": 182.50,
+        "days_logged": 23
+      }
+    }
+  ],
+  "failure_envelope_census": [
+    {
+      "envelope_id": "not_found",
+      "error_class": "HTTP_404",
+      "status_code": 404,
+      "exit_code": null,
+      "payload_type": "object",
+      "payload": { "error": "month_not_found" },
+      "sample": { "error": "month_not_found" },
+      "description": "Requested month has no recorded worklog aggregation."
+    }
+  ]
+}

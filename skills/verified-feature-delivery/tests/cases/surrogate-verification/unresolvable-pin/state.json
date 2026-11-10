@@ -1,0 +1,25 @@
+{
+  "schema_version": "1.0.0",
+  "feature_slug": "unresolvable-pin-feature",
+  "current_state": "STAGE_4_MILESTONE_EXECUTION",
+  "updated_at": "2026-08-23T12:00:00Z",
+  "artifacts": {
+    "stage_0_lexicon": "domain-lexicon.json",
+    "stage_1_manifest": "contract-fixtures/manifest.json",
+    "stage_2_scenario_matrix": "flow-simulation-matrix.json",
+    "stage_3_execution_dag": "execution-dag.json",
+    "stage_3_invariants": "slice-invariants.json",
+    "stage_4_milestone_evidence": "milestones/evidence-summary.json",
+    "stage_5_delivery_report": "delivery-report.md"
+  },
+  "history": [
+    {
+      "from_state": "STAGE_3_VERTICAL_SLICING",
+      "to_state": "STAGE_4_MILESTONE_EXECUTION",
+      "transition_type": "ADVANCE",
+      "timestamp": "2026-08-23T12:00:00Z",
+      "gate_artifact_verified": "execution-dag.json",
+      "rollback_cause": null
+    }
+  ]
+}

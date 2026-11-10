@@ -1,0 +1,136 @@
+{
+  "schema_version": "1.0.0",
+  "feature_slug": "order-fulfillment-pipeline",
+  "scenario_id": "scenario_order_external_payment_timeout_failure",
+  "slice_id": "slice_payment_integration",
+  "description": "External payment gateway boundary failure (HTTP 504 Gateway Timeout) triggers circuit breaker and transitions order to PAYMENT_RETRYABLE_SUSPENDED.",
+  "derived_from": {
+    "state_id": "ORDER_SUBMITTED",
+    "transition_id": "TRANS_PAYMENT_GATEWAY_TIMEOUT",
+    "branch_coverage_class": "OPERATIONAL_EDGE_CASES"
+  },
+  "mock_boundary_contract": {
+    "isolation_mode": "STRICT_EXTERNAL_MOCK_ONLY",
+    "mock_boundaries": [
+      {
+        "boundary_identifier": "POST /v1/payment/authorizations",
+        "boundary_class": "NETWORK_API",
+        "fixture_ref": {
+          "fixture_path": "contract-fixtures/payment-gateway/manifest.json",
+          "sample_id": "sample_auth_504_gateway_timeout",
+          "fixture_status": "PROBED_LIVE"
+        },
+        "is_external": true
+      }
+    ],
+    "prohibited_mocks": [
+      "OrderAggregate",
+      "OrderValidationEngine",
+      "OrderStateMachine",
+      "PostgresOrderRepository"
+    ]
+  },
+  "given": {
+    "state_token": "ORDER_SUBMITTED",
+    "entity_states": [
+      {
+        "entity_name": "Order",
+        "entity_id": "ord_1003",
+        "attributes": {
+          "customer_id": "cust_881",
+          "item_count": 1,
+          "subtotal_cents": 2500,
+          "tax_cents": 250,
+          "total_cents": 2750,
+          "currency": "USD",
+          "payment_retry_count": 0
+        },
+        "unit_precisions": {
+          "total_cents": "integer_cents"
+        }
+      }
+    ],
+    "datastore_state": {
+      "orders": [
+        {
+          "id": "ord_1003",
+          "status": "SUBMITTED",
+          "customer_id": "cust_881",
+          "total_cents": 2750
+        }
+      ]
+    },
+    "fixture_presets": [
+      {
+        "boundary_identifier": "POST /v1/payment/authorizations",
+        "sample_id": "sample_auth_504_gateway_timeout",
+        "fixture_path": "contract-fixtures/payment-gateway/manifest.json"
+      }
+    ]
+  },
+  "when": {
+    "entrypoint": {
+      "entrypoint_type": "HTTP_HANDLER",
+      "invoked_target": "POST /v1/orders/ord_1003/process-payment",
+      "actor_id": "system_worker",
+      "action_token": "DISPATCH_PAYMENT_REQUEST",
+      "payload": {
+        "order_id": "ord_1003",
+        "max_timeout_ms": 3000
+      },
+      "headers": {
+        "X-Retry-Attempt": "1"
+      }
+    }
+  },
+  "then": {
+    "state_token": "PAYMENT_RETRYABLE_SUSPENDED",
+    "state_assertions": [
+      {
+        "entity_name": "Order",
+        "attribute": "status",
+        "operator": "EQUALS",
+        "expected_value": "PAYMENT_RETRYABLE_SUSPENDED"
+      },
+      {
+        "entity_name": "Order",
+        "attribute": "payment_retry_count",
+        "operator": "EQUALS",
+        "expected_value": 1
+      }
+    ],
+    "observer_projections": [
+      {
+        "observer_id": "operator",
+        "medium": "rendered_ui",
+        "expected_projection": "<div data-order-id=\"ord_1003\"><span class=\"badge-warning\">Payment Suspended: Gateway Timeout</span><button class=\"btn-retry\">Retry Now</button></div>",
+        "discriminator": "badge:warning:payment_suspended",
+        "projection_quantities": ["order_status", "retry_count"]
+      },
+      {
+        "observer_id": "customer",
+        "medium": "api_response",
+        "expected_projection": {
+          "status_code": 503,
+          "order_id": "ord_1003",
+          "order_status": "PAYMENT_RETRYABLE_SUSPENDED",
+          "retry_after_seconds": 30
+        },
+        "discriminator": "order_status:PAYMENT_RETRYABLE_SUSPENDED",
+        "projection_quantities": ["order_status"]
+      }
+    ],
+    "event_emissions": [
+      {
+        "event_name": "PaymentGatewayDegradationAlert",
+        "topic_or_stream": "ops.alerts.v1",
+        "payload": {
+          "boundary_identifier": "POST /v1/payment/authorizations",
+          "observed_status": 504,
+          "order_id": "ord_1003",
+          "occurred_at": "2026-08-30T12:10:00Z"
+        }
+      }
+    ]
+  }
+}

@@ -1,0 +1,3 @@
+{
+  "dependencies": ["resource-lease", "terminal-agent-runner", "beads-task-scheduler", "feature-memory"]
+}

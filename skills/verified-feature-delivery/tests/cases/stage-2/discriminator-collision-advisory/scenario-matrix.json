@@ -1,0 +1,129 @@
+{
+  "schema_version": "1.0.0",
+  "feature_slug": "discriminator-collision-fixture",
+  "updated_at": "2026-08-22T11:00:00Z",
+  "actors": [
+    {
+      "actor_id": "operator",
+      "description": "Interactive user"
+    }
+  ],
+  "observers": [
+    {
+      "observer_id": "operator",
+      "medium": "rendered_ui"
+    }
+  ],
+  "triggers": [
+    {
+      "trigger_id": "submit_query",
+      "actor_id": "operator",
+      "is_actor_repeatable": true,
+      "description": "Submit query"
+    }
+  ],
+  "branch_coverage": {
+    "group_a_resource_and_state": [
+      { "class_name": "ORPHANED_DELETED_TARGET_STATES", "status": "NOT_APPLICABLE", "inapplicable_reason": "No entities deleted." },
+      { "class_name": "RESOURCE_LEAK_AND_TERMINATION_INVARIANTS", "status": "ADDRESSED", "handling_description": "Clean disposal." },
+      { "class_name": "EVENT_ORDERING_AND_MONOTONIC_SEQUENCE_CLOCKS", "status": "ADDRESSED", "handling_description": "Generation counter." },
+      { "class_name": "INGRESS_HANDOFF_DURABILITY", "status": "NOT_APPLICABLE", "inapplicable_reason": "Synchronous call." },
+      { "class_name": "TEMPORAL_EGRESS_FROM_FINITE_LIFESPAN_STATES", "status": "NOT_APPLICABLE", "inapplicable_reason": "No timeouts." },
+      { "class_name": "COMPOUND_PUBLICATION_ORDERING", "status": "NOT_APPLICABLE", "inapplicable_reason": "Single entity." },
+      { "class_name": "OPERATIONAL_EDGE_CASES", "status": "ADDRESSED", "handling_description": "Error mapping." }
+    ],
+    "group_b_trigger_and_observation": [
+      { "class_name": "REPEAT_TRIGGER_OUT_OF_ORDER_SETTLEMENT", "status": "ADDRESSED", "handling_description": "Generation counter." },
+      { "class_name": "DUPLICATE_TRIGGER", "status": "ADDRESSED", "handling_description": "Debounce." },
+      { "class_name": "OBSERVER_TEARDOWN_MID_FLIGHT", "status": "ADDRESSED", "handling_description": "Cleanup hook." },
+      {
+        "class_name": "STALE_OUTPUT_SUPERSESSION",
+        "status": "ADDRESSED",
+        "resolution": "DIMMED",
+        "materialized_states": ["SEARCHING_FROM_IDLE", "SEARCHING_OVER_STALE"],
+        "handling_description": "Split states."
+      },
+      { "class_name": "SEMANTIC_CONTRADICTION", "status": "ADDRESSED", "handling_description": "Explanation modal." }
+    ]
+  },
+  "states": [
+    {
+      "state_id": "IDLE",
+      "evidence_key": "state:IDLE",
+      "is_initial": true,
+      "is_terminal": false,
+      "observable_projections": [
+        {
+          "observer_id": "operator",
+          "medium": "rendered_ui",
+          "discriminator": { "template": "idle_search_bar" }
+        }
+      ]
+    },
+    {
+      "state_id": "SEARCHING_FROM_IDLE",
+      "evidence_key": "state:SEARCHING_FROM_IDLE",
+      "is_initial": false,
+      "is_terminal": false,
+      "observable_projections": [
+        {
+          "observer_id": "operator",
+          "medium": "rendered_ui",
+          "discriminator": {
+            "region": "result_container",
+            "template": "progress_bar_indeterminate",
+            "affordances": ["cancel_query"]
+          }
+        }
+      ]
+    },
+    {
+      "state_id": "SEARCHING_OVER_STALE",
+      "evidence_key": "state:SEARCHING_OVER_STALE",
+      "is_initial": false,
+      "is_terminal": false,
+      "observable_projections": [
+        {
+          "observer_id": "operator",
+          "medium": "rendered_ui",
+          "discriminator": {
+            "region": "result_container",
+            "template": "progress_bar_indeterminate",
+            "affordances": ["cancel_query"]
+          }
+        }
+      ]
+    },
+    {
+      "state_id": "TERMINAL_DONE",
+      "evidence_key": "state:TERMINAL_DONE",
+      "is_initial": false,
+      "is_terminal": true,
+      "terminal_classification": "TERMINAL_SUCCESS",
+      "observable_projections": [
+        {
+          "observer_id": "operator",
+          "medium": "rendered_ui",
+          "discriminator": { "template": "done_view" }
+        }
+      ]
+    }
+  ],
+  "transitions": [
+    {
+      "transition_id": "t1",
+      "from_state": "IDLE",
+      "to_state": "SEARCHING_FROM_IDLE"
+    },
+    {
+      "transition_id": "t2",
+      "from_state": "SEARCHING_FROM_IDLE",
+      "to_state": "SEARCHING_OVER_STALE"
+    },
+    {
+      "transition_id": "t3",
+      "from_state": "SEARCHING_OVER_STALE",
+      "to_state": "TERMINAL_DONE"
+    }
+  ]
+}

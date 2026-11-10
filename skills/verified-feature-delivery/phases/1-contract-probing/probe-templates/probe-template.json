@@ -1,0 +1,21 @@
+{
+  "$comment": "Stage 1 Probe Fixture Template. Owned by stage-1.",
+  "boundary_id": "example-boundary",
+  "boundary_class": "SUBPROCESS_CLI",
+  "property_name": "exit_and_delimiters",
+  "fixture_status": "PROBED_LIVE",
+  "pinned_reprobe_milestone": null,
+  "success_samples": [
+    {
+      "sample_id": "sample-1",
+      "payload": { "exit_code": 0, "stdout": "ok\n", "stderr": "" }
+    }
+  ],
+  "failure_envelope_census": [
+    {
+      "error_class": "NON_ZERO_EXIT",
+      "sample": { "exit_code": 1, "stderr": "error: not found\n" }
+    }
+  ],
+  "variance_census": {}
+}

@@ -1,0 +1,343 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "BDDScenario",
+  "description": "BDD Scenario & Mock-Boundary Contract Schema. Derived from Stage 2 flow simulation and Stage 1 contract fixtures. Defines executable Given/When/Then scenarios with strict mock-boundary isolation against real production code entrypoints.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "feature_slug",
+    "scenario_id",
+    "slice_id",
+    "description",
+    "derived_from",
+    "mock_boundary_contract",
+    "given",
+    "when",
+    "then"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "description": "Semantic schema version string (e.g. 1.0.0)"
+    },
+    "feature_slug": {
+      "type": "string",
+      "description": "Unique slug identifier for the feature under plan"
+    },
+    "scenario_id": {
+      "type": "string",
+      "description": "Unique identifier for this BDD scenario"
+    },
+    "slice_id": {
+      "type": "string",
+      "description": "Target vertical slice identifier (e.g. slice_order_creation)"
+    },
+    "description": {
+      "type": "string",
+      "description": "Human-readable intent and narrative for this scenario"
+    },
+    "derived_from": {
+      "type": "object",
+      "description": "Traceability link to Stage 2 simulation state, transition, and branch group coverage",
+      "additionalProperties": false,
+      "required": ["state_id", "transition_id", "branch_coverage_class"],
+      "properties": {
+        "state_id": {
+          "type": "string",
+          "description": "State ID in flow-simulation-matrix.json"
+        },
+        "transition_id": {
+          "type": "string",
+          "description": "Transition ID in flow-simulation-matrix.json"
+        },
+        "branch_coverage_class": {
+          "type": "string",
+          "description": "Branch Class Group A or Group B taxonomy identifier"
+        }
+      }
+    },
+    "mock_boundary_contract": {
+      "type": "object",
+      "description": "Strict mock boundary contract declaring allowed external mocks and prohibited internal mocks",
+      "additionalProperties": false,
+      "required": ["isolation_mode", "mock_boundaries", "prohibited_mocks"],
+      "properties": {
+        "isolation_mode": {
+          "type": "string",
+          "enum": ["STRICT_EXTERNAL_MOCK_ONLY"],
+          "description": "Enforces that domain logic, entities, and state machines execute real production code"
+        },
+        "mock_boundaries": {
+          "type": "array",
+          "description": "External boundary adapters permitted to be mocked via contract fixture replay",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["boundary_identifier", "boundary_class", "fixture_ref", "is_external"],
+            "properties": {
+              "boundary_identifier": {
+                "type": "string",
+                "description": "Unique boundary identifier declared in boundary-manifest.json"
+              },
+              "boundary_class": {
+                "type": "string",
+                "enum": [
+                  "SUBPROCESS_CLI",
+                  "NETWORK_API",
+                  "FRAMEWORK_MIDDLEWARE",
+                  "DATASTORE",
+                  "MESSAGE_TRANSPORT",
+                  "DEVICE_IO",
+                  "MODEL_ENDPOINT",
+                  "UI_RUNTIME",
+                  "VERIFICATION_HARNESS",
+                  "OTHER"
+                ]
+              },
+              "fixture_ref": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["fixture_path", "sample_id", "fixture_status"],
+                "properties": {
+                  "fixture_path": {
+                    "type": "string",
+                    "description": "Relative path to recorded contract fixture under contract-fixtures/"
+                  },
+                  "sample_id": {
+                    "type": "string",
+                    "description": "Sample ID within success_samples or failure_envelope_census"
+                  },
+                  "fixture_status": {
+                    "type": "string",
+                    "enum": [
+                      "PROBED_LIVE",
+                      "REPLAYED_FROM_RECORDING",
+                      "PROVISIONAL_FROM_SCHEMA"
+                    ]
+                  }
+                }
+              },
+              "is_external": {
+                "type": "boolean",
+                "enum": [true],
+                "description": "Must be true; mocking internal components is prohibited"
+              }
+            }
+          }
+        },
+        "prohibited_mocks": {
+          "type": "array",
+          "description": "Explicit list of internal modules/entities forbidden from being mocked",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "given": {
+      "type": "object",
+      "description": "Preconditions: initial state token, domain entity states, and active fixture presets",
+      "additionalProperties": false,
+      "required": ["state_token", "fixture_presets"],
+      "properties": {
+        "state_token": {
+          "type": "string",
+          "description": "Initial domain state token from flow-simulation-matrix.json or domain-lexicon.json"
+        },
+        "entity_states": {
+          "type": "array",
+          "description": "Initial domain entity instances and locked precision attribute values",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["entity_name", "entity_id", "attributes"],
+            "properties": {
+              "entity_name": { "type": "string" },
+              "entity_id": { "type": ["string", "number"] },
+              "attributes": { "type": "object" },
+              "unit_precisions": { "type": "object" }
+            }
+          }
+        },
+        "datastore_state": {
+          "type": ["object", "array"],
+          "description": "Baseline datastore records or seed state for production datastore"
+        },
+        "fixture_presets": {
+          "type": "array",
+          "description": "Active external mock presets replaying verified contract fixture samples",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["boundary_identifier", "sample_id", "fixture_path"],
+            "properties": {
+              "boundary_identifier": { "type": "string" },
+              "sample_id": { "type": "string" },
+              "fixture_path": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "when": {
+      "type": "object",
+      "description": "Execution: invocation of the real production entrypoint",
+      "additionalProperties": false,
+      "required": ["entrypoint"],
+      "properties": {
+        "entrypoint": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["entrypoint_type", "invoked_target", "actor_id", "action_token"],
+          "properties": {
+            "entrypoint_type": {
+              "type": "string",
+              "enum": ["CLI_COMMAND", "HTTP_HANDLER", "MESSAGE_CONSUMER", "FUNCTION_CALL"]
+            },
+            "invoked_target": {
+              "type": "string",
+              "description": "Concrete command, route, topic, or function symbol in production codebase"
+            },
+            "actor_id": {
+              "type": "string",
+              "description": "Domain actor invoking the entrypoint"
+            },
+            "action_token": {
+              "type": "string",
+              "description": "Action or trigger token matching domain lexicon / scenario matrix"
+            },
+            "payload": {
+              "description": "Input payload, request body, or arguments supplied to entrypoint"
+            },
+            "headers": {
+              "type": "object",
+              "description": "Optional request headers or metadata context"
+            },
+            "command_args": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "CLI flags or positional arguments when entrypoint_type is CLI_COMMAND"
+            }
+          }
+        }
+      }
+    },
+    "then": {
+      "type": "object",
+      "description": "Postconditions: resulting state token, assertions, observer projections, and event emissions",
+      "additionalProperties": false,
+      "required": ["state_token", "state_assertions", "observer_projections"],
+      "properties": {
+        "state_token": {
+          "type": "string",
+          "description": "Resulting domain state token after execution"
+        },
+        "state_assertions": {
+          "type": "array",
+          "description": "Assertions verifying real domain entity mutations and invariant guarantees",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["entity_name", "attribute", "operator", "expected_value"],
+            "properties": {
+              "entity_name": { "type": "string" },
+              "attribute": { "type": "string" },
+              "operator": {
+                "type": "string",
+                "enum": [
+                  "EQUALS",
+                  "NOT_EQUALS",
+                  "GREATER_THAN",
+                  "LESS_THAN",
+                  "CONTAINS",
+                  "MATCHES_REGEX",
+                  "IS_NULL",
+                  "NOT_NULL"
+                ]
+              },
+              "expected_value": {},
+              "unit_ref": {
+                "type": "string",
+                "description": "Unit precision reference in domain lexicon"
+              }
+            }
+          }
+        },
+        "observer_projections": {
+          "type": "array",
+          "description": "Verifications across perceived media for registered observers",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["observer_id", "medium", "expected_projection", "discriminator"],
+            "properties": {
+              "observer_id": { "type": "string" },
+              "medium": {
+                "type": "string",
+                "enum": [
+                  "rendered_ui",
+                  "api_response",
+                  "process_exit",
+                  "datastore_state",
+                  "device_actuation",
+                  "agent_transcript"
+                ]
+              },
+              "expected_projection": {
+                "description": "Expected rendered DOM snippet, JSON response envelope, or normalized string"
+              },
+              "discriminator": {
+                "type": "string",
+                "description": "Discriminator pattern or key distinguishing this state from others"
+              },
+              "projection_quantities": {
+                "type": "array",
+                "description": "Declared projection quantities bound in domain-lexicon.json",
+                "items": { "type": "string" }
+              }
+            }
+          }
+        },
+        "event_emissions": {
+          "type": "array",
+          "description": "Events, message records, or audit log entries emitted during execution",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["event_name", "topic_or_stream", "payload"],
+            "properties": {
+              "event_name": { "type": "string" },
+              "topic_or_stream": { "type": "string" },
+              "payload": { "type": "object" }
+            }
+          }
+        }
+      }
+    },
+    "execution_evidence": {
+      "type": "object",
+      "description": "Optional execution outcome and evidence references captured during Stage 4 verification",
+      "additionalProperties": false,
+      "required": ["execution_status", "raw_log_path", "markdown_report_path", "captured_fingerprint"],
+      "properties": {
+        "execution_status": {
+          "type": "string",
+          "enum": ["PASSED", "FAILED"]
+        },
+        "raw_log_path": {
+          "type": "string",
+          "description": "Relative path to raw diagnostics log"
+        },
+        "markdown_report_path": {
+          "type": "string",
+          "description": "Relative path to rendered markdown scenario report"
+        },
+        "captured_fingerprint": {
+          "type": "string",
+          "description": "SHA-256 fingerprint of normalized observer projection"
+        }
+      }
+    }
+  }
+}

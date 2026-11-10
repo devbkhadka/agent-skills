@@ -1,0 +1,22 @@
+{
+  "captured_artifact": {
+    "status_code": 200,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "total_results": 4210,
+      "cursor": "cur_xyz",
+      "results": [
+        {"id": "chunk_101", "score": 0.94}
+      ]
+    }
+  },
+  "value_bindings": [
+    {
+      "domain_term": "total_results",
+      "projection_binding": "SearchResponse.total_results to the operator result summary count",
+      "asserted_value": 4210
+    }
+  ]
+}

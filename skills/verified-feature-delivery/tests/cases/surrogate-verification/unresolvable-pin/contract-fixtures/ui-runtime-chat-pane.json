@@ -1,0 +1,37 @@
+{
+  "schema_version": "1.0.0",
+  "boundary_class": "UI_RUNTIME",
+  "boundary_identifier": "ChatPane DOM Runtime",
+  "property_name": "render_and_teardown_lifecycle",
+  "fixture_status": "PROVISIONAL_FROM_SCHEMA",
+  "pinned_reprobe_milestone": "GHOST_REPROBE_MILESTONE",
+  "contract_reference": "ChatPane DOM Rendering Contract",
+  "contract_variant_selectors": [],
+  "success_samples": [
+    {
+      "sample_id": "dom_render_complete",
+      "partition_cell": {},
+      "status_code": null,
+      "exit_code": null,
+      "headers": {},
+      "payload": {
+        "view_state": "LOADED",
+        "rendered_elements": ["#chat-log", "#chat-input"]
+      }
+    }
+  ],
+  "failure_envelope_census": [
+    {
+      "envelope_id": "dom_render_error_state",
+      "error_class": "UI_ERROR",
+      "status_code": null,
+      "exit_code": null,
+      "payload_type": "DOM_STATE",
+      "payload": {
+        "view_state": "ERROR",
+        "error_message": "Failed to load chat history"
+      },
+      "description": "UI enters error state and displays accessible error banner."
+    }
+  ]
+}

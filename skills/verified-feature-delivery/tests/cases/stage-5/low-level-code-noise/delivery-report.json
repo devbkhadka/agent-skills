@@ -1,0 +1,48 @@
+{
+  "schema_version": "1.0.0",
+  "feature_slug": "search-console-web-ui",
+  "delivered_at": "2026-08-22T11:45:00Z",
+  "intent_sections": [
+    {
+      "header": "[Milestone]",
+      "title": "Search Console Query Flow Verified",
+      "summary": "Updated App.tsx line 42: const [q, setQ] = useState<string>(''); function handleSearch() { axios.post('/v1/search', { params: { query: q } }); } and then wired the setter into the submit handler.",
+      "milestone_refs": ["M1_PURE_FILTER", "M3_UI_QUERY_FLOW"]
+    },
+    {
+      "header": "[Risk]",
+      "title": "Search Boundary Latency Above the Client Guard",
+      "summary": "A search that takes longer than three seconds trips the client timeout guard and the console returns to idle rather than hanging. The boundary itself is not rate limited, so a slow index is the only way this fires.",
+      "mitigation": "The timeout guard is the invariant under watch. If the boundary starts to exceed it in normal use, the deadline belongs in the scenario matrix as a branch rather than as a guard."
+    }
+  ],
+  "milestone_evidence_records": [
+    {
+      "milestone_id": "M1_PURE_FILTER",
+      "slice_id": "slice_1_query_entry",
+      "artifact_path": "evidence/m1_pure_filter_run.json",
+      "claims_evaluated": [
+        {
+          "claim_id": "claim:logic:flat_and_filter_composition",
+          "claim_kind": "value_correctness"
+        }
+      ]
+    },
+    {
+      "milestone_id": "M3_UI_QUERY_FLOW",
+      "slice_id": "slice_1_query_entry",
+      "artifact_path": "evidence/m3_ui_query_capture.json",
+      "claims_evaluated": [
+        {
+          "claim_id": "claim:ui:observable_projections_distinct",
+          "claim_kind": "state_observable_and_distinct",
+          "evidence_key": "state:RESULTS_POPULATED"
+        },
+        {
+          "claim_id": "claim:layout:narrow_viewport_floor",
+          "claim_kind": "layout_viewport_floor_overflow"
+        }
+      ]
+    }
+  ]
+}

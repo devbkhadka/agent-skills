@@ -1,0 +1,249 @@
+{
+  "schema_version": "1.0.0",
+  "boundary_class": "NETWORK_API",
+  "boundary_identifier": "GET /rest/api/3/search/jql",
+  "property_name": "status_codes",
+  "fixture_status": "PROBED_LIVE",
+  "pinned_reprobe_milestone": null,
+  "contract_reference": "https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issue-search/#api-rest-api-3-search-jql-get",
+  "contract_variant_selectors": [],
+  "success_samples": [
+    {
+      "sample_id": "jira_search_jql_200",
+      "partition_cell": {
+        "endpoint": "search_jql",
+        "query_type": "user_monthly"
+      },
+      "status_code": 200,
+      "exit_code": null,
+      "headers": {
+        "content-type": "application/json;charset=UTF-8",
+        "ratelimit-remaining": "349"
+      },
+      "payload": {
+        "issues_count": 10,
+        "sample_issues": [
+          {
+            "key": "PROJ-2519",
+            "summary": "Setup e2e testing for web application",
+            "worklogs_count": 2
+          },
+          {
+            "key": "PROJ-2485",
+            "summary": "Application Creation Assistant \u2014 shell, stepper & navigation",
+            "worklogs_count": 1
+          },
+          {
+            "key": "PROJ-2486",
+            "summary": "Application Creation Assistant \u2014 Step: Select application type",
+            "worklogs_count": 1
+          }
+        ]
+      }
+    },
+    {
+      "sample_id": "jira_issue_worklog_200",
+      "partition_cell": {
+        "endpoint": "issue_worklogs",
+        "query_type": "single_issue"
+      },
+      "status_code": 200,
+      "exit_code": null,
+      "headers": {
+        "content-type": "application/json;charset=UTF-8"
+      },
+      "payload": {
+        "issue_key": "PROJ-2519",
+        "worklogs": [
+          {
+            "self": "https://example.atlassian.net/rest/api/3/issue/40332/worklog/48953",
+            "author": {
+              "self": "https://example.atlassian.net/rest/api/3/user?accountId=712020%3A9dfa0a65-3da6-4076-b544-c6438690830e",
+              "accountId": "712020:9dfa0a65-3da6-4076-b544-c6438690830e",
+              "emailAddress": "dev.k@example.com",
+              "avatarUrls": {
+                "48x48": "https://avatar-management--avatars.us-west-2.prod.public.atl-paas.net/712020:9dfa0a65-3da6-4076-b544-c6438690830e/d06db7e3-33ad-450a-8022-183f878683e7/48",
+                "24x24": "https://avatar-management--avatars.us-west-2.prod.public.atl-paas.net/712020:9dfa0a65-3da6-4076-b544-c6438690830e/d06db7e3-33ad-450a-8022-183f878683e7/24",
+                "16x16": "https://avatar-management--avatars.us-west-2.prod.public.atl-paas.net/712020:9dfa0a65-3da6-4076-b544-c6438690830e/d06db7e3-33ad-450a-8022-183f878683e7/16",
+                "32x32": "https://avatar-management--avatars.us-west-2.prod.public.atl-paas.net/712020:9dfa0a65-3da6-4076-b544-c6438690830e/d06db7e3-33ad-450a-8022-183f878683e7/32"
+              },
+              "displayName": "Dev Khadka",
+              "active": true,
+              "timeZone": "Australia/Sydney",
+              "accountType": "atlassian"
+            },
+            "updateAuthor": {
+              "self": "https://example.atlassian.net/rest/api/3/user?accountId=712020%3A9dfa0a65-3da6-4076-b544-c6438690830e",
+              "accountId": "712020:9dfa0a65-3da6-4076-b544-c6438690830e",
+              "emailAddress": "dev.k@example.com",
+              "avatarUrls": {
+                "48x48": "https://avatar-management--avatars.us-west-2.prod.public.atl-paas.net/712020:9dfa0a65-3da6-4076-b544-c6438690830e/d06db7e3-33ad-450a-8022-183f878683e7/48",
+                "24x24": "https://avatar-management--avatars.us-west-2.prod.public.atl-paas.net/712020:9dfa0a65-3da6-4076-b544-c6438690830e/d06db7e3-33ad-450a-8022-183f878683e7/24",
+                "16x16": "https://avatar-management--avatars.us-west-2.prod.public.atl-paas.net/712020:9dfa0a65-3da6-4076-b544-c6438690830e/d06db7e3-33ad-450a-8022-183f878683e7/16",
+                "32x32": "https://avatar-management--avatars.us-west-2.prod.public.atl-paas.net/712020:9dfa0a65-3da6-4076-b544-c6438690830e/d06db7e3-33ad-450a-8022-183f878683e7/32"
+              },
+              "displayName": "Dev Khadka",
+              "active": true,
+              "timeZone": "Australia/Sydney",
+              "accountType": "atlassian"
+            },
+            "comment": {
+              "type": "doc",
+              "version": 1,
+              "content": [
+                {
+                  "type": "paragraph",
+                  "content": [
+                    {
+                      "type": "text",
+                      "text": "Fix failing e2e smoke tests for web due to UI drift"
+                    }
+                  ],
+                  "attrs": {
+                    "localId": "f97da00e02dc"
+                  }
+                }
+              ]
+            },
+            "created": "2026-08-23T19:52:42.889+1000",
+            "updated": "2026-08-23T19:52:42.889+1000",
+            "started": "2026-08-17T09:00:00.000+1000",
+            "timeSpent": "2h",
+            "timeSpentSeconds": 7200,
+            "id": "48953",
+            "issueId": "40332"
+          },
+          {
+            "self": "https://example.atlassian.net/rest/api/3/issue/40332/worklog/48962",
+            "author": {
+              "self": "https://example.atlassian.net/rest/api/3/user?accountId=712020%3A9dfa0a65-3da6-4076-b544-c6438690830e",
+              "accountId": "712020:9dfa0a65-3da6-4076-b544-c6438690830e",
+              "emailAddress": "dev.k@example.com",
+              "avatarUrls": {
+                "48x48": "https://avatar-management--avatars.us-west-2.prod.public.atl-paas.net/712020:9dfa0a65-3da6-4076-b544-c6438690830e/d06db7e3-33ad-450a-8022-183f878683e7/48",
+                "24x24": "https://avatar-management--avatars.us-west-2.prod.public.atl-paas.net/712020:9dfa0a65-3da6-4076-b544-c6438690830e/d06db7e3-33ad-450a-8022-183f878683e7/24",
+                "16x16": "https://avatar-management--avatars.us-west-2.prod.public.atl-paas.net/712020:9dfa0a65-3da6-4076-b544-c6438690830e/d06db7e3-33ad-450a-8022-183f878683e7/16",
+                "32x32": "https://avatar-management--avatars.us-west-2.prod.public.atl-paas.net/712020:9dfa0a65-3da6-4076-b544-c6438690830e/d06db7e3-33ad-450a-8022-183f878683e7/32"
+              },
+              "displayName": "Dev Khadka",
+              "active": true,
+              "timeZone": "Australia/Sydney",
+              "accountType": "atlassian"
+            },
+            "updateAuthor": {
+              "self": "https://example.atlassian.net/rest/api/3/user?accountId=712020%3A9dfa0a65-3da6-4076-b544-c6438690830e",
+              "accountId": "712020:9dfa0a65-3da6-4076-b544-c6438690830e",
+              "emailAddress": "dev.k@example.com",
+              "avatarUrls": {
+                "48x48": "https://avatar-management--avatars.us-west-2.prod.public.atl-paas.net/712020:9dfa0a65-3da6-4076-b544-c6438690830e/d06db7e3-33ad-450a-8022-183f878683e7/48",
+                "24x24": "https://avatar-management--avatars.us-west-2.prod.public.atl-paas.net/712020:9dfa0a65-3da6-4076-b544-c6438690830e/d06db7e3-33ad-450a-8022-183f878683e7/24",
+                "16x16": "https://avatar-management--avatars.us-west-2.prod.public.atl-paas.net/712020:9dfa0a65-3da6-4076-b544-c6438690830e/d06db7e3-33ad-450a-8022-183f878683e7/16",
+                "32x32": "https://avatar-management--avatars.us-west-2.prod.public.atl-paas.net/712020:9dfa0a65-3da6-4076-b544-c6438690830e/d06db7e3-33ad-450a-8022-183f878683e7/32"
+              },
+              "displayName": "Dev Khadka",
+              "active": true,
+              "timeZone": "Australia/Sydney",
+              "accountType": "atlassian"
+            },
+            "comment": {
+              "type": "doc",
+              "version": 1,
+              "content": [
+                {
+                  "type": "paragraph",
+                  "content": [
+                    {
+                      "type": "text",
+                      "text": "added playwright e2e app in monorepo with generator and healer skills "
+                    }
+                  ],
+                  "attrs": {
+                    "localId": "a156b58be9bb"
+                  }
+                },
+                {
+                  "type": "paragraph",
+                  "content": [
+                    {
+                      "type": "text",
+                      "text": "added maestro e2e test for mobile app in LX_MobileApp with generator and healer skills "
+                    }
+                  ],
+                  "attrs": {
+                    "localId": "e2251809a823"
+                  }
+                }
+              ]
+            },
+            "created": "2026-08-23T20:18:22.841+1000",
+            "updated": "2026-08-23T20:26:58.161+1000",
+            "started": "2026-08-21T12:17:00.000+1000",
+            "timeSpent": "1d",
+            "timeSpentSeconds": 28800,
+            "id": "48962",
+            "issueId": "40332"
+          }
+        ]
+      }
+    },
+    {
+      "sample_id": "jira_empty_search_200",
+      "partition_cell": {
+        "endpoint": "search_jql",
+        "query_type": "empty_result"
+      },
+      "status_code": 200,
+      "exit_code": null,
+      "headers": {
+        "content-type": "application/json;charset=UTF-8"
+      },
+      "payload": {
+        "issues": [],
+        "total": 0,
+        "is_empty": true
+      }
+    }
+  ],
+  "failure_envelope_census": [
+    {
+      "envelope_id": "jira_bad_jql_400",
+      "error_class": "CLIENT_ERROR",
+      "status_code": 400,
+      "exit_code": null,
+      "payload_type": "JSON",
+      "payload": {
+        "errorMessages": [
+          "Error in the JQL Query: Expecting operator but got 'syntax'. The valid operators are '=', '!=', '<', '>', '<=', '>=', '~', '!~', 'IN', 'NOT IN', 'IS' and 'IS NOT'. (line 1, character 9)"
+        ],
+        "errors": {}
+      },
+      "description": "Jira 400 Bad Request error returned for invalid JQL syntax."
+    },
+    {
+      "envelope_id": "jira_unauthorized_401",
+      "error_class": "AUTHENTICATION_ERROR",
+      "status_code": 401,
+      "exit_code": null,
+      "payload_type": "TEXT_OR_HTML",
+      "payload": {
+        "error": "Unauthorized",
+        "message": "Basic auth credentials invalid or missing"
+      },
+      "description": "Jira 401 Unauthorized when credentials are invalid."
+    },
+    {
+      "envelope_id": "jira_not_found_404",
+      "error_class": "NOT_FOUND",
+      "status_code": 404,
+      "exit_code": null,
+      "payload_type": "JSON",
+      "payload": {
+        "errorMessages": [
+          "Issue does not exist or you do not have permission to see it."
+        ],
+        "errors": {}
+      },
+      "description": "Jira 404 Not Found error when issue or resource does not exist."
+    }
+  ]
+}

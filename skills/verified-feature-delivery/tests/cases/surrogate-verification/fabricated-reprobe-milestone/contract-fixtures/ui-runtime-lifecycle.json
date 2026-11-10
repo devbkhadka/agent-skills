@@ -1,0 +1,41 @@
+{
+  "schema_version": "1.0.0",
+  "boundary_class": "UI_RUNTIME",
+  "boundary_identifier": "DOM TimelogViewer ViewPort",
+  "property_name": "render_and_teardown_lifecycle",
+  "fixture_status": "PROVISIONAL_FROM_SCHEMA",
+  "pinned_reprobe_milestone": "M2_UI_INTEGRATION",
+  "contract_reference": "TimelogViewerUI DOM Rendering Contract",
+  "contract_variant_selectors": [],
+  "success_samples": [
+    {
+      "sample_id": "dom_render_complete",
+      "partition_cell": {},
+      "status_code": null,
+      "exit_code": null,
+      "headers": {},
+      "payload": {
+        "view_state": "LOADED",
+        "rendered_elements": [
+          "#month-total",
+          "#days-list",
+          "#month-selector"
+        ]
+      }
+    }
+  ],
+  "failure_envelope_census": [
+    {
+      "envelope_id": "dom_render_error_state",
+      "error_class": "UI_ERROR",
+      "status_code": null,
+      "exit_code": null,
+      "payload_type": "DOM_STATE",
+      "payload": {
+        "view_state": "ERROR",
+        "error_message": "Failed to load timelog data"
+      },
+      "description": "UI enters error state and displays accessible error banner."
+    }
+  ]
+}

@@ -1,0 +1,79 @@
+{
+  "cases": [
+    {
+      "id": "j-packet-from-clean-artifacts-accepted",
+      "stage": "round2-judge",
+      "expect": "ok",
+      "code": null,
+      "argv": [
+        "bin/build-judge-packet",
+        "--feature",
+        "judge-separation-gate",
+        "--dir",
+        "skills/verified-feature-delivery/tests/cases/round2-judge/clean",
+        "--claim",
+        "claim:ui:observable_projections_distinct",
+        "--out",
+        "skills/verified-feature-delivery/tests/cases/round2-judge/clean/judge"
+      ],
+      "why": "a packet built from stage artifacts and captured evidence alone is produced and validates"
+    },
+    {
+      "id": "j-packet-contaminated-by-rationale-inside-artifact-excerpt",
+      "stage": "round2-judge",
+      "expect": "error",
+      "code": "JUDGE_PACKET_CONTAMINATED",
+      "argv": [
+        "bin/build-judge-packet",
+        "--feature",
+        "judge-separation-gate",
+        "--dir",
+        "skills/verified-feature-delivery/tests/cases/round2-judge/contaminated-excerpt",
+        "--claim",
+        "claim:ui:observable_projections_distinct",
+        "--out",
+        "skills/verified-feature-delivery/tests/cases/round2-judge/contaminated-excerpt/judge"
+      ],
+      "why": "the contamination is carried inside an artifact_excerpt -- a legitimate packet field -- rather than as a top-level key named rationale or transcript. A key-name blacklist passes it, which is Face 2; the packet's key set and the provenance of every excerpt both have to be closed."
+    },
+    {
+      "id": "j-blocking-verdict-with-empty-evidence-list",
+      "stage": "round2-judge",
+      "expect": "error",
+      "code": "BLOCKING_VERDICT_WITHOUT_EVIDENCE",
+      "argv": [
+        "bin/verify-evidence",
+        "verify-verdict",
+        "--verdict",
+        "skills/verified-feature-delivery/tests/cases/round2-judge/blocking-empty-evidence/blocking-empty.verdict.json"
+      ],
+      "why": "evidence_examined is present and empty rather than absent, so a key-presence check passes it. This is Face 3: the container exists and carries nothing."
+    },
+    {
+      "id": "j-invalid-judge-verdict-unlisted-token",
+      "stage": "round2-judge",
+      "expect": "error",
+      "code": "INVALID_JUDGE_VERDICT",
+      "argv": [
+        "bin/verify-evidence",
+        "verify-verdict",
+        "--verdict",
+        "skills/verified-feature-delivery/tests/cases/round2-judge/invalid-verdict/invalid-token.verdict.json"
+      ],
+      "why": "verdict contains an unrecognised status token outside CONFIRMED, REFUTED, COLLABORATE"
+    },
+    {
+      "id": "j-collaborate-verdict-nonblocking-accepted",
+      "stage": "round2-judge",
+      "expect": "ok",
+      "code": null,
+      "argv": [
+        "bin/verify-evidence",
+        "verify-verdict",
+        "--verdict",
+        "skills/verified-feature-delivery/tests/cases/round2-judge/collaborate/collaborate.verdict.json"
+      ],
+      "why": "a COLLABORATE verdict with blocking: false and a minimal_fix is accepted, because it is the collaborative default: something real was found and the vertical slice still lands."
+    }
+  ]
+}

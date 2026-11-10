@@ -1,0 +1,34 @@
+{
+  "schema_version": "1.0.0",
+  "boundary_class": "SUBPROCESS_CLI",
+  "boundary_identifier": "jira issue list --raw",
+  "property_name": "stream_delimiters",
+  "fixture_status": "PROBED_LIVE",
+  "pinned_reprobe_milestone": null,
+  "contract_reference": "jira issue list --help",
+  "contract_variant_selectors": [],
+  "success_samples": [
+    {
+      "sample_id": "cli_raw_json_stream",
+      "partition_cell": {},
+      "status_code": null,
+      "exit_code": 0,
+      "headers": {},
+      "payload": {
+        "delimiter": "JSON_ARRAY",
+        "stream_format": "RAW_JSON"
+      }
+    }
+  ],
+  "failure_envelope_census": [
+    {
+      "envelope_id": "cli_stream_parse_error",
+      "error_class": "PARSE_ERROR",
+      "status_code": null,
+      "exit_code": 1,
+      "payload_type": "TEXT",
+      "payload": "JSON decode error on non-json stream",
+      "description": "CLI emits non-JSON text on failure."
+    }
+  ]
+}

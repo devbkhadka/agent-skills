@@ -1,0 +1,62 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "WorkerCapsule",
+  "description": "Compact, deterministic worker handoff capsule containing outcome, changed artifacts, verification summary, evidence paths, file-backed diagnostics reference, blockers, and next action.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "feature_slug",
+    "status",
+    "outcome",
+    "changed_artifacts",
+    "verification",
+    "evidence_paths",
+    "blockers",
+    "next_action"
+  ],
+  "properties": {
+    "schema_version": { "type": "string" },
+    "feature_slug": { "type": "string" },
+    "task_id": { "type": "string" },
+    "slice_id": { "type": ["string", "null"] },
+    "phase": { "type": ["string", "null"] },
+    "status": {
+      "type": "string",
+      "enum": ["completed", "blocked", "failed"]
+    },
+    "outcome": { "type": "string" },
+    "changed_artifacts": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "verification": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["command", "exit_code", "output"],
+        "properties": {
+          "command": { "type": "string" },
+          "exit_code": { "type": "integer" },
+          "output": { "type": "string" },
+          "expected_exit": { "type": "integer" },
+          "expected_empty": { "type": "boolean" },
+          "passed": { "type": "boolean" }
+        }
+      }
+    },
+    "evidence_paths": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "diagnostics_ref": { "type": ["string", "null"] },
+    "sidecar_ref": { "type": ["string", "null"] },
+    "blockers": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "next_action": { "type": "string" },
+    "timestamp": { "type": "string" }
+  }
+}

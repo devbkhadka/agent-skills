@@ -1,0 +1,65 @@
+#!/bin/sh
+# Run agy signed in to the account whose home is $AGY_ACCOUNT_HOME.
+#
+# agy keeps one login in the macOS Keychain and ignores ANTIGRAVITY_APP_DATA_DIR. Run with
+# HOME pointing at an account folder, it cannot reach the Keychain and falls back to that
+# folder's .gemini/antigravity-cli/antigravity-oauth-token. Only agy gets the account HOME:
+# every shell agy starts reads ../zdotdir/.zshenv (zsh) or ../bash_env (bash), which put
+# the real HOME back, so the agent's commands see the real ~/.ssh, ~/.gitconfig and PATH.
+#
+# Used two ways: on PATH as `agy` in a runner worker's tab, and called directly by the
+# agy-<account> shell functions.
+set -eu
+
+if [ -z "${AGY_ACCOUNT_HOME:-}" ]; then
+  echo "agy profile: AGY_ACCOUNT_HOME is not set" >&2
+  exit 2
+fi
+if [ ! -d "$AGY_ACCOUNT_HOME" ]; then
+  echo "agy profile: account home $AGY_ACCOUNT_HOME does not exist" >&2
+  exit 2
+fi
+
+self_dir=$(cd -P "$(dirname "$0")" && pwd)
+profile_dir=$(dirname "$self_dir")
+
+# The real agy is the first one on PATH that is not this wrapper.
+real_agy=""
+old_ifs=$IFS
+IFS=:
+for dir in $PATH; do
+  [ -n "$dir" ] || continue
+  if [ -x "$dir/agy" ] && [ ! "$dir/agy" -ef "$self_dir/agy" ]; then
+    real_agy="$dir/agy"
+    break
+  fi
+done
+IFS=$old_ifs
+if [ -z "$real_agy" ]; then
+  echo "agy profile: no agy found on PATH" >&2
+  exit 127
+fi
+
+export AGY_REAL_HOME="${AGY_REAL_HOME:-$HOME}"
+
+# Settings shared by every account. Linked as whole folders because agy saves files by
+# renaming a new copy over the old one, which turns a file link into a local copy. An
+# existing entry is never replaced, so an account can keep its own copy.
+real_gemini="$AGY_REAL_HOME/.gemini"
+account_gemini="$AGY_ACCOUNT_HOME/.gemini"
+if [ "$real_gemini" != "$account_gemini" ]; then
+  mkdir -p "$account_gemini/antigravity-cli"
+  for rel in config skills GEMINI.md antigravity-cli/mcp; do
+    if [ -e "$real_gemini/$rel" ] && [ ! -e "$account_gemini/$rel" ] && [ ! -L "$account_gemini/$rel" ]; then
+      ln -s "$real_gemini/$rel" "$account_gemini/$rel"
+    fi
+  done
+fi
+
+if [ -n "${ZDOTDIR:-}" ] && [ "$ZDOTDIR" != "$profile_dir/zdotdir" ]; then
+  export AGY_REAL_ZDOTDIR="$ZDOTDIR"
+fi
+export ZDOTDIR="$profile_dir/zdotdir"
+export BASH_ENV="$profile_dir/bash_env"
+
+HOME="$AGY_ACCOUNT_HOME" exec "$real_agy" "$@"

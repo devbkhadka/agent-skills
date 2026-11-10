@@ -1,0 +1,3 @@
+{
+  "dependencies": ["browser-app-debugger", "playwright-cli"]
+}

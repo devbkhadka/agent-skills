@@ -1,0 +1,15 @@
+{
+  "schema_version": "1.0.0",
+  "feature_slug": "unresolvable-pin-feature",
+  "slices": [
+    {
+      "slice_id": "SLICE_1_CHAT_PANE",
+      "milestones": [
+        {
+          "milestone_id": "M1_QUERY_ENTRY",
+          "verification_medium": "rendered_ui"
+        }
+      ]
+    }
+  ]
+}

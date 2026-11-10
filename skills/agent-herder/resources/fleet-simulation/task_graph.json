@@ -1,0 +1,67 @@
+[
+  {
+    "id": "contract-api",
+    "agent": "Claude-1",
+    "cli": "claude",
+    "deps": [],
+    "read_only": false,
+    "resources": ["file:src/api.py", "file:src/contracts.py"],
+    "objective": "Add a single comment line to the top of src/api.py and src/contracts.py marking each as a simulation fixture. Change nothing else."
+  },
+  {
+    "id": "docs-audit",
+    "agent": "Claude-2",
+    "cli": "claude",
+    "deps": [],
+    "read_only": true,
+    "resources": [],
+    "objective": "Read docs/notes.md and state in one sentence whether it documents anything. Do not modify any file."
+  },
+  {
+    "id": "smoke-a",
+    "agent": "Claude-3",
+    "cli": "claude",
+    "deps": [],
+    "read_only": false,
+    "group": "shared:staging",
+    "resources": ["api:staging"],
+    "objective": "Perform the simulated staging smoke check. There is no real service, so just report the check as done. Do not modify any file."
+  },
+  {
+    "id": "smoke-b",
+    "agent": "AGY-1",
+    "cli": "agy",
+    "deps": [],
+    "read_only": false,
+    "group": "shared:staging",
+    "resources": ["api:staging"],
+    "objective": "Perform a second, independent simulated staging smoke check. There is no real service, so just report the check as done. Do not modify any file."
+  },
+  {
+    "id": "schema-migrate",
+    "agent": "Claude-1",
+    "cli": "claude",
+    "deps": ["contract-api"],
+    "read_only": false,
+    "resources": ["file:db/schema.sql", "db:test-postgres"],
+    "objective": "Append a single SQL comment line to db/schema.sql recording the simulated migration. Change nothing else."
+  },
+  {
+    "id": "release-review",
+    "agent": "Claude-2",
+    "cli": "claude",
+    "deps": ["contract-api", "docs-audit", "smoke-a", "schema-migrate"],
+    "read_only": true,
+    "resources": [],
+    "objective": "List the files in this fixture and state in one sentence whether the simulated release looks consistent. Do not modify any file."
+  },
+  {
+    "id": "followup-fix",
+    "agent": "Claude-1",
+    "cli": "claude",
+    "deps": ["release-review"],
+    "read_only": false,
+    "resources": ["file:src/api.py"],
+    "objective": "Append one more comment line to src/api.py noting the release review passed. Change nothing else."
+  }
+]

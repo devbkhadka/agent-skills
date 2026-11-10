@@ -1,0 +1,197 @@
+{
+  "schema_version": "1.0.0",
+  "feature_slug": "optional-keys-accepted-feature",
+  "updated_at": "2026-08-22T11:00:00Z",
+  "actors": [
+    {
+      "actor_id": "operator",
+      "description": "Interactive console operator"
+    }
+  ],
+  "observers": [
+    {
+      "observer_id": "operator",
+      "medium": "rendered_ui",
+      "modality": "browser_dom",
+      "description": "Primary interactive screen"
+    }
+  ],
+  "triggers": [
+    {
+      "trigger_id": "submit_query",
+      "actor_id": "operator",
+      "is_actor_repeatable": false,
+      "description": "Submit single search query"
+    }
+  ],
+  "branch_coverage": {
+    "group_a_resource_and_state": [
+      {
+        "class_name": "ORPHANED_DELETED_TARGET_STATES",
+        "status": "NOT_APPLICABLE",
+        "inapplicable_reason": "No persistent server entity deleted mid-flight.",
+        "handling_description": "N/A",
+        "related_states": []
+      },
+      {
+        "class_name": "RESOURCE_LEAK_AND_TERMINATION_INVARIANTS",
+        "status": "ADDRESSED",
+        "handling_description": "Clean disposal on unmount.",
+        "related_states": ["SEARCHING", "TERMINAL_UNMOUNTED"]
+      },
+      {
+        "class_name": "EVENT_ORDERING_AND_MONOTONIC_SEQUENCE_CLOCKS",
+        "status": "NOT_APPLICABLE",
+        "inapplicable_reason": "Linear non-concurrent execution.",
+        "handling_description": "N/A",
+        "related_states": []
+      },
+      {
+        "class_name": "INGRESS_HANDOFF_DURABILITY",
+        "status": "NOT_APPLICABLE",
+        "inapplicable_reason": "Synchronous request-response.",
+        "handling_description": "N/A",
+        "related_states": []
+      },
+      {
+        "class_name": "TEMPORAL_EGRESS_FROM_FINITE_LIFESPAN_STATES",
+        "status": "NOT_APPLICABLE",
+        "inapplicable_reason": "No deadlines or leases.",
+        "handling_description": "N/A",
+        "related_states": []
+      },
+      {
+        "class_name": "COMPOUND_PUBLICATION_ORDERING",
+        "status": "NOT_APPLICABLE",
+        "inapplicable_reason": "Single entity read.",
+        "handling_description": "N/A",
+        "related_states": []
+      },
+      {
+        "class_name": "OPERATIONAL_EDGE_CASES",
+        "status": "ADDRESSED",
+        "handling_description": "Error mapping.",
+        "related_states": ["TERMINAL_UNMOUNTED"]
+      }
+    ],
+    "group_b_trigger_and_observation": [
+      {
+        "class_name": "REPEAT_TRIGGER_OUT_OF_ORDER_SETTLEMENT",
+        "status": "NOT_APPLICABLE",
+        "inapplicable_reason": "Non-repeatable trigger.",
+        "handling_description": "N/A",
+        "related_states": []
+      },
+      {
+        "class_name": "DUPLICATE_TRIGGER",
+        "status": "NOT_APPLICABLE",
+        "inapplicable_reason": "Non-repeatable trigger.",
+        "handling_description": "N/A",
+        "related_states": []
+      },
+      {
+        "class_name": "OBSERVER_TEARDOWN_MID_FLIGHT",
+        "status": "ADDRESSED",
+        "handling_description": "Unmount cleanup.",
+        "related_states": ["TERMINAL_UNMOUNTED"]
+      },
+      {
+        "class_name": "STALE_OUTPUT_SUPERSESSION",
+        "status": "NOT_APPLICABLE",
+        "inapplicable_reason": "Non-repeatable trigger.",
+        "handling_description": "N/A",
+        "related_states": []
+      },
+      {
+        "class_name": "SEMANTIC_CONTRADICTION",
+        "status": "NOT_APPLICABLE",
+        "inapplicable_reason": "No conflicting filters.",
+        "handling_description": "N/A",
+        "related_states": []
+      }
+    ]
+  },
+  "states": [
+    {
+      "state_id": "IDLE",
+      "evidence_key": "state:IDLE",
+      "is_initial": true,
+      "is_terminal": false,
+      "terminal_classification": "NON_TERMINAL_ACTIVE",
+      "description": "Initial console state ready for user query input.",
+      "observable_projections": [
+        {
+          "observer_id": "operator",
+          "medium": "rendered_ui",
+          "modality": "browser_dom",
+          "description": "Search invitation prompt rendered on root container.",
+          "discriminator": {
+            "region": "query_container",
+            "template": "search_invitation_prompt",
+            "affordances": ["input_query_text", "click_search"]
+          }
+        }
+      ]
+    },
+    {
+      "state_id": "SEARCHING",
+      "evidence_key": "state:SEARCHING",
+      "is_initial": false,
+      "is_terminal": false,
+      "terminal_classification": "NON_TERMINAL_PROGRESS",
+      "description": "Query executing; indeterminate progress bar displayed.",
+      "observable_projections": [
+        {
+          "observer_id": "operator",
+          "medium": "rendered_ui",
+          "modality": "browser_dom",
+          "description": "Indeterminate progress bar rendered over container.",
+          "discriminator": {
+            "region": "result_container",
+            "template": "progress_bar_indeterminate",
+            "affordances": ["cancel_query"]
+          }
+        }
+      ]
+    },
+    {
+      "state_id": "TERMINAL_UNMOUNTED",
+      "evidence_key": "state:TERMINAL_UNMOUNTED",
+      "is_initial": false,
+      "is_terminal": true,
+      "terminal_classification": "TERMINAL_CLEANUP",
+      "description": "Component unmounted from DOM; in-flight requests aborted and listeners cleaned up.",
+      "observable_projections": [
+        {
+          "observer_id": "operator",
+          "medium": "rendered_ui",
+          "modality": "browser_dom",
+          "description": "Empty root DOM element following unmount.",
+          "discriminator": {
+            "region": "root_dom",
+            "template": "dom_unmounted_empty",
+            "affordances": []
+          }
+        }
+      ]
+    }
+  ],
+  "transitions": [
+    {
+      "transition_id": "t1",
+      "from_state": "IDLE",
+      "to_state": "SEARCHING",
+      "trigger_ref": "submit_query",
+      "guard": null,
+      "description": "Initiate query execution"
+    },
+    {
+      "transition_id": "t2",
+      "from_state": "SEARCHING",
+      "to_state": "TERMINAL_UNMOUNTED",
+      "trigger_ref": "component_unmount",
+      "guard": null,
+      "description": "Teardown on unmount"
+    }
+  ]
+}

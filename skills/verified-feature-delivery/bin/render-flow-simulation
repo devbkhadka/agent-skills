@@ -1,0 +1,167 @@
+#!/usr/bin/env python3
+"""Render `flow-simulation.md` from the Stage 2 scenario matrix's flow fields.
+
+Owner: agent-skills-afp-flow-cdp (round 2 renderer bead). Reads `flow_groups[]` and `flows[]`
+from `flow-simulation-matrix.json` (improvement plan §4.2) and calls the shared harness in
+`lib/render.py` to assemble `flow-simulation.md`.
+
+Rule R2 binds this script: every value the document shows is a field the stage validator already
+declared and checked, so a missing field is a refusal, never a fallback. This script does not
+resolve `transition_ref` against the artifact's `transitions[]` array — that array is round 1's
+state-machine detail, not a field §4.2 lists for this document, and printing it would be this
+renderer deciding what belongs on the page instead of the artifact declaring it.
+"""
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from lib.render import RenderError, render_document
+
+RENDERER_NAME = "render-flow-simulation"
+TEMPLATE_NAME = "flow-simulation.md.tmpl"
+DOC_NAME = "flow-simulation.md"
+
+TOP_LEVEL_FIELDS = ("feature_slug", "flow_groups", "flows")
+FLOW_GROUP_FIELDS = (
+    "group_id",
+    "name",
+    "actor_id",
+    "shared_preconditions",
+    "functional_area",
+    "summary",
+)
+FLOW_FIELDS = (
+    "flow_id",
+    "group_id",
+    "name",
+    "actor_id",
+    "preconditions",
+    "steps",
+    "expected_outcome",
+)
+STEP_FIELDS = ("step_no", "action", "actor_id", "transition_ref")
+OUTCOME_FIELDS = ("description", "evidence_key", "observer_id", "medium")
+
+
+def refuse(code):
+    print(code)
+    sys.exit(1)
+
+
+def require_fields(record, fields, code):
+    for field in fields:
+        if field not in record or record[field] is None:
+            refuse(code)
+
+
+def render_body(flow_groups, flows):
+    for flow in flows:
+        require_fields(flow, FLOW_FIELDS, "FLOW_FIELD_MISSING")
+        for step in flow["steps"]:
+            require_fields(step, STEP_FIELDS, "FLOW_STEP_FIELD_MISSING")
+        require_fields(flow["expected_outcome"], OUTCOME_FIELDS, "FLOW_OUTCOME_FIELD_MISSING")
+
+    lines = []
+    for group in flow_groups:
+        require_fields(group, FLOW_GROUP_FIELDS, "FLOW_GROUP_FIELD_MISSING")
+        lines.append("## %s" % group["name"])
+        lines.append("")
+        lines.append("- Functional area: %s" % group["functional_area"])
+        lines.append("- Actor: %s" % group["actor_id"])
+        shared = group["shared_preconditions"]
+        lines.append(
+            "- Shared preconditions: %s" % (", ".join(shared) if shared else "none")
+        )
+        lines.append("")
+        lines.append(group["summary"])
+        lines.append("")
+
+        for flow in flows:
+            if flow["group_id"] != group["group_id"]:
+                continue
+            lines.append("### %s" % flow["name"])
+            lines.append("")
+            lines.append("- Actor: %s" % flow["actor_id"])
+            preconditions = flow["preconditions"]
+            lines.append(
+                "- Preconditions: %s"
+                % (
+                    ", ".join(preconditions)
+                    if preconditions
+                    else "none beyond the group's shared preconditions"
+                )
+            )
+            lines.append("")
+            lines.append("Steps:")
+            lines.append("")
+            for step in flow["steps"]:
+                lines.append(
+                    "%s. %s (actor: %s, transition: `%s`)"
+                    % (
+                        step["step_no"],
+                        step["action"],
+                        step["actor_id"],
+                        step["transition_ref"],
+                    )
+                )
+            lines.append("")
+            outcome = flow["expected_outcome"]
+            lines.append("Expected outcome: %s" % outcome["description"])
+            lines.append("")
+            lines.append("- Evidence: `%s`" % outcome["evidence_key"])
+            lines.append(
+                "- Observed by %s via %s" % (outcome["observer_id"], outcome["medium"])
+            )
+            lines.append("")
+
+    return "\n".join(lines).rstrip("\n") + "\n"
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--artifact", required=True)
+    parser.add_argument("--out", required=True)
+    args = parser.parse_args()
+
+    artifact_path = Path(args.artifact)
+    try:
+        raw = artifact_path.read_text(encoding="utf-8")
+    except OSError:
+        refuse("ARTIFACT_UNREADABLE")
+
+    try:
+        artifact = json.loads(raw)
+    except json.JSONDecodeError:
+        refuse("ARTIFACT_NOT_JSON")
+
+    require_fields(artifact, TOP_LEVEL_FIELDS, "FLOW_SIMULATION_FIELD_MISSING")
+
+    flow_groups = artifact["flow_groups"]
+    flows = artifact["flows"]
+    if not isinstance(flow_groups, list) or not flow_groups:
+        refuse("EMPTY_FLOW_GROUP")
+
+    body = render_body(flow_groups, flows)
+    context = {"feature_slug": artifact["feature_slug"], "body": body}
+
+    try:
+        render_document(
+            template_name=TEMPLATE_NAME,
+            context=context,
+            out_dir=args.out,
+            doc_name=DOC_NAME,
+            artifact_path=artifact_path.name,
+            renderer_name=RENDERER_NAME,
+        )
+    except RenderError:
+        refuse("RENDER_CONTEXT_MISMATCH")
+
+    sys.exit(0)
+
+
+if __name__ == "__main__":
+    main()

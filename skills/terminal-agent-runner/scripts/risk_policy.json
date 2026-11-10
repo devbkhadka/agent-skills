@@ -1,0 +1,442 @@
+{
+    "_comment": "Deterministic prompt-classification policy for terminal-agent-runner. Rules are evaluated DENY first, then ALLOW. Anything matching neither is escalated (default-deny). Keep this as data so classification is auditable and testable rather than re-derived per prompt.",
+    "deny": [
+        {
+            "id": "embedded-cli-bypass",
+            "pattern": "--?(dangerously|dangerous|bypass|yolo|full-auto|approval|approve|permission|sandbox|trust|allow)([-_=\\s]|$)",
+            "why": "embedded permission, sandbox, trust, or bypass control"
+        },
+        {
+            "id": "shell-composition",
+            "pattern": "[;&|><`]|\\$\\(",
+            "why": "compound shell syntax, redirection, or command substitution is not eligible for wrapper approval",
+            "_note": "Quote awareness is applied in fleet.py mask_quotes for this rule only. Safety cost / residual risk: nested compound commands inside quotes (e.g. bash -c 'a; b') do not trip shell-composition on the inner separator ';'; destructive payloads remain caught by content deny rules (recursive-delete, git-destructive, remote-exec, privilege); benign compound payloads escalate under default-deny.",
+            "reviewable": true
+        },
+        {
+            "id": "write-output-option",
+            "pattern": "(?:^|\\s)(?:--output(?:=|\\s)|-o(?:\\s|$)|--in-place\\b)",
+            "why": "command option writes output instead of remaining read-only",
+            "reviewable": true
+        },
+        {
+            "id": "recursive-delete",
+            "pattern": "\\brm\\s+(-[a-zA-Z]*\\s+)*-?[a-zA-Z]*[rR][a-zA-Z]*f|\\brm\\s+-[a-zA-Z]*f[a-zA-Z]*[rR]",
+            "why": "recursive force delete"
+        },
+        {
+            "id": "delete-outside-scope",
+            "pattern": "\\brm\\s+.*(/|~|\\$HOME)",
+            "why": "delete outside the working tree"
+        },
+        {
+            "id": "force-push",
+            "pattern": "git\\s+push\\b.*(--force|-f)\\b",
+            "why": "history-rewriting push"
+        },
+        {
+            "id": "git-destructive",
+            "pattern": "git\\s+(reset\\s+--hard|clean\\s+-[a-zA-Z]*[fd]|branch\\s+-D|rebase|checkout|switch|stash|worktree\\s+(add|remove|move|prune))\\b",
+            "why": "can overwrite, hide, relocate, or destroy concurrent fleet work"
+        },
+        {
+            "id": "history-rewrite",
+            "pattern": "filter-branch|filter-repo|\\bbfg\\b",
+            "why": "repo history rewrite"
+        },
+        {
+            "id": "privilege",
+            "pattern": "\\b(sudo|doas|su)\\b",
+            "why": "privilege escalation"
+        },
+        {
+            "id": "perm-wide",
+            "pattern": "\\bchmod\\s+(-R\\s+)?[0-7]*777|\\bchown\\s+-R\\b",
+            "why": "wide permission change"
+        },
+        {
+            "id": "db-destructive",
+            "pattern": "\\b(DROP|TRUNCATE)\\s+(TABLE|DATABASE|SCHEMA)\\b|db:reset|migrate\\s+(reset|fresh)|prisma\\s+migrate\\s+reset",
+            "why": "destructive database operation"
+        },
+        {
+            "id": "publish",
+            "pattern": "\\b(npm|yarn|pnpm)\\s+publish\\b|\\bdocker\\s+push\\b|\\bterraform\\s+(apply|destroy)\\b|\\bkubectl\\s+(delete|apply)\\b",
+            "why": "publishes or mutates external/shared state"
+        },
+        {
+            "id": "deploy",
+            "pattern": "\\b(deploy|release)\\b.*\\b(prod|production)\\b|serverless\\s+deploy|eb\\s+deploy",
+            "why": "production deployment"
+        },
+        {
+            "id": "cloud-mutate",
+            "pattern": "\\baws\\s+(?!.*\\b(describe|list|get)\\b)|\\bgcloud\\s+(?!.*\\b(describe|list|get)\\b)",
+            "why": "cloud mutation"
+        },
+        {
+            "id": "remote-exec",
+            "pattern": "curl[^|]*\\|\\s*(ba)?sh|wget[^|]*\\|\\s*(ba)?sh",
+            "why": "pipe remote content to shell"
+        },
+        {
+            "id": "secrets",
+            "pattern": "\\.env\\b|id_rsa|\\.pem\\b|credentials|SECRET|API_KEY|PRIVATE_KEY",
+            "why": "touches credentials"
+        },
+        {
+            "id": "process-kill",
+            "pattern": "\\bkill(all)?\\s+-9|\\bpkill\\b",
+            "why": "forcible process termination"
+        },
+        {
+            "id": "disk",
+            "pattern": "\\b(dd|mkfs|fdisk|diskutil)\\b",
+            "why": "raw disk operation"
+        },
+        {
+            "id": "history-clear",
+            "pattern": "\\bhistory\\s+-c|shred\\b",
+            "why": "evidence destruction"
+        }
+    ],
+    "allow": [
+        {
+            "id": "reads",
+            "pattern": "^\\s*(?:(?:Command\\s+)?Requesting permission for:\\s*)?(pwd|(?:ls|cat|head|tail|file|stat|wc|tree|which|type|du|df|realpath|basename|dirname|readlink|nl|cut|uniq|comm|printenv)(?:\\s+[-A-Za-z0-9_./:=,@]+)*)\\s*$",
+            "why": "single simple read-only inspection command; none of these can write a file"
+        },
+        {
+            "id": "git-read",
+            "pattern": "^\\s*(?:(?:Command\\s+)?Requesting permission for:\\s*)?git\\s+(status|log|diff|show|rev-parse|blame|describe|ls-files|branch\\s+--(?:list|show-current))(?:\\s+[-A-Za-z0-9_./:=,@]+)*\\s*$",
+            "why": "single bounded read-only git command"
+        },
+        {
+            "id": "pool-read",
+            "pattern": "^\\s*(?:(?:Command\\s+)?Requesting permission for:\\s*)?(?:python3\\s+)?(?:[-A-Za-z0-9_./]+/)?resource_pool\\.py\\s+(status|list-groups)(?:\\s+--group\\s+[-A-Za-z0-9_./:=,@]+)?\\s*$",
+            "why": "read-only resource-pool inspection"
+        },
+        {
+            "id": "file-read",
+            "pattern": "(?s)^(?:Read\\([^\\n]+\\)|(?:File access\\s+)?Read:\\s*[^\\n]+(?:\\s+Reason:\\s*outside workspace)?|Considering File Access[\\s\\n]+[●•]?\\s*Read\\([^\\n]+\\))$",
+            "why": "single editor file-read request"
+        },
+        {
+            "id": "handoff-write",
+            "pattern": "^\\s*(?:(?:Allow (?:creation|writing|editing) of this file|Create file|Write file|Edit file|Accept this file edit|Considering File Access\\s+[●•]?\\s*(?:Edit|Write|Create))\\b.*)?(?:(?:\\.herder/|/\\.herder/|\\.\\.\\.)?(?:[-A-Za-z0-9_.]*handoff|ndoff))[-A-Za-z0-9_.]*\\.json\\b",
+            "why": "agent writing structured handoff evidence to fleet handoff file"
+        },
+        {
+            "id": "version-help",
+            "pattern": "^\\s*(?:(?:Command\\s+)?Requesting permission for:\\s*)?(?:python3\\s+)?(?:[-A-Za-z0-9_./]+)\\s+(?:--version|-V|--help|-h|help|version)\\s*$",
+            "why": "prints help or version only"
+        },
+        {
+            "id": "just-list",
+            "pattern": "^\\s*(?:(?:Command\\s+)?Requesting permission for:\\s*)?just\\s+--list\\s*$",
+            "why": "lists recipe names only; executes nothing"
+        },
+        {
+            "id": "py-compile",
+            "pattern": "^\\s*(?:(?:Command\\s+)?Requesting permission for:\\s*)?python3\\s+-m\\s+py_compile(?:\\s+[-A-Za-z0-9_./]+)+\\s*$",
+            "why": "syntax check that writes no workspace file"
+        },
+        {
+            "id": "grep-read",
+            "pattern": "^\\s*(?:(?:Command\\s+)?Requesting permission for:\\s*)?(?:grep|rg)(?:\\s+-[A-Za-z]+)*(?:\\s+[-A-Za-z0-9_./:=,@^$\\[\\]{}()+*?\\\\\"']+)+\\s*$",
+            "why": "single bounded read-only text search"
+        },
+        {
+            "id": "bash-syntax-check",
+            "pattern": "^\\s*(?:(?:Command\\s+)?Requesting permission for:\\s*)?bash\\s+-n(?:\\s+[-A-Za-z0-9_./]+)+\\s*$",
+            "why": "bash -n parses without executing; symmetric with py-compile"
+        },
+        {
+            "id": "repo-test-entrypoint",
+            "pattern": "^\\s*(?:(?:Command\\s+)?Requesting permission for:\\s*)?bash\\s+(?:[-A-Za-z0-9_./]*/)?skills/[-A-Za-z0-9_.]+/(?:tests/[-A-Za-z0-9_.]+\\.sh|scripts/test_suite\\.sh)(?:\\s+--[-A-Za-z0-9_]+)*\\s*$",
+            "why": "runs this repository's own test entrypoint"
+        },
+        {
+            "id": "agent-cli-info",
+            "pattern": "^\\s*(?:(?:Command\\s+)?Requesting permission for:\\s*)?(?:codex|claude|agy|omp)(?:\\s+[a-z][a-z0-9-]*){0,3}\\s+(?:--help|-h|help|--version|-V|version|changelog|about|whoami|doctor)\\s*$",
+            "why": "informational subcommand of a supported agent CLI"
+        },
+        {
+            "id": "npm-test-entrypoint",
+            "pattern": "^\\s*(?:(?:Command\\s+)?Requesting permission for:\\s*)?npm\\s+run\\s+test:scripts\\s*$",
+            "why": "the repo's own declared test script; runs the node test runner over scripts/tests"
+        },
+        {
+            "id": "git-grep-read",
+            "pattern": "^\\s*(?:(?:Command\\s+)?Requesting permission for:\\s*)?git\\s+grep(?:\\s+(?:-[A-Za-z-]+|\"[^\"]*\"|'[^']*'|[-A-Za-z0-9_./:=,@*]+))*\\s*$",
+            "why": "read-only git grep search, cannot mutate state"
+        },
+        {
+            "id": "just-ota-readonly",
+            "pattern": "^\\s*(?:(?:Command\\s+)?Requesting permission for:\\s*)?just\\s+(?:ota-db-status|ota-test-tier2)\\s*$",
+            "why": "exact read-only OTA status recipe and the tier 2 test entrypoint"
+        },
+        {
+            "id": "psql-select-readonly",
+            "pattern": "^\\s*(?:(?:Command\\s+)?Requesting permission for:\\s*)?docker\\s+exec\\s+(?:-i\\s+)?incyt-postgres-e2e\\s+psql\\s+(?:-[A-Za-z]\\s+[-A-Za-z0-9_.]+\\s+)*-c\\s+\"\\s*SELECT\\b(?![\\s\\S]*\\b(?:INSERT|UPDATE|DELETE|DROP|ALTER|TRUNCATE|CREATE|GRANT|REVOKE|COPY|VACUUM)\\b)[^\"]*\"\\s*$",
+            "why": "single read-only SELECT against the local e2e container; -i optional, trailing semicolon allowed, mutating keywords and a second -c excluded"
+        },
+        {
+            "id": "psql-introspect-readonly",
+            "pattern": "^\\s*(?:(?:Command\\s+)?Requesting permission for:\\s*)?docker\\s+exec\\s+(?:-i\\s+)?incyt-postgres-e2e\\s+psql\\s+(?:-[A-Za-z]\\s+[-A-Za-z0-9_.]+\\s+)*-c\\s+\"\\\\d[a-zA-Z+]*(?:\\s+[^\"]*)?\"\\s*$",
+            "why": "psql describe meta-command against the local e2e container; introspection only, cannot mutate"
+        },
+        {
+            "id": "file-test-read",
+            "pattern": "^\\s*(?:(?:Command\\s+)?Requesting permission for:\\s*)?test(?:\\s+-(?:[fdesrwxL]|nt|ot|ef)\\s+[-A-Za-z0-9_./:=,@]+(?:\\s+[-A-Za-z0-9_./:=,@]+)?)?\\s*$",
+            "why": "single read-only shell test command inspecting file existence or properties; the operand is optional so a bare `test` matches the agy_allow prefix invariant"
+        },
+        {
+            "id": "git-add-explicit",
+            "pattern": "^\\s*(?:(?:Command\\s+)?Requesting permission for:\\s*)?git\\s+add(?:\\s+(?!(?:-[a-zA-Z]|-|\\.{1,2}(?:\\s|$)))[-A-Za-z0-9_./:=,@]+)+\\s*$",
+            "why": "stages explicitly named files only; excludes flags, bare dots, and wildcards to preserve parallel worker isolation"
+        },
+        {
+            "id": "find-read",
+            "pattern": "^\\s*(?:(?:Command\\s+)?Requesting permission for:\\s*)?find(?![\\s\\S]*\\s-(?:exec|execdir|delete|ok|okdir|fls|fprint|fprintf)\\b)(?:\\s+(?:-[A-Za-z-]+|\\\"[^\\\"]*\\\"|'[^']*'|[-A-Za-z0-9_./:=,@*?\\[\\]]+))*\\s*$",
+            "why": "read-only filesystem traversal; the lookahead excludes every find flag that can execute or delete"
+        },
+        {
+            "id": "sed-read",
+            "pattern": "^\\s*(?:(?:Command\\s+)?Requesting permission for:\\s*)?sed(?![\\s\\S]*\\s--?i(?:n-place)?\\b)\\s+-n\\s+(?:\\\"[^\\\"]*\\\"|'[^']*'|[-A-Za-z0-9_./:=,;pq]+)(?:\\s+[-A-Za-z0-9_./]+)+\\s*$",
+            "why": "sed -n prints a line range without writing; a lookahead rejects -i/-i.bak/--in-place anywhere in the command so in-place edits still escalate"
+        }
+    ],
+    "read_only_allow": [
+        {
+            "id": "plan-approval",
+            "pattern": "(?m)^[ \\t]*(?:Ready to code\\?|Here is Claude's plan:|Claude has written up a plan|Write full plan to the plan-mode file only|Treat this as a fleet task|How would you like to handle this plan)",
+            "why": "unattended read-only agent plan approval"
+        }
+    ],
+    "_task_comment": "Rules evaluated against herder-authored task text. Task text arrives intact from the herder and therefore needs no wrap tolerance. Rules match instruction shape rather than bare vocabulary.",
+    "task_deny": [
+        {
+            "id": "embedded-cli-bypass",
+            "pattern": "--(dangerously|dangerous|bypass|yolo|full-auto|approval|approve|permission|sandbox|trust|allow)([-_=\\s]|$)",
+            "why": "embedded permission, sandbox, trust, or bypass control flag"
+        },
+        {
+            "id": "recursive-delete",
+            "pattern": "\\brm\\s+(-[a-zA-Z]*\\s+)*-?[a-zA-Z]*[rR][a-zA-Z]*f|\\brm\\s+-[a-zA-Z]*f[a-zA-Z]*[rR]",
+            "why": "recursive force delete"
+        },
+        {
+            "id": "delete-outside-scope",
+            "pattern": "\\brm\\s+.*(/|~|\\$HOME)",
+            "why": "delete outside the working tree"
+        },
+        {
+            "id": "force-push",
+            "pattern": "git\\s+push\\b.*(--force|-f)\\b",
+            "why": "history-rewriting push"
+        },
+        {
+            "id": "git-destructive",
+            "pattern": "git\\s+(reset\\s+--hard|clean\\s+-[a-zA-Z]*[fd]|branch\\s+-D)\\b",
+            "why": "destructive git command"
+        },
+        {
+            "id": "history-rewrite",
+            "pattern": "git\\s+(filter-branch|filter-repo)|\\bbfg\\b",
+            "why": "repo history rewrite"
+        },
+        {
+            "id": "privilege",
+            "pattern": "\\b(sudo|doas|su)\\s+\\S+",
+            "why": "privilege escalation"
+        },
+        {
+            "id": "perm-wide",
+            "pattern": "\\bchmod\\s+(-R\\s+)?[0-7]*777|\\bchown\\s+-R\\b",
+            "why": "wide permission change"
+        },
+        {
+            "id": "db-destructive",
+            "pattern": "\\b(DROP|TRUNCATE)\\s+(TABLE|DATABASE|SCHEMA)\\b|db:reset|migrate\\s+(reset|fresh)|prisma\\s+migrate\\s+reset",
+            "why": "destructive database operation"
+        },
+        {
+            "id": "publish",
+            "pattern": "\\b(npm|yarn|pnpm)\\s+publish\\b|\\bdocker\\s+push\\b|\\bterraform\\s+(apply|destroy)\\b|\\bkubectl\\s+(delete|apply)\\b",
+            "why": "publishes or mutates external/shared state"
+        },
+        {
+            "id": "deploy",
+            "pattern": "\\b(deploy|release)\\b.*\\b(prod|production)\\b|serverless\\s+deploy|eb\\s+deploy",
+            "why": "production deployment"
+        },
+        {
+            "id": "cloud-mutate",
+            "pattern": "\\baws\\s+(?:--?[a-z0-9-]+(?:[ =]\\S+)?\\s+)*[a-z0-9-]+\\s+(?:rm|mv|cp|sync|mb|rb|(?:create|delete|put|update|modify|terminate|run|start|stop|remove|attach|detach|associate|disassociate|register|deregister|invoke|publish|send|set|tag|untag|reboot|restore|revoke|authorize|import|deploy|cancel|enable|disable|reset|replace)(?:-[a-z0-9-]+)?)\\b|\\bgcloud\\s+(?:[a-z0-9-]+\\s+){1,4}?(?:create|delete|deploy|update|patch|set|reset|start|stop|resize|import|cp|mv|rm|rsync|add-[a-z0-9-]+|remove-[a-z0-9-]+)\\b",
+            "why": "cloud mutation"
+        },
+        {
+            "id": "remote-exec",
+            "pattern": "curl[^|]*\\|\\s*(ba)?sh|wget[^|]*\\|\\s*(ba)?sh",
+            "why": "pipe remote content to shell"
+        },
+        {
+            "id": "process-kill",
+            "pattern": "\\bkill(all)?\\s+-9|\\bpkill\\b",
+            "why": "forcible process termination"
+        },
+        {
+            "id": "disk",
+            "pattern": "\\b(dd\\s+if=|mkfs|fdisk|diskutil)\\b",
+            "why": "raw disk operation"
+        },
+        {
+            "id": "history-clear",
+            "pattern": "\\bhistory\\s+-c|\\bshred\\b",
+            "why": "evidence destruction"
+        }
+    ],
+    "agy_allow": [
+        {
+            "id": "ls",
+            "prefix": "ls",
+            "why": "lists directory contents without modifying filesystem state"
+        },
+        {
+            "id": "cat",
+            "prefix": "cat",
+            "why": "displays file contents without modification"
+        },
+        {
+            "id": "head",
+            "prefix": "head",
+            "why": "displays beginning of file without modification"
+        },
+        {
+            "id": "tail",
+            "prefix": "tail",
+            "why": "displays end of file without modification"
+        },
+        {
+            "id": "file",
+            "prefix": "file",
+            "why": "inspects file type without modification"
+        },
+        {
+            "id": "stat",
+            "prefix": "stat",
+            "why": "displays file and filesystem status without modification"
+        },
+        {
+            "id": "wc",
+            "prefix": "wc",
+            "why": "counts lines, words, and bytes without modifying files"
+        },
+        {
+            "id": "tree",
+            "prefix": "tree",
+            "why": "displays directory tree structure without modifying files"
+        },
+        {
+            "id": "which",
+            "prefix": "which",
+            "why": "locates command binary path without side effects"
+        },
+        {
+            "id": "type",
+            "prefix": "type",
+            "why": "describes command type without side effects"
+        },
+        {
+            "id": "du",
+            "prefix": "du",
+            "why": "displays disk usage statistics without modifying filesystem state"
+        },
+        {
+            "id": "df",
+            "prefix": "df",
+            "why": "displays filesystem disk space usage without modifying filesystem state"
+        },
+        {
+            "id": "git-status",
+            "prefix": "git status",
+            "why": "inspects working tree and staging status without repository mutation"
+        },
+        {
+            "id": "git-log",
+            "prefix": "git log",
+            "why": "displays commit history without modifying repository state"
+        },
+        {
+            "id": "git-diff",
+            "prefix": "git diff",
+            "why": "shows changes between commits or working tree without mutation"
+        },
+        {
+            "id": "git-show",
+            "prefix": "git show",
+            "why": "displays commit details and repository objects without mutation"
+        },
+        {
+            "id": "git-rev-parse",
+            "prefix": "git rev-parse",
+            "why": "parses git revisions and parameters without repository mutation"
+        },
+        {
+            "id": "git-blame",
+            "prefix": "git blame",
+            "why": "shows line-by-line revision history without repository mutation"
+        },
+        {
+            "id": "git-describe",
+            "prefix": "git describe",
+            "why": "describes commits using nearest tags without repository mutation"
+        },
+        {
+            "id": "git-branch-list",
+            "prefix": "git branch --list",
+            "why": "lists branches without creating, deleting, or modifying branches"
+        },
+        {
+            "id": "git-branch-show-current",
+            "prefix": "git branch --show-current",
+            "why": "prints the current branch name without repository mutation"
+        },
+        {
+            "id": "just-list",
+            "prefix": "just --list",
+            "why": "lists recipe names only; executes nothing"
+        },
+        {
+            "id": "test",
+            "prefix": "test",
+            "why": "evaluates a file or path condition and writes nothing"
+        },
+        {
+            "id": "realpath",
+            "prefix": "realpath",
+            "why": "resolves a path without modification"
+        },
+        {
+            "id": "basename",
+            "prefix": "basename",
+            "why": "strips a path to its final component; pure string operation"
+        },
+        {
+            "id": "dirname",
+            "prefix": "dirname",
+            "why": "strips a path to its parent; pure string operation"
+        },
+        {
+            "id": "readlink",
+            "prefix": "readlink",
+            "why": "reads a symlink target without modification"
+        }
+    ],
+    "settings": {
+        "default_action": "escalate",
+        "reviewable": true,
+        "note": "A prompt that matches no ALLOW rule is escalated, never auto-approved. DENY always wins over ALLOW, including when both match."
+    }
+}

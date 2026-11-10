@@ -1,0 +1,139 @@
+{
+  "schema_version": "1.0.0",
+  "feature_slug": "monthly-timelog-viewer",
+  "bounded_context": "timelog_reporting",
+  "entities": [
+    {
+      "name": "TicketWorklog",
+      "description": "Logged work time entry for a Jira issue ticket.",
+      "provenance": "FEATURE_INTRODUCED",
+      "repo_reference": null,
+      "glossary_visibility": "INCLUDE",
+      "plain_language_summary": "Logged work time entry for a Jira issue ticket.",
+      "attributes": [
+        { "name": "id", "type": "string", "description": "Worklog entry identifier." },
+        { "name": "seconds", "type": "int64", "unit_ref": "duration_seconds" }
+      ]
+    },
+    {
+      "name": "DailyCard",
+      "description": "Aggregated daily summary container displaying logged hours for a date.",
+      "provenance": "FEATURE_INTRODUCED",
+      "repo_reference": null,
+      "glossary_visibility": "INCLUDE",
+      "plain_language_summary": "Aggregated daily summary container displaying logged hours for a date.",
+      "attributes": [
+        { "name": "date", "type": "string", "description": "Date string ISO8601." },
+        { "name": "total_hours", "type": "decimal", "unit_ref": "worklog_hours" }
+      ]
+    }
+  ],
+  "value_objects": [],
+  "actions": [],
+  "state_enums": [],
+  "monotonic_clocks": [],
+  "terminal_states": [],
+  "unit_precisions": [
+    {
+      "id": "duration_seconds",
+      "quantity_type": "TEMPORAL",
+      "base_unit": "seconds",
+      "numeric_type": "INTEGER",
+      "representation": "INTEGER",
+      "rounding_mode": "ROUND_FLOOR"
+    },
+    {
+      "id": "worklog_hours",
+      "quantity_type": "TEMPORAL",
+      "base_unit": "hours",
+      "numeric_type": "DECIMAL",
+      "representation": "2_DECIMAL_PLACES",
+      "rounding_mode": "ROUND_HALF_UP"
+    }
+  ],
+  "actors_and_observers": {
+    "actors": [
+      {
+        "id": "User",
+        "kind": "HUMAN",
+        "modality": "WEB_BROWSER",
+        "description": "Employee logging and viewing worklogs.",
+        "provenance": "FEATURE_INTRODUCED",
+        "repo_reference": null,
+        "glossary_visibility": "INCLUDE",
+        "plain_language_summary": "Employee logging and viewing worklogs."
+      }
+    ],
+    "observers": [
+      {
+        "id": "EmployeeObserver",
+        "kind": "HUMAN",
+        "channels": ["rendered_ui"],
+        "description": "Employee observing timelog view.",
+        "provenance": "FEATURE_INTRODUCED",
+        "repo_reference": null,
+        "glossary_visibility": "INCLUDE",
+        "plain_language_summary": "Employee observing timelog view."
+      }
+    ]
+  },
+  "alias_pairs": [],
+  "projection_bindings": [
+    {
+      "projection_id": "daily_hours_badge",
+      "quantity_or_label": "Daily Logged Hours Badge",
+      "observer_id": "EmployeeObserver",
+      "source_type": "PURE_EXPRESSION",
+      "source_reference": "DailyCard.total_hours",
+      "derivation_expression": "sum(TicketWorklog.seconds)"
+    },
+    {
+      "projection_id": "ticket_hours",
+      "quantity_or_label": "Ticket Logged Hours",
+      "observer_id": "EmployeeObserver",
+      "source_type": "CONTRACT_FIELD",
+      "source_reference": "TicketWorklog.seconds",
+      "derivation_expression": "TicketWorklog.seconds"
+    }
+  ],
+  "value_authorities": [
+    {
+      "value_name": "daily_total_hours",
+      "authority_model": "LOCAL_AUTHORITATIVE",
+      "upstream_boundary": null,
+      "local_computation": "sum(TicketWorklog.seconds)",
+      "tolerance_epsilon": 0.001,
+      "divergence_action": "REJECT",
+      "rationale": "Daily hours badge is the sum of contained ticket worklogs."
+    }
+  ],
+  "fact_precedences": [],
+  "dual_computed_values": ["daily_total_hours"],
+  "dual_boundary_facts": [],
+  "entity_relationships": [
+    {
+      "from_entity": "TicketWorklog",
+      "to_entity": "DailyCard",
+      "kind": "REFERENCES",
+      "cardinality": "N:1",
+      "description": "Worklogs belong to daily cards."
+    }
+  ],
+  "entity_boundaries": [
+    {
+      "boundary_id": "timelog_view",
+      "name": "Timelog View Boundary",
+      "entities": ["TicketWorklog", "DailyCard"],
+      "owned_invariants": ["Daily card total equals sum of ticket worklogs"],
+      "interfaces": [
+        {
+          "interface_id": "timelog_ui_render",
+          "direction": "OUTBOUND",
+          "peer": "CLIENT",
+          "contract_ref": "DailyCard",
+          "simulation_strategy": "LIVE_SAMPLE"
+        }
+      ]
+    }
+  ]
+}

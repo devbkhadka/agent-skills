@@ -1,0 +1,112 @@
+================================================================================
+TIME LOG GENERATOR SKILL v1.0.0
+================================================================================
+
+QUICK START:
+  /timelog                                    # Generate time logs for ~/projects/incyt
+  /timelog <path> --since 2024-01-01          # Scan specific path and date range
+  /timelog <path> --force                     # Force full rescan (ignore cache)
+  /timelog <path> --dry-run                   # Preview without writing files
+
+DOCUMENTATION (read in this order):
+  1. INDEX.md          — Navigation guide
+  2. README.md         — User guide & examples
+  3. INTEGRATION.md    — Step-by-step usage & troubleshooting
+  4. TECHNICAL.md      — Algorithms, data structures, extensibility
+  5. SKILL.md          — Official spec for Claude AI system
+
+IMPLEMENTATION SCRIPTS:
+  run.sh               — Main orchestrator (coordinates all stages)
+  timelog_extract.sh   — Stage 1: Deterministic git extraction & hour estimation
+  timelog_infer.py     — Stage 2: LLM feature inference for ungrouped commits
+  timelog_report.py    — Stage 3: Report generation & daily allocation
+
+WHAT IT DOES:
+  ✓ Scans git repositories for commits
+  ✓ Extracts Jira ticket IDs from branch names and messages
+  ✓ Infers feature names using Claude for ungrouped commits
+  ✓ Estimates work hours using deterministic heuristic
+  ✓ Allocates 8 hours per calendar day
+  ✓ Generates monthly summary files (data/daily-summaries/YYYY-MM.md)
+  ✓ Generates daily feature time logs (data/daily-summaries/YYYY-MM-daily-time-log.md)
+  ✓ Generates raw JSON scan results (data/scan-results/YYYY-MM-scan-result.json)
+  ✓ Produces comprehensive statistics report
+
+OUTPUT:
+  timelog-out/
+  ├── data/
+  │   ├── daily-summaries/          Monthly summaries & daily logs
+  │   ├── scan-results/             JSON commit data
+  │   └── states/                   State and cache storage
+  ├── timelog_summary.md            Overall statistics
+  ├── run.log                       Execution log with timestamps
+  ├── .extracted.json               Raw extracted data (debugging)
+  ├── .inferred.json                Processed data (debugging)
+  └── .timelog_last_run.json        Cache for incremental runs
+
+REQUIREMENTS:
+  • git (command-line tool)
+  • jq (JSON processor)
+  • python3 (3.8+)
+  • ANTHROPIC_API_KEY (for feature inference, optional)
+
+HOUR ESTIMATION FORMULA:
+  base = 0.5 hours
+  files_factor = min(files_changed / 5, 2.0)
+  lines_factor = min((added + removed) / 400, 1.5)
+  message_factor = 0.7 | 1.0 | 1.2  (based on message length)
+  merge_factor = 0.1 if merge else 1.0
+  
+  estimated = base × files × lines × message × merge
+  clamped = min(max(estimated, 0.25), 8.0)
+
+DAILY ALLOCATION:
+  • Collects all work items for each calendar day
+  • Sums their estimated hours
+  • If total ≤ 8h: keeps as-is (partial days valid)
+  • If total > 8h: scales proportionally (normalized to 8h)
+
+TICKET ID EXTRACTION PRIORITY:
+  1. Branch name (e.g., feature/PROJ-123-description)
+  2. First line of commit (e.g., PROJ-123 Fix the thing)
+  3. Any line in commit message
+  4. Claude inference (if none found)
+
+PERFORMANCE:
+  • 50 commits, 3 repos → ~2-3 seconds
+  • 500 commits, 10 repos → ~10-15 seconds
+  • 5000 commits, 50 repos → ~60-120 seconds
+
+KEY FEATURES:
+  ✓ Deterministic (all extraction & allocation reproducible)
+  ✓ Incremental (caches last-run, processes only changed repos)
+  ✓ Smart grouping (extracts tickets from branch/commit)
+  ✓ LLM inference (Claude for feature names when needed)
+  ✓ Fair allocation (8h/day per calendar day)
+  ✓ Comprehensive reporting (monthly + daily feature aggregates + JSON scan data)
+  ✓ Easy filtering (--since, --until date range)
+  ✓ Dry-run mode (preview without writing)
+  ✓ Force rescan (--force ignores cache)
+
+TROUBLESHOOTING:
+  No commits?           → Use --force, verify git log works
+  Wrong ticket IDs?     → Check branch name format (PROJ-123)
+  API errors?           → Set ANTHROPIC_API_KEY environment variable
+  Permission denied?    → Check repo folder permissions
+  Hours wrong?          → Review daily logs in data/daily-summaries/
+
+DOCUMENTATION STRUCTURE:
+  INDEX.md              ← START HERE for navigation
+      ↓
+  README.md             ← User guide with examples
+      ↓
+  INTEGRATION.md        ← Step-by-step usage & advanced features
+      ↓
+  TECHNICAL.md          ← Deep dive: algorithms, edge cases, customization
+      ↓
+  SKILL.md              ← Official spec for Claude AI system
+
+VERSION: 1.0.0
+LOCATION: ~/.claude/skills/timelog-generator/
+LAST UPDATED: 2024-11-20
+================================================================================

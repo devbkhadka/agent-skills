@@ -1,0 +1,4 @@
+interface:
+  display_name: "Agent Herder"
+  short_description: "Coordinate lock-safe CLI agent fleets"
+  default_prompt: "Use $agent-herder to plan, launch, monitor, and hand off work across a lock-safe Herdr fleet."

@@ -1,0 +1,19 @@
+{
+  "schema_version": "1.0.0",
+  "feature_slug": "valid-milestone-feature",
+  "milestones": [
+    {
+      "milestone_id": "M1_QUERY_ENTRY",
+      "slice_id": "slice_1",
+      "verification_medium": "rendered_ui",
+      "status": "PASSED",
+      "exit_code": 0,
+      "warning_classes_detected": [],
+      "variance_shapes_exercised": [
+        "shape_summary_4_keys",
+        "shape_detailed_23_keys"
+      ]
+    }
+  ],
+  "provisional_fixtures_outstanding": 0
+}

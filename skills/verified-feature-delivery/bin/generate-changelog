@@ -1,0 +1,165 @@
+#!/usr/bin/env python3
+"""Stage 5 changelog generator: the release record, computed from the verified evidence.
+
+Owner: stage-5.
+
+The changelog is computed from the milestone evidence record in the delivery report, after both
+evidence axes have verified it — never from the version-control log. A commit message describes
+implementation mechanics ("fixed a typo in the search adapter", "added a helper"); the changelog
+describes verified user-facing capability. Computing it from the evidence record is what
+guarantees that only a flow slice with an admissible artifact behind it reaches the release
+record, and that a slice whose claim could not be evidenced appears as the accepted constraint it
+is rather than as a delivered capability.
+
+Nothing is emitted that the gate did not verify. A [Milestone] section naming a milestone with no
+verified evidence is refused rather than summarised, so the changelog cannot outrun the evidence.
+
+Exit codes: 0 when the changelog is written; non-zero printing the bare token of whichever gate
+refused the report, or MISSING_MILESTONE_EVIDENCE when a delivered milestone has no verified
+artifact behind it.
+"""
+
+import argparse
+from pathlib import Path
+import sys
+from typing import Any, Dict, List, Tuple
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from lib.delivery import (
+    MilestoneEvidence,
+    check_gates,
+    lint_abstraction,
+    lint_intent,
+    read_planned_milestones,
+    read_report,
+    sections_with_header,
+    verify_claim,
+    verify_medium,
+)
+
+
+def verified_delivery(
+    report_path: Path, dag_path: Path,
+) -> Tuple[Dict[str, Any], List[MilestoneEvidence], List[str], List[str]]:
+    """The report, its verified evidence and its discharge notes — or the refusals that stop it."""
+    report, problems = read_report(report_path)
+    if report is None:
+        return {}, [], [], problems
+
+    planned, plan_problems = read_planned_milestones(dag_path)
+    if plan_problems:
+        return report, [], [], plan_problems
+
+    for check in (lint_intent, lint_abstraction, check_gates):
+        problems = check(report)
+        if problems:
+            return report, [], [], problems
+
+    verified, problems = verify_medium(report, planned, report_path.parent)
+    if problems:
+        return report, [], [], problems
+
+    notes, problems = verify_claim(report, planned, verified, base_dir=report_path.parent)
+    if problems:
+        return report, verified, notes, problems
+    return report, verified, notes, []
+
+
+def compose_changelog(
+    report: Dict[str, Any], verified: List[MilestoneEvidence],
+) -> Tuple[List[str], List[str]]:
+    """Render the changelog from the verified evidence record, or say what is missing behind it."""
+    by_milestone = {evidence.planned.milestone_id: evidence for evidence in verified}
+    problems: List[str] = []
+
+    lines = ["# Changelog: %s" % (report.get("feature_slug") or "unnamed-feature"), ""]
+    delivered_at = str(report.get("delivered_at") or "").split("T")[0]
+    lines.append("## [Delivered]%s" % ((" - " + delivered_at) if delivered_at else ""))
+    lines.append("")
+
+    milestones = sections_with_header(report, "[Milestone]")
+    if milestones:
+        lines.append("### Milestones Delivered")
+        for section in milestones:
+            lines.append("* **%s**: %s" % (section.get("title"), section.get("summary")))
+            for milestone_id in section.get("milestone_refs", []):
+                evidence = by_milestone.get(str(milestone_id))
+                if evidence is None:
+                    problems.append(
+                        "MISSING_MILESTONE_EVIDENCE: the [Milestone] %r delivers %s, which carries "
+                        "no verified evidence artifact"
+                        % (section.get("title"), milestone_id)
+                    )
+                    continue
+                lines.append(
+                    "  * Evidence: `%s` (`%s`)"
+                    % (evidence.record.get("artifact_path"), evidence.planned.verification_medium)
+                )
+        lines.append("")
+
+    constraints = sections_with_header(report, "[Accepted Constraint]")
+    if constraints:
+        lines.append("### Accepted Constraints")
+        for section in constraints:
+            lines.append("* **%s**: %s" % (section.get("title"), section.get("summary")))
+            lines.append("  * Alternative: %s" % section.get("alternative_verification"))
+        lines.append("")
+
+    risks = sections_with_header(report, "[Risk]")
+    if risks:
+        lines.append("### Operational Risks & Guardrails")
+        for section in risks:
+            lines.append("* **%s**: %s" % (section.get("title"), section.get("summary")))
+            if section.get("mitigation"):
+                lines.append("  * Mitigation: %s" % section["mitigation"])
+        lines.append("")
+
+    return lines, problems
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Stage 5 changelog generator", prog="generate-changelog",
+    )
+    parser.add_argument("report", help="the delivery report")
+    parser.add_argument("execution_dag", help="the execution DAG the milestones were planned in")
+    parser.add_argument("--output", help="where to write the changelog (default: beside the report)")
+    parser.add_argument("--dry-run", action="store_true", help="render without writing")
+    return parser
+
+
+def main() -> int:
+    args = build_parser().parse_args()
+    report_path = Path(args.report)
+
+    report, verified, notes, problems = verified_delivery(report_path, Path(args.execution_dag))
+    if problems:
+        print("\n".join(
+            ["CHANGELOG_REFUSED: the delivery report did not verify, and a changelog computed "
+             "from unverified evidence is a release note for work nobody checked"] + notes + problems
+        ))
+        return 1
+
+    lines, problems = compose_changelog(report, verified)
+    if problems:
+        print("\n".join(problems))
+        return 1
+
+    destination = Path(args.output) if args.output else report_path.parent / "changelog.md"
+    text = "\n".join(lines).rstrip() + "\n"
+    if not args.dry_run:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(text, encoding="utf-8")
+
+    print("\n".join([
+        "CHANGELOG_GENERATED: %d milestone(s) and %d discharged claim(s) from the verified "
+        "evidence record, with no reference to the version-control log (%s)"
+        % (len(verified), len(notes), destination),
+        text,
+    ]))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,0 +1,29 @@
+{
+  "schema_version": "1.0.0",
+  "feature_slug": "monthly-timelog-viewer",
+  "delivered_at": "2026-08-23T12:32:28Z",
+  "intent_sections": [
+    {
+      "header": "[Milestone]",
+      "title": "Core Monthly Timelog View Verified",
+      "summary": "Core monthly timelog view verified against browser DOM rendering contracts.",
+      "milestone_refs": [
+        "MS_CORE_TIMELOG_VIEW"
+      ]
+    }
+  ],
+  "milestone_evidence_records": [
+    {
+      "milestone_id": "MS_CORE_TIMELOG_VIEW",
+      "slice_id": "SLICE_1_CORE_TIMELOG_VIEW",
+      "artifact_path": "evidence/capture.json",
+      "claims_evaluated": [
+        {
+          "claim_id": "CLAIM_CURRENT_MONTH_TIMELOG_DISPLAY",
+          "claim_kind": "state_observable_and_distinct",
+          "evidence_key": "ev_state_display_timelog_report"
+        }
+      ]
+    }
+  ]
+}

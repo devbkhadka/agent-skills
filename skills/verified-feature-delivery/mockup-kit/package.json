@@ -1,0 +1,31 @@
+{
+  "name": "@verified-feature-delivery/mockup-kit",
+  "version": "1.0.0",
+  "description": "Reusable React Mockup Kit and Screen Catalogue for visual layout specification, scoped overlay interactivity, and targeted numbered annotations.",
+  "main": "dist/index.js",
+  "module": "dist/index.mjs",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run"
+  },
+  "keywords": [
+    "mockup",
+    "react",
+    "verified-feature-delivery",
+    "screen-catalogue",
+    "annotations",
+    "layout-primitives"
+  ],
+  "author": "Google Deepmind / Verified Feature Delivery",
+  "license": "Apache-2.0",
+  "peerDependencies": {
+    "react": ">=18.0.0",
+    "react-dom": ">=18.0.0"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "typescript": "^5.4.5"
+  }
+}

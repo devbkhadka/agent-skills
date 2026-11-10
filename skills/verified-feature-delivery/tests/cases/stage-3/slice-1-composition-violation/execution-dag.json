@@ -1,0 +1,35 @@
+{
+  "schema_version": "1.0.0",
+  "feature_slug": "slice-1-composition-violation-feature",
+  "bootstrap_floor": [
+    "index.html",
+    "src/main.tsx"
+  ],
+  "rules": {
+    "disallow_in_slice_1": [
+      "src/components/SecondaryAnalyticsPanel.tsx"
+    ]
+  },
+  "slices": [
+    {
+      "slice_id": "slice_1",
+      "name": "Slice 1 Tracer Bullet",
+      "dependencies": [],
+      "is_slice_1": true,
+      "legs": {
+        "trigger": { "type": "USER_ACTION", "description": "Trigger" },
+        "core_pure_logic": { "pure_module_files": [] },
+        "adapter_persistence": { "optional_leg_present": false },
+        "output_verification": {
+          "verification_medium": "process_exit",
+          "verification_script": "tests/slices/slice_1_verify.sh"
+        }
+      },
+      "files_touched": [
+        "index.html",
+        "src/main.tsx",
+        "src/components/SecondaryAnalyticsPanel.tsx"
+      ]
+    }
+  ]
+}

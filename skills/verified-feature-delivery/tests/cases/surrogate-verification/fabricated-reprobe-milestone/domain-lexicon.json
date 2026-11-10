@@ -1,0 +1,483 @@
+{
+  "schema_version": "1.0.0",
+  "feature_slug": "monthly-timelog-viewer",
+  "bounded_context": "MonthlyTimelogViewer",
+  "entities": [
+    {
+      "name": "MonthlyTimelogReport",
+      "description": "Monthly aggregation of Jira worklog entries grouped by day and ticket.",
+      "provenance": "FEATURE_INTRODUCED",
+      "glossary_visibility": "INCLUDE",
+      "plain_language_summary": "Aggregated report containing all daily time logs and the overall monthly logged hours for a selected calendar month.",
+      "attributes": [
+        {
+          "name": "month",
+          "type": "string",
+          "unit_ref": "calendar_month_precision",
+          "description": "Calendar month identifier in YYYY-MM format."
+        },
+        {
+          "name": "total_hours",
+          "type": "decimal",
+          "unit_ref": "hours_decimal_precision",
+          "observable": true,
+          "projection_id": "month_total_hours_projection",
+          "description": "Sum of all logged hours for the month formatted to 2 decimal places."
+        },
+        {
+          "name": "total_seconds",
+          "type": "integer",
+          "unit_ref": "duration_seconds_precision",
+          "description": "Sum of all logged time in seconds."
+        },
+        {
+          "name": "days_count",
+          "type": "integer",
+          "unit_ref": "ticket_count_precision",
+          "description": "Count of days containing logged time in the month."
+        }
+      ]
+    },
+    {
+      "name": "DailyTimelog",
+      "description": "Daily breakdown of tickets and hours logged on a specific calendar day.",
+      "provenance": "FEATURE_INTRODUCED",
+      "glossary_visibility": "INCLUDE",
+      "plain_language_summary": "A collection of ticket worklog items recorded by the user on a specific calendar date, including the day's total hours.",
+      "attributes": [
+        {
+          "name": "date",
+          "type": "string",
+          "unit_ref": "calendar_date_precision",
+          "description": "Calendar date in YYYY-MM-DD format."
+        },
+        {
+          "name": "daily_total_hours",
+          "type": "decimal",
+          "unit_ref": "hours_decimal_precision",
+          "observable": true,
+          "projection_id": "daily_total_hours_projection",
+          "description": "Total hours logged on this day formatted to 2 decimal places."
+        },
+        {
+          "name": "daily_total_seconds",
+          "type": "integer",
+          "unit_ref": "duration_seconds_precision",
+          "description": "Total seconds logged on this day."
+        }
+      ]
+    },
+    {
+      "name": "TicketWorklog",
+      "description": "Individual or aggregated worklog line item for a ticket on a particular day.",
+      "provenance": "FEATURE_INTRODUCED",
+      "glossary_visibility": "INCLUDE",
+      "plain_language_summary": "A worklog entry recorded on a Jira issue representing time spent and work description for a given day.",
+      "attributes": [
+        {
+          "name": "issue_key",
+          "type": "string",
+          "dimensionless": true,
+          "description": "Jira issue key identifier (e.g. PROJ-123)."
+        },
+        {
+          "name": "summary",
+          "type": "string",
+          "dimensionless": true,
+          "description": "Description of work done from worklog comment or issue summary."
+        },
+        {
+          "name": "hours",
+          "type": "decimal",
+          "unit_ref": "hours_decimal_precision",
+          "observable": true,
+          "projection_id": "ticket_hours_projection",
+          "description": "Hours spent on this ticket for the day formatted to 2 decimal places."
+        },
+        {
+          "name": "seconds",
+          "type": "integer",
+          "unit_ref": "duration_seconds_precision",
+          "description": "Time spent in seconds."
+        }
+      ]
+    }
+  ],
+  "value_objects": [
+    {
+      "name": "MonthSelection",
+      "description": "Selected year and month parameters for reporting query.",
+      "provenance": "FEATURE_INTRODUCED",
+      "glossary_visibility": "INCLUDE",
+      "plain_language_summary": "The calendar month target (year and month) requested by the user.",
+      "attributes": [
+        {
+          "name": "year_month",
+          "type": "string",
+          "unit_ref": "calendar_month_precision",
+          "description": "Target month in YYYY-MM format."
+        }
+      ]
+    },
+    {
+      "name": "JiraCredentials",
+      "description": "Authentication configuration for connecting to Jira Cloud.",
+      "provenance": "FEATURE_INTRODUCED",
+      "glossary_visibility": "INCLUDE",
+      "plain_language_summary": "Configuration holding Jira server URL, user email/username, and API token loaded from environment.",
+      "attributes": [
+        {
+          "name": "server",
+          "type": "string",
+          "dimensionless": true,
+          "description": "Base URL of Jira instance."
+        },
+        {
+          "name": "user",
+          "type": "string",
+          "dimensionless": true,
+          "description": "Jira user email or username."
+        },
+        {
+          "name": "api_token",
+          "type": "string",
+          "dimensionless": true,
+          "description": "Jira API token."
+        }
+      ]
+    }
+  ],
+  "actions": [
+    {
+      "name": "FetchMonthlyTimelog",
+      "description": "Retrieves and processes monthly Jira worklogs for the current user.",
+      "provenance": "FEATURE_INTRODUCED",
+      "glossary_visibility": "INCLUDE",
+      "plain_language_summary": "Query Jira for worklog entries matching the current user and month date range, aggregating them into daily and monthly summaries.",
+      "actor_ref": "User",
+      "target_entity": "MonthlyTimelogReport",
+      "source_state": "IDLE",
+      "target_state": "LOADED"
+    },
+    {
+      "name": "SelectMonth",
+      "description": "User requests report for a different month.",
+      "provenance": "FEATURE_INTRODUCED",
+      "glossary_visibility": "INCLUDE",
+      "plain_language_summary": "Change the active month filter to view worklogs for a preceding or succeeding calendar month.",
+      "actor_ref": "User",
+      "target_entity": "MonthlyTimelogReport",
+      "source_state": ["IDLE", "LOADED", "ERROR"],
+      "target_state": "LOADING"
+    }
+  ],
+  "state_enums": [
+    {
+      "name": "ReportLoadState",
+      "description": "Lifecycle state of the monthly report fetch and rendering operation.",
+      "provenance": "FEATURE_INTRODUCED",
+      "glossary_visibility": "INCLUDE",
+      "plain_language_summary": "Lifecycle state of the monthly report retrieval process.",
+      "tokens": ["IDLE", "LOADING", "LOADED", "ERROR"],
+      "terminal_tokens": ["LOADED", "ERROR"]
+    }
+  ],
+  "monotonic_clocks": [
+    {
+      "name": "RequestSequenceClock",
+      "source_boundary": "UI_RUNTIME",
+      "source_field": "request_seq",
+      "unit_ref": "sequence_clock_precision",
+      "comparison_rule": "GREATER_THAN"
+    }
+  ],
+  "unit_precisions": [
+    {
+      "id": "duration_seconds_precision",
+      "quantity_type": "duration",
+      "base_unit": "second",
+      "numeric_type": "integer",
+      "representation": "int64",
+      "rounding_mode": "NONE"
+    },
+    {
+      "id": "hours_decimal_precision",
+      "quantity_type": "duration",
+      "base_unit": "hour",
+      "numeric_type": "decimal",
+      "representation": "fixed_point_2",
+      "rounding_mode": "ROUND_HALF_UP"
+    },
+    {
+      "id": "calendar_date_precision",
+      "quantity_type": "date",
+      "base_unit": "day",
+      "numeric_type": "string",
+      "representation": "iso8601_date",
+      "rounding_mode": "NONE"
+    },
+    {
+      "id": "calendar_month_precision",
+      "quantity_type": "date_range",
+      "base_unit": "month",
+      "numeric_type": "string",
+      "representation": "iso8601_year_month",
+      "rounding_mode": "NONE"
+    },
+    {
+      "id": "ticket_count_precision",
+      "quantity_type": "cardinality",
+      "base_unit": "count",
+      "numeric_type": "integer",
+      "representation": "uint32",
+      "rounding_mode": "NONE"
+    },
+    {
+      "id": "sequence_clock_precision",
+      "quantity_type": "sequence",
+      "base_unit": "tick",
+      "numeric_type": "integer",
+      "representation": "uint64",
+      "rounding_mode": "NONE"
+    }
+  ],
+  "actors_and_observers": {
+    "actors": [
+      {
+        "id": "User",
+        "kind": "HUMAN",
+        "modality": "WEB_BROWSER",
+        "description": "Developer checking personal Jira logged hours for a calendar month.",
+        "provenance": "FEATURE_INTRODUCED",
+        "glossary_visibility": "INCLUDE",
+        "plain_language_summary": "The user interacting with the web application to view logged hours."
+      }
+    ],
+    "observers": [
+      {
+        "id": "TimelogViewerUI",
+        "kind": "VIEW_PORT",
+        "channels": ["DOM_PAGE"],
+        "description": "HTML+CSS single-page interface rendering daily worklog breakdowns and monthly totals.",
+        "provenance": "FEATURE_INTRODUCED",
+        "glossary_visibility": "INCLUDE",
+        "plain_language_summary": "The web frontend UI that displays time logs, daily totals, and monthly aggregates.",
+        "observable_quantities": [
+          "month_total_hours_projection",
+          "daily_total_hours_projection",
+          "ticket_hours_projection",
+          "active_month_display_projection"
+        ]
+      }
+    ]
+  },
+  "alias_pairs": [
+    {
+      "canonical_concept": "worklog_duration_seconds",
+      "left": {
+        "boundary_class": "NETWORK_API",
+        "token": "timeSpentSeconds"
+      },
+      "right": {
+        "boundary_class": "DATASTORE",
+        "token": "seconds"
+      },
+      "mapping_notes": "Jira REST API returns timeSpentSeconds which maps to internal seconds field."
+    },
+    {
+      "canonical_concept": "worklog_start_date",
+      "left": {
+        "boundary_class": "NETWORK_API",
+        "token": "started"
+      },
+      "right": {
+        "boundary_class": "DATASTORE",
+        "token": "date"
+      },
+      "mapping_notes": "Jira started ISO timestamp truncated to YYYY-MM-DD."
+    },
+    {
+      "canonical_concept": "issue_key_identifier",
+      "left": {
+        "boundary_class": "NETWORK_API",
+        "token": "key"
+      },
+      "right": {
+        "boundary_class": "DATASTORE",
+        "token": "issue_key"
+      },
+      "mapping_notes": "Jira issue key field maps to domain issue_key."
+    },
+    {
+      "canonical_concept": "worklog_comment_text",
+      "left": {
+        "boundary_class": "NETWORK_API",
+        "token": "comment"
+      },
+      "right": {
+        "boundary_class": "DATASTORE",
+        "token": "summary"
+      },
+      "mapping_notes": "Jira worklog comment plain text mapped to summary."
+    }
+  ],
+  "projection_bindings": [
+    {
+      "projection_id": "month_total_hours_projection",
+      "quantity_or_label": "month_total_hours",
+      "observer_id": "TimelogViewerUI",
+      "source_type": "PURE_EXPRESSION",
+      "source_reference": "MonthlyTimelogReport.total_seconds",
+      "derivation_expression": "sprintf('%.2f hrs', MonthlyTimelogReport.total_seconds / 3600)"
+    },
+    {
+      "projection_id": "daily_total_hours_projection",
+      "quantity_or_label": "daily_total_hours",
+      "observer_id": "TimelogViewerUI",
+      "source_type": "PURE_EXPRESSION",
+      "source_reference": "DailyTimelog.daily_total_seconds",
+      "derivation_expression": "sprintf('%.2f hrs', DailyTimelog.daily_total_seconds / 3600)"
+    },
+    {
+      "projection_id": "ticket_hours_projection",
+      "quantity_or_label": "ticket_hours",
+      "observer_id": "TimelogViewerUI",
+      "source_type": "PURE_EXPRESSION",
+      "source_reference": "TicketWorklog.seconds",
+      "derivation_expression": "sprintf('%.2f hrs', TicketWorklog.seconds / 3600)"
+    },
+    {
+      "projection_id": "active_month_display_projection",
+      "quantity_or_label": "active_month_display",
+      "observer_id": "TimelogViewerUI",
+      "source_type": "CONTRACT_FIELD",
+      "source_reference": "MonthlyTimelogReport.month",
+      "derivation_expression": "MonthlyTimelogReport.month"
+    }
+  ],
+  "value_authorities": [
+    {
+      "value_name": "raw_worklog_seconds",
+      "authority_model": "UPSTREAM_AUTHORITATIVE",
+      "upstream_boundary": "NETWORK_API",
+      "local_computation": null,
+      "tolerance_epsilon": null,
+      "divergence_action": null,
+      "rationale": "Jira is the authoritative upstream source for raw worklog logged seconds."
+    },
+    {
+      "value_name": "daily_total_hours",
+      "authority_model": "LOCAL_AUTHORITATIVE",
+      "upstream_boundary": null,
+      "local_computation": "sum(TicketWorklog.seconds) / 3600",
+      "tolerance_epsilon": null,
+      "divergence_action": null,
+      "rationale": "Daily total hours is computed locally from the sum of validated worklog seconds."
+    },
+    {
+      "value_name": "month_total_hours",
+      "authority_model": "LOCAL_AUTHORITATIVE",
+      "upstream_boundary": null,
+      "local_computation": "sum(DailyTimelog.daily_total_seconds) / 3600",
+      "tolerance_epsilon": null,
+      "divergence_action": null,
+      "rationale": "Monthly total hours is computed locally from the sum of daily totals."
+    }
+  ],
+  "fact_precedences": [
+    {
+      "fact_name": "monthly_worklogs",
+      "primary_boundary": "NETWORK_API",
+      "secondary_boundary": "SUBPROCESS_CLI",
+      "precedence_rule": "Direct Jira Cloud REST API via HTTP client takes precedence; local jira CLI acts as fallback verification boundary.",
+      "reconciliation_check": "Compare aggregated (date, issue_key) seconds between REST API payload and CLI output."
+    }
+  ],
+  "entity_relationships": [
+    {
+      "from_entity": "MonthlyTimelogReport",
+      "to_entity": "DailyTimelog",
+      "kind": "OWNS",
+      "cardinality": "1:N",
+      "description": "A monthly report contains zero or more daily timelog summaries."
+    },
+    {
+      "from_entity": "DailyTimelog",
+      "to_entity": "TicketWorklog",
+      "kind": "OWNS",
+      "cardinality": "1:N",
+      "description": "Each day contains one or more ticket worklog entries."
+    }
+  ],
+  "entity_boundaries": [
+    {
+      "boundary_id": "ui_boundary",
+      "name": "Web Frontend Boundary",
+      "entities": ["MonthlyTimelogReport", "DailyTimelog", "TicketWorklog"],
+      "owned_invariants": [
+        "Month total equals sum of daily totals",
+        "Daily total equals sum of ticket hours for that day"
+      ],
+      "interfaces": [
+        {
+          "interface_id": "api_report_fetch",
+          "direction": "OUTBOUND",
+          "peer": "backend_boundary",
+          "contract_ref": "GET /api/timelog?month=YYYY-MM",
+          "description": "Fetches monthly timelog data in JSON format from the backend service."
+        }
+      ]
+    },
+    {
+      "boundary_id": "backend_boundary",
+      "name": "Node.js Backend Server Boundary",
+      "entities": ["MonthlyTimelogReport", "DailyTimelog", "TicketWorklog"],
+      "owned_invariants": [
+        "JQL query strictly scopes worklogAuthor = currentUser() and worklogDate within month bounds",
+        "Aggregates worklogs deterministically by calendar date and ticket"
+      ],
+      "interfaces": [
+        {
+          "interface_id": "http_report_endpoint",
+          "direction": "INBOUND",
+          "peer": "ui_boundary",
+          "contract_ref": "GET /api/timelog?month=YYYY-MM",
+          "description": "Serves structured monthly timelog JSON payload to the UI client."
+        },
+        {
+          "interface_id": "jira_rest_client",
+          "direction": "OUTBOUND",
+          "peer": "jira_boundary",
+          "contract_ref": "Jira REST API /rest/api/3/search & /rest/api/3/issue/{id}/worklog",
+          "description": "Queries Jira Cloud REST API for issues and worklogs."
+        }
+      ]
+    },
+    {
+      "boundary_id": "jira_boundary",
+      "name": "External Jira Cloud Service",
+      "entities": ["TicketWorklog"],
+      "owned_invariants": [
+        "Worklogs hold immutable author and start timestamps",
+        "Time spent is reported in integer seconds"
+      ],
+      "interfaces": [
+        {
+          "interface_id": "jira_api",
+          "direction": "INBOUND",
+          "peer": "backend_boundary",
+          "contract_ref": "Jira REST API v3 / CLI",
+          "description": "External Jira boundary receiving issue search and worklog queries."
+        }
+      ]
+    }
+  ],
+  "simulated_dependencies": [
+    {
+      "boundary_class": "NETWORK_API",
+      "simulation_strategy": "FIXTURE_RESPONSE",
+      "fixture_ref": "contract-fixtures/jira-worklog-samples.json",
+      "business_logic_under_test": "Jira issue search and worklog response parsing, author matching, date filtering, and aggregation."
+    }
+  ]
+}

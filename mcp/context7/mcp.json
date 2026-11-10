@@ -1,0 +1,19 @@
+{
+  "name": "context7",
+  "description": "Up-to-date library documentation and code search MCP server",
+  "transport": "stdio",
+  "command": "npx",
+  "args": ["-y", "@upstash/context7-mcp"],
+  "env": {
+    "CONTEXT7_API_KEY": {
+      "required": true,
+      "description": "API Key obtained from context7.com",
+      "default": ""
+    },
+    "CONTEXT7_TIMEOUT": {
+      "required": false,
+      "description": "Request timeout in milliseconds",
+      "default": "5000"
+    }
+  }
+}

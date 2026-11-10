@@ -1,0 +1,22 @@
+{
+  "schema_version": "1.0.0",
+  "feature_slug": "shared-substrate-declared-feature",
+  "bootstrap_floor": ["src/main.ts"],
+  "shared_substrate": ["src/theme.ts"],
+  "slices": [
+    {
+      "slice_id": "slice_1",
+      "name": "Slice 1",
+      "dependencies": [],
+      "legs": {
+        "trigger": { "type": "USER_ACTION", "description": "Trigger" },
+        "core_pure_logic": { "pure_module_files": [] },
+        "adapter_persistence": { "optional_leg_present": false },
+        "output_verification": {
+          "verification_medium": "process_exit",
+          "verification_script": "tests/slices/slice_1_verify.sh"
+        }
+      }
+    }
+  ]
+}

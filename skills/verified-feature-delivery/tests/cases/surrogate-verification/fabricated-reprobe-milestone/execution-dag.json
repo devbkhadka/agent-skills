@@ -1,0 +1,434 @@
+{
+  "schema_version": "1.0.0",
+  "feature_slug": "monthly-timelog-viewer",
+  "locked_dimensions": {
+    "1_slicing_topology": {
+      "strategy": "SINGLE_TRACER_BULLET_FIRST",
+      "slice_1_anchor": "SLICE_1_CORE_TIMELOG_VIEW",
+      "bootstrap_floor": [
+        "package.json",
+        "tsconfig.json",
+        "src/server/index.ts",
+        "src/client/index.html",
+        "src/client/app.ts",
+        "src/client/style.css"
+      ],
+      "disallow_in_slice_1": [
+        "src/client/monthSwitch.ts",
+        "src/client/errorHandler.ts"
+      ]
+    },
+    "2_execution_semantics": {
+      "mode": "ASYNC_EVENT_LOOP",
+      "concurrency_model": "SINGLE_THREAD_EVENT_LOOP",
+      "drain_and_cancel_barrier": "ABORT_INFLIGHT_ON_NEW_TRIGGER"
+    },
+    "3_state_and_lifecycle": {
+      "persistence_model": "EPHEMERAL_CLIENT_STATE",
+      "temporal_egress": "NOT_APPLICABLE \u2014 NO_FINITE_LIFESPAN_STATES"
+    },
+    "4_idempotency_and_ordering": {
+      "strategy": "GENERATION_SEQUENCING",
+      "ordering_key": "request_seq",
+      "justification": "Month selection is actor-repeatable and requires request sequence counters to discard stale out-of-order network responses."
+    },
+    "5_external_boundaries": {
+      "boundary_fixtures": [
+        "contract-fixtures/manifest.json"
+      ],
+      "resource_guards": [
+        "abort_controller_guard",
+        "http_timeout_guard"
+      ],
+      "concurrency_budget": {
+        "worker_concurrency": 1,
+        "probed_pool_capacity": 5,
+        "reserved_headroom": 1
+      }
+    },
+    "6_observation_and_actor_modality": {
+      "primary_observer": "TimelogViewerUI",
+      "verification_medium": "rendered_ui",
+      "input_modalities": [
+        "pointer",
+        "keyboard"
+      ],
+      "environment_floor": "viewport_1024x768",
+      "headless_fallback": "NOT_APPLICABLE \u2014 attended browser session only"
+    }
+  },
+  "bootstrap_floor": [
+    "package.json",
+    "tsconfig.json",
+    "src/server/index.ts",
+    "src/client/index.html",
+    "src/client/app.ts",
+    "src/client/style.css"
+  ],
+  "pure_modules": [
+    "src/core/aggregator.ts"
+  ],
+  "concurrency_budget": {
+    "worker_concurrency": 1,
+    "probed_pool_capacity": 5,
+    "reserved_headroom": 1
+  },
+  "transaction_boundaries": {
+    "split_across_slices": false,
+    "atomic_mutations": [],
+    "has_atomic_step": false,
+    "has_compensation_step": false
+  },
+  "slices": [
+    {
+      "slice_id": "SLICE_1_CORE_TIMELOG_VIEW",
+      "name": "Core Monthly Timelog View",
+      "slice_level": "FLOW",
+      "is_slice_1": true,
+      "user_visible_outcome": "Current month total hours and daily worklog breakdown rendered on initial page load.",
+      "flow_refs": [
+        "FLOW_INITIAL_LOAD_AND_VIEW"
+      ],
+      "dependencies": [],
+      "files_touched": [
+        "src/core/aggregator.ts",
+        "src/server/index.ts",
+        "src/client/index.html",
+        "src/client/app.ts",
+        "src/client/style.css"
+      ],
+      "files_read": [
+        "package.json",
+        "tsconfig.json"
+      ],
+      "files_written": [
+        "src/core/aggregator.ts",
+        "src/server/index.ts",
+        "src/client/index.html",
+        "src/client/app.ts",
+        "src/client/style.css"
+      ],
+      "verification_medium": "rendered_ui",
+      "verification_script": "scripts/verify-slice-1.ts",
+      "legs": {
+        "trigger": {
+          "type": "USER_PAGE_LOAD",
+          "description": "User opens application URL in browser",
+          "entry_point": "src/client/app.ts",
+          "actor_id": "User",
+          "is_actor_repeatable": false
+        },
+        "core_pure_logic": {
+          "pure_module_files": [
+            "src/core/aggregator.ts"
+          ],
+          "assertable_without_rendering": true,
+          "test_file": "tests/core/aggregator.test.ts",
+          "description": "Aggregate Jira worklogs into daily ticket groups and total hours."
+        },
+        "adapter_persistence": {
+          "optional_leg_present": false,
+          "adapter_files": [],
+          "boundary_class": "NETWORK_API",
+          "description": "Jira REST API client queries issue worklogs."
+        },
+        "output_verification": {
+          "verification_medium": "rendered_ui",
+          "evidence_keys_covered": [
+            "ev_state_display_timelog_report"
+          ],
+          "verification_script": "scripts/verify-slice-1.ts",
+          "description": "Verify browser DOM renders current month total header and daily ticket breakdown cards."
+        }
+      },
+      "actor_modality": {
+        "observers": [
+          "TimelogViewerUI"
+        ],
+        "input_modalities": [
+          "pointer",
+          "keyboard"
+        ],
+        "environment_floor": "viewport_1024x768"
+      },
+      "ui_layout": {
+        "source": "AGENT_MOCKUP",
+        "layout_template": "table-with-filters",
+        "layout_tree": {
+          "region": "root",
+          "role": "Timelog Viewer Main View",
+          "component": "Container",
+          "children": [
+            {
+              "region": "filters",
+              "role": "Month Selection Toolbar",
+              "component": "MonthSelector",
+              "children": [
+                {
+                  "role": "Month Input Control",
+                  "component": "InputMonthPicker"
+                }
+              ]
+            },
+            {
+              "region": "table",
+              "role": "Monthly Timelog Table and Breakdown",
+              "component": "TimelogTable",
+              "children": [
+                {
+                  "role": "Month Total Header Banner",
+                  "component": "MonthTotalDisplay"
+                },
+                {
+                  "role": "Daily Timelog Cards Container",
+                  "component": "DailyCardsList"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "milestones": [
+        {
+          "milestone_id": "MS_CORE_TIMELOG_VIEW",
+          "verification_medium": "rendered_ui",
+          "claims": [
+            "CLAIM_CURRENT_MONTH_TIMELOG_DISPLAY"
+          ]
+        }
+      ]
+    },
+    {
+      "slice_id": "SLICE_2_MONTH_SELECTOR_SWITCH",
+      "name": "Month Selector Switching & Stale Response Supersession",
+      "slice_level": "FLOW",
+      "is_slice_1": false,
+      "user_visible_outcome": "Target month total hours and daily breakdown rendered when user selects a different month; out-of-order responses discarded.",
+      "flow_refs": [
+        "FLOW_SWITCH_MONTH_SUCCESS",
+        "FLOW_RAPID_SWITCH_SUPERSEDED"
+      ],
+      "dependencies": [
+        "SLICE_1_CORE_TIMELOG_VIEW"
+      ],
+      "files_touched": [
+        "src/client/app.ts",
+        "src/client/monthSwitch.ts"
+      ],
+      "files_read": [
+        "package.json",
+        "tsconfig.json",
+        "src/core/aggregator.ts",
+        "src/client/index.html"
+      ],
+      "files_written": [
+        "src/client/app.ts",
+        "src/client/monthSwitch.ts"
+      ],
+      "verification_medium": "rendered_ui",
+      "verification_script": "scripts/verify-slice-2.ts",
+      "legs": {
+        "trigger": {
+          "type": "USER_SELECT_MONTH",
+          "description": "User picks a different calendar month",
+          "entry_point": "src/client/monthSwitch.ts",
+          "actor_id": "User",
+          "is_actor_repeatable": true
+        },
+        "core_pure_logic": {
+          "pure_module_files": [
+            "src/core/aggregator.ts"
+          ],
+          "assertable_without_rendering": true,
+          "test_file": "tests/core/aggregator.test.ts",
+          "description": "Validate target month YYYY-MM format and compute monotonic sequence clock."
+        },
+        "adapter_persistence": {
+          "optional_leg_present": false,
+          "adapter_files": [],
+          "boundary_class": "NETWORK_API",
+          "description": "Fetch target month payload from backend."
+        },
+        "output_verification": {
+          "verification_medium": "rendered_ui",
+          "evidence_keys_covered": [
+            "ev_state_display_switched_month",
+            "ev_state_superseded_stale"
+          ],
+          "verification_script": "scripts/verify-slice-2.ts",
+          "description": "Verify switched month renders accurately and stale responses are discarded."
+        }
+      },
+      "actor_modality": {
+        "observers": [
+          "TimelogViewerUI"
+        ],
+        "input_modalities": [
+          "pointer",
+          "keyboard"
+        ],
+        "environment_floor": "viewport_1024x768"
+      },
+      "ui_layout": {
+        "source": "AGENT_MOCKUP",
+        "layout_template": "table-with-filters",
+        "layout_tree": {
+          "region": "root",
+          "role": "Switched Month View",
+          "component": "Container",
+          "children": [
+            {
+              "region": "filters",
+              "role": "Month Picker",
+              "component": "MonthPicker",
+              "children": [
+                {
+                  "role": "Month Navigation Buttons",
+                  "component": "NavButton"
+                }
+              ]
+            },
+            {
+              "region": "table",
+              "role": "Target Month Timelog Breakdown",
+              "component": "TimelogTable",
+              "children": [
+                {
+                  "role": "Target Month Header",
+                  "component": "MonthTotalDisplay"
+                },
+                {
+                  "role": "Target Daily List",
+                  "component": "DailyList"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "milestones": [
+        {
+          "milestone_id": "MS_MONTH_SWITCH_VIEW",
+          "verification_medium": "rendered_ui",
+          "claims": [
+            "CLAIM_SWITCH_MONTH_TIMELOG_DISPLAY"
+          ]
+        }
+      ]
+    },
+    {
+      "slice_id": "SLICE_3_EMPTY_AND_ERROR_STATES",
+      "name": "Empty Month Display and Error Recovery",
+      "slice_level": "FLOW",
+      "is_slice_1": false,
+      "user_visible_outcome": "Zero-worklog months display 0.00 hrs empty state; network/Jira errors display actionable error banner with retry button.",
+      "flow_refs": [
+        "FLOW_EMPTY_MONTH_VIEW",
+        "FLOW_ERROR_AND_RETRY"
+      ],
+      "dependencies": [
+        "SLICE_1_CORE_TIMELOG_VIEW"
+      ],
+      "files_touched": [
+        "src/client/app.ts",
+        "src/client/errorHandler.ts"
+      ],
+      "files_read": [
+        "package.json",
+        "tsconfig.json",
+        "src/core/aggregator.ts",
+        "src/client/index.html"
+      ],
+      "files_written": [
+        "src/client/app.ts",
+        "src/client/errorHandler.ts"
+      ],
+      "verification_medium": "rendered_ui",
+      "verification_script": "scripts/verify-slice-3.ts",
+      "legs": {
+        "trigger": {
+          "type": "USER_RETRY_OR_EMPTY_MONTH_LOAD",
+          "description": "User clicks retry or loads month with no logs",
+          "entry_point": "src/client/errorHandler.ts",
+          "actor_id": "User",
+          "is_actor_repeatable": true
+        },
+        "core_pure_logic": {
+          "pure_module_files": [
+            "src/core/aggregator.ts"
+          ],
+          "assertable_without_rendering": true,
+          "test_file": "tests/core/aggregator.test.ts",
+          "description": "Evaluate empty worklog arrays and error payload response codes."
+        },
+        "adapter_persistence": {
+          "optional_leg_present": false,
+          "adapter_files": [],
+          "boundary_class": "NETWORK_API",
+          "description": "Retry HTTP fetch to backend API endpoint."
+        },
+        "output_verification": {
+          "verification_medium": "rendered_ui",
+          "evidence_keys_covered": [
+            "ev_state_empty_timelog_month",
+            "ev_state_fetch_error"
+          ],
+          "verification_script": "scripts/verify-slice-3.ts",
+          "description": "Verify empty state and error banner rendering and retry recovery."
+        }
+      },
+      "actor_modality": {
+        "observers": [
+          "TimelogViewerUI"
+        ],
+        "input_modalities": [
+          "pointer",
+          "keyboard"
+        ],
+        "environment_floor": "viewport_1024x768"
+      },
+      "ui_layout": {
+        "source": "AGENT_MOCKUP",
+        "layout_template": "empty-and-error",
+        "layout_tree": {
+          "region": "root",
+          "role": "Empty and Error Feedback View",
+          "component": "FeedbackContainer",
+          "children": [
+            {
+              "region": "empty",
+              "role": "Zero Hours Empty State",
+              "component": "EmptyBanner",
+              "children": [
+                {
+                  "role": "Empty Message",
+                  "component": "TextBlock"
+                }
+              ]
+            },
+            {
+              "region": "error",
+              "role": "Network Error Banner",
+              "component": "ErrorBanner",
+              "children": [
+                {
+                  "role": "Retry Button Control",
+                  "component": "RetryButton"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "milestones": [
+        {
+          "milestone_id": "MS_EMPTY_AND_ERROR_VIEW",
+          "verification_medium": "rendered_ui",
+          "claims": [
+            "CLAIM_EMPTY_AND_ERROR_DISPLAY"
+          ]
+        }
+      ]
+    }
+  ]
+}

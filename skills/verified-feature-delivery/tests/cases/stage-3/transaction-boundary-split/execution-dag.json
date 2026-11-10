@@ -1,0 +1,41 @@
+{
+  "schema_version": "1.0.0",
+  "feature_slug": "transaction-boundary-split-feature",
+  "bootstrap_floor": ["src/main.ts"],
+  "transaction_boundaries": {
+    "split_across_slices": true,
+    "atomic_mutations": ["Subscription.tier", "MemberSeatLock"],
+    "has_atomic_step": false,
+    "has_compensation_step": false
+  },
+  "slices": [
+    {
+      "slice_id": "slice_1",
+      "name": "Slice 1: Downgrade Tier",
+      "dependencies": [],
+      "legs": {
+        "trigger": { "type": "USER_ACTION", "description": "Downgrade" },
+        "core_pure_logic": { "pure_module_files": [] },
+        "adapter_persistence": { "optional_leg_present": false },
+        "output_verification": {
+          "verification_medium": "datastore_state",
+          "verification_script": "tests/slices/slice_1_verify.sh"
+        }
+      }
+    },
+    {
+      "slice_id": "slice_2",
+      "name": "Slice 2: Seat Lock",
+      "dependencies": ["slice_1"],
+      "legs": {
+        "trigger": { "type": "INTERNAL_EVENT", "description": "Seat lock" },
+        "core_pure_logic": { "pure_module_files": [] },
+        "adapter_persistence": { "optional_leg_present": false },
+        "output_verification": {
+          "verification_medium": "datastore_state",
+          "verification_script": "tests/slices/slice_2_verify.sh"
+        }
+      }
+    }
+  ]
+}

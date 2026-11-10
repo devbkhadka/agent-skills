@@ -1,0 +1,22 @@
+╭─ Claude Code ──────────────────────────────────────╮
+│                                                    │
+│                 Welcome back Dev!                  │
+│                                                    │
+│                       ▐▛███▜▌                      │
+│                      ▝▜█████▛▘                     │
+│                        ▘▘ ▝▝                       │
+│                                                    │
+│                Opus 5 (1M context)                 │
+│                    Claude Team                     │
+│           /private/tmp/cl.2O1lm9HL/proj            │
+│                                                    │
+╰────────────────────────────────────────────────────╯
+
+
+
+      Update available! Run: brew upgrade claude-code
+──────────────────────────────────────────────────────
+❯ Try "refactor <filepath>"
+──────────────────────────────────────────────────────
+  ⚠ Transcript saving is off — inherited CLAUDE_CODE_…
+  ⏵⏵ auto mode on (shift+tab to cycle)

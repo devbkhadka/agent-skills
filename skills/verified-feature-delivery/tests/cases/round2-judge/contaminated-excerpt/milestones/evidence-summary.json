@@ -1,0 +1,22 @@
+{
+  "schema_version": "1.0.0",
+  "feature_slug": "judge-separation-gate",
+  "delivered_at": "2026-08-22T12:00:00Z",
+  "milestone_evidence_records": [
+    {
+      "milestone_id": "M3_UI_QUERY_FLOW",
+      "slice_id": "slice_1_query_entry",
+      "artifact_path": "evidence/m3_ui_query_capture.json",
+      "verification_medium": "rendered_ui",
+      "claims_evaluated": [
+        {
+          "claim_id": "claim:ui:observable_projections_distinct",
+          "claim_kind": "state_observable_and_distinct",
+          "evidence_key": "state:RESULTS_POPULATED",
+          "verification_kind": "judged",
+          "acceptance_rule": "The rendered UI displays populated search results matching query without clipping"
+        }
+      ]
+    }
+  ]
+}

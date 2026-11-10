@@ -1,0 +1,40 @@
+{
+  "schema_version": "1.0.0",
+  "boundary_class": "FRAMEWORK_MIDDLEWARE",
+  "boundary_identifier": "Node.js HTTP Server /api/timelog",
+  "property_name": "parser_ordering",
+  "fixture_status": "PROVISIONAL_FROM_SCHEMA",
+  "pinned_reprobe_milestone": "M1_BACKEND_CONTRACT",
+  "contract_reference": "GET /api/timelog?month=YYYY-MM",
+  "contract_variant_selectors": [],
+  "success_samples": [
+    {
+      "sample_id": "query_parser_valid_month",
+      "partition_cell": {},
+      "status_code": 200,
+      "exit_code": null,
+      "headers": {
+        "content-type": "application/json; charset=utf-8"
+      },
+      "payload": {
+        "month": "2026-08",
+        "total_hours": "14.50",
+        "days": []
+      }
+    }
+  ],
+  "failure_envelope_census": [
+    {
+      "envelope_id": "invalid_month_format_400",
+      "error_class": "BAD_REQUEST",
+      "status_code": 400,
+      "exit_code": null,
+      "payload_type": "JSON",
+      "payload": {
+        "error": "INVALID_MONTH",
+        "message": "Query parameter 'month' must match format YYYY-MM"
+      },
+      "description": "HTTP 400 Bad Request when month query parameter is missing or malformed."
+    }
+  ]
+}

@@ -1,0 +1,92 @@
+{
+  "schema_version": "1.0.0",
+  "feature_slug": "ui-slice-without-layout-feature",
+  "bootstrap_floor": [
+    "index.html",
+    "src/main.tsx",
+    "src/theme.ts",
+    "src/App.tsx"
+  ],
+  "pure_modules": [
+    "src/core/buildSearchRequest.ts",
+    "src/core/formatResult.ts"
+  ],
+  "concurrency_budget": {
+    "declared_worker_concurrency": 1,
+    "probed_boundary_capacity": 10,
+    "reserved_headroom": 2
+  },
+  "locked_dimensions": {
+    "1_slicing_topology": {
+      "strategy": "SINGLE_TRACER_BULLET_FIRST",
+      "slice_1_anchor": "slice_1",
+      "bootstrap_floor": ["index.html", "src/main.tsx", "src/theme.ts", "src/App.tsx"]
+    },
+    "2_execution_semantics": {
+      "mode": "SYNC_REQUEST_RESPONSE"
+    },
+    "3_state_and_lifecycle": {
+      "persistence_model": "EPHEMERAL"
+    },
+    "4_idempotency_and_ordering": {
+      "strategy": "GENERATION_SEQUENCING"
+    },
+    "5_external_boundaries": {
+      "boundary_fixtures": ["contract-fixtures/api.json"]
+    },
+    "6_observation_and_actor_modality": {
+      "primary_observer": "operator",
+      "verification_medium": "rendered_ui"
+    }
+  },
+  "slices": [
+    {
+      "slice_id": "slice_1",
+      "name": "Slice 1",
+      "dependencies": [],
+      "is_slice_1": true,
+      "slice_level": "FLOW",
+      "user_visible_outcome": "Outcome for slice 1",
+      "legs": {
+        "trigger": {
+          "type": "USER_ACTION",
+          "description": "Operator triggers action",
+          "entry_point": "src/App.tsx#handleSearch"
+        },
+        "core_pure_logic": {
+          "pure_module_files": [
+            "src/core/buildSearchRequest.ts",
+            "src/core/formatResult.ts"
+          ],
+          "assertable_without_rendering": true
+        },
+        "adapter_persistence": {
+          "optional_leg_present": true,
+          "adapter_files": ["src/api/searchApi.ts"],
+          "boundary_class": "NETWORK_API"
+        },
+        "output_verification": {
+          "verification_medium": "rendered_ui",
+          "evidence_keys_covered": ["state:DONE"],
+          "verification_script": "tests/slices/slice_1_verify.sh"
+        }
+      },
+      "files_touched": [
+        "index.html",
+        "src/main.tsx",
+        "src/theme.ts",
+        "src/App.tsx",
+        "src/core/buildSearchRequest.ts",
+        "src/core/formatResult.ts",
+        "src/api/searchApi.ts",
+        "tests/slices/slice_1_verify.sh"
+      ],
+      "files_read": [
+        "index.html",
+        "src/main.tsx",
+        "src/theme.ts",
+        "src/App.tsx"
+      ]
+    }
+  ]
+}

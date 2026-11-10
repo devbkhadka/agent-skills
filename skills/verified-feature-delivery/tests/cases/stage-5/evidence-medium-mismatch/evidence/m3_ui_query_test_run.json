@@ -1,0 +1,7 @@
+{
+  "captured_artifact": {
+    "exit_code": 0,
+    "stdout": "renders the ranked result list: PASS\nrenders the empty state: PASS\n2 passed, 0 failed\n",
+    "stderr": ""
+  }
+}

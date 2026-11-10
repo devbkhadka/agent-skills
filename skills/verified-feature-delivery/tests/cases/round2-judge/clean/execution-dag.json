@@ -1,0 +1,19 @@
+{
+  "schema_version": "1.0.0",
+  "feature_slug": "judge-separation-gate",
+  "slices": [
+    {
+      "slice_id": "slice_1_query_entry",
+      "name": "Query Entry & Results Display",
+      "slice_level": "FLOW",
+      "user_visible_outcome": "Operator can view search results rendered clearly on screen",
+      "flow_refs": ["flow_search_query"],
+      "verification_script": "tests/verify_search_ui.sh",
+      "legs": {
+        "output_verification": {
+          "medium": "rendered_ui"
+        }
+      }
+    }
+  ]
+}

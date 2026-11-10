@@ -1,0 +1,228 @@
+{
+  "schema_version": "1.0.0",
+  "feature_slug": "monthly-timelog-viewer",
+  "updated_at": "2026-08-23T12:20:00Z",
+  "boundary_classes": [
+    {
+      "class_name": "NETWORK_API",
+      "verdict": "PRESENT",
+      "probe_path": "scripts/probe_jira_capture.py",
+      "description": "Direct Jira Cloud REST API v3 over HTTPS for JQL searches and worklog retrieval.",
+      "properties": [
+        {
+          "property_name": "status_codes",
+          "verdict": "PROBED",
+          "fixture_ref": "network-api-status-codes.json",
+          "probe_target": "GET /rest/api/3/search/jql",
+          "notes": "Probed live Jira REST endpoints returning HTTP 200, 400, 401, and 404."
+        },
+        {
+          "property_name": "error_envelope_shapes",
+          "verdict": "PROBED",
+          "fixture_ref": "network-api-error-envelopes.json",
+          "probe_target": "GET /rest/api/3/search/jql (invalid syntax)",
+          "notes": "Verified Jira error envelope schema containing errorMessages array and errors map."
+        },
+        {
+          "property_name": "rate_limit_headers",
+          "verdict": "PROBED",
+          "fixture_ref": "network-api-rate-limits.json",
+          "probe_target": "GET /rest/api/3/search/jql",
+          "notes": "Captured live rate limit headers including ratelimit-remaining and x-ratelimit-limit."
+        },
+        {
+          "property_name": "auth_expiry",
+          "verdict": "NOT_PRESENT",
+          "absence_reason": "Stateless Jira API basic authentication tokens are used per request without session expiration lifecycle."
+        },
+        {
+          "property_name": "credential_rotation",
+          "verdict": "NOT_PRESENT",
+          "absence_reason": "Static API token credentials loaded from environment variables without automated in-flight rotation."
+        },
+        {
+          "property_name": "authorization_asymmetry",
+          "verdict": "NOT_PRESENT",
+          "absence_reason": "Single user client scope where all queries operate under identical currentUser permissions."
+        },
+        {
+          "property_name": "redirect_proxy_interposition",
+          "verdict": "NOT_PRESENT",
+          "absence_reason": "Direct HTTPS communication to Jira Cloud API domain without intermediate proxy redirects."
+        }
+      ]
+    },
+    {
+      "class_name": "SUBPROCESS_CLI",
+      "verdict": "PRESENT",
+      "probe_path": "scripts/probe_jira_capture.py",
+      "description": "Local jira CLI subprocess used for command verification and fallback probing.",
+      "properties": [
+        {
+          "property_name": "exit_codes",
+          "verdict": "PROBED",
+          "fixture_ref": "subprocess-cli-exit-codes.json",
+          "probe_target": "jira issue list --jql",
+          "notes": "Verified CLI process returns exit code 0 on success and non-zero on error."
+        },
+        {
+          "property_name": "stream_delimiters",
+          "verdict": "PROBED",
+          "fixture_ref": "subprocess-cli-stream-delimiters.json",
+          "probe_target": "jira issue list --raw",
+          "notes": "Verified raw CLI stdout emits parseable JSON arrays without framing corruption."
+        },
+        {
+          "property_name": "ansi_color_suppression",
+          "verdict": "NOT_PRESENT",
+          "absence_reason": "The raw CLI flag executes non-interactively without ANSI terminal escape styling codes."
+        },
+        {
+          "property_name": "locale_encoding_normalization",
+          "verdict": "NOT_PRESENT",
+          "absence_reason": "Standard UTF-8 character encoding is inherited directly from system runtime environment."
+        },
+        {
+          "property_name": "argument_terminator_handling",
+          "verdict": "NOT_PRESENT",
+          "absence_reason": "Arguments are passed as discrete token arrays avoiding shell quoting or terminator ambiguities."
+        },
+        {
+          "property_name": "signal_propagation",
+          "verdict": "NOT_PRESENT",
+          "absence_reason": "CLI queries are fast synchronous operations completing before signal trap handling is needed."
+        },
+        {
+          "property_name": "environment_inheritance",
+          "verdict": "NOT_PRESENT",
+          "absence_reason": "Subprocess execution explicitly passes parent process environment without customized scrubbing."
+        },
+        {
+          "property_name": "scratch_space_expansion_bounds",
+          "verdict": "NOT_PRESENT",
+          "absence_reason": "CLI output streams directly via stdout pipes without temporary scratch file creation."
+        },
+        {
+          "property_name": "non_fatal_stream_warnings",
+          "verdict": "NOT_PRESENT",
+          "absence_reason": "Jira CLI does not produce non-fatal diagnostic warning streams during standard raw JSON operations."
+        }
+      ]
+    },
+    {
+      "class_name": "FRAMEWORK_MIDDLEWARE",
+      "verdict": "PRESENT",
+      "probe_path": "src/server.ts",
+      "description": "Node.js HTTP request routing and query parameter parsing middleware.",
+      "properties": [
+        {
+          "property_name": "raw_body_buffer_requirements",
+          "verdict": "NOT_PRESENT",
+          "absence_reason": "Read-only GET endpoints retrieve parameters from query strings without request body buffer parsing."
+        },
+        {
+          "property_name": "parser_ordering",
+          "verdict": "PROBED",
+          "fixture_ref": "framework-middleware-parser.json",
+          "probe_target": "GET /api/timelog?month=YYYY-MM",
+          "notes": "Query parser extracts and validates YYYY-MM month parameter before route dispatch."
+        },
+        {
+          "property_name": "stream_framing",
+          "verdict": "NOT_PRESENT",
+          "absence_reason": "Responses are returned as complete discrete JSON payloads without chunked HTTP stream framing."
+        },
+        {
+          "property_name": "signing_secret_rotation_windows",
+          "verdict": "NOT_PRESENT",
+          "absence_reason": "No inbound webhooks or cryptographic payload signatures are used in this application."
+        }
+      ]
+    },
+    {
+      "class_name": "DATASTORE",
+      "verdict": "NOT_PRESENT",
+      "absence_reason": "The application is stateless and retrieves all timelog data on-demand from Jira without local database storage."
+    },
+    {
+      "class_name": "MESSAGE_TRANSPORT",
+      "verdict": "NOT_PRESENT",
+      "absence_reason": "The application uses direct synchronous HTTP communication and does not use message queues or async message brokers."
+    },
+    {
+      "class_name": "DEVICE_IO",
+      "verdict": "NOT_PRESENT",
+      "absence_reason": "The application does not interact with hardware sensors or peripheral device IO."
+    },
+    {
+      "class_name": "MODEL_ENDPOINT",
+      "verdict": "NOT_PRESENT",
+      "absence_reason": "The application does not query LLM model endpoints or AI inference services."
+    },
+    {
+      "class_name": "UI_RUNTIME",
+      "verdict": "PRESENT",
+      "probe_path": "src/client/app.ts",
+      "description": "Plain HTML and TypeScript DOM runtime rendering timelog views and handling month navigation.",
+      "properties": [
+        {
+          "property_name": "render_and_teardown_lifecycle",
+          "verdict": "PROBED",
+          "fixture_ref": "ui-runtime-lifecycle.json",
+          "probe_target": "TimelogViewerUI DOM Rendering",
+          "notes": "DOM rendering updates UI components on data receipt and handles error presentation."
+        },
+        {
+          "property_name": "development_mode_double_invocation",
+          "verdict": "NOT_PRESENT",
+          "absence_reason": "Vanilla TypeScript frontend without React StrictMode double invocation behavior."
+        },
+        {
+          "property_name": "overlay_portal_mounting",
+          "verdict": "NOT_PRESENT",
+          "absence_reason": "Plain HTML DOM rendering does not use portal mounting abstractions."
+        },
+        {
+          "property_name": "platform_permission_dialogs",
+          "verdict": "NOT_PRESENT",
+          "absence_reason": "Standard web page without browser device permissions or modal dialog requirements."
+        },
+        {
+          "property_name": "background_low_memory_eviction",
+          "verdict": "NOT_PRESENT",
+          "absence_reason": "Desktop browser web page runtime without mobile background memory eviction lifecycle."
+        }
+      ]
+    },
+    {
+      "class_name": "VERIFICATION_HARNESS",
+      "verdict": "PRESENT",
+      "probe_path": "tests/parity.test.ts",
+      "description": "Integration test fixtures and boundary parity verification harness.",
+      "properties": [
+        {
+          "property_name": "fake_clock_flush_semantics",
+          "verdict": "NOT_PRESENT",
+          "absence_reason": "Verification tests use real system time or explicit ISO date strings without synthetic timer flushing."
+        },
+        {
+          "property_name": "query_scope",
+          "verdict": "NOT_PRESENT",
+          "absence_reason": "Verification test queries are strictly bounded by explicit calendar month parameters."
+        },
+        {
+          "property_name": "differential_parity_against_live",
+          "verdict": "PROBED",
+          "fixture_ref": "verification-harness-parity.json",
+          "probe_target": "Jira REST API Contract Parity",
+          "notes": "Differential parity verification between mock fixture responses and live Jira REST API schema."
+        }
+      ]
+    },
+    {
+      "class_name": "OTHER",
+      "verdict": "NOT_PRESENT",
+      "absence_reason": "No other external or custom boundary classes are required for this application."
+    }
+  ]
+}

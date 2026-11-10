@@ -1,0 +1,18 @@
+{
+  "schema_version": "1.0.0",
+  "feature_slug": "judge-separation-gate",
+  "states": [
+    {
+      "state_id": "RESULTS_POPULATED",
+      "name": "Results Populated",
+      "description": "Search query executed and matching results are rendered",
+      "observable_projection": "Populated results pane with match count and result items",
+      "discriminator": {
+        "heading": "Found # matches",
+        "container": "results-pane"
+      },
+      "evidence_key": "state:RESULTS_POPULATED",
+      "terminal": false
+    }
+  ]
+}

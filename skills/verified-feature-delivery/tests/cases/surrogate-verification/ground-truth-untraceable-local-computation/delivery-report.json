@@ -1,0 +1,29 @@
+{
+  "schema_version": "1.0.0",
+  "feature_slug": "monthly-timelog-viewer",
+  "delivered_at": "2026-08-23T12:32:28Z",
+  "intent_sections": [
+    {
+      "header": "[Milestone]",
+      "title": "Daily Timelog Card Verified",
+      "summary": "Daily timelog card verified against browser DOM rendering contracts.",
+      "milestone_refs": [
+        "MS_DAILY_CARD_VIEW"
+      ]
+    }
+  ],
+  "milestone_evidence_records": [
+    {
+      "milestone_id": "MS_DAILY_CARD_VIEW",
+      "slice_id": "SLICE_3_DAILY_CARD_VIEW",
+      "artifact_path": "evidence/capture.json",
+      "claims_evaluated": [
+        {
+          "claim_id": "CLAIM_DAILY_CARD_TOTAL_DISPLAY",
+          "claim_kind": "state_observable_and_distinct",
+          "evidence_key": "ev_state_display_daily_card"
+        }
+      ]
+    }
+  ]
+}

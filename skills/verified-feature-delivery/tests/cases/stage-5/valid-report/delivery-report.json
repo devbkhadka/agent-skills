@@ -1,0 +1,83 @@
+{
+  "schema_version": "1.0.0",
+  "feature_slug": "search-console-web-ui",
+  "delivered_at": "2026-08-22T11:45:00Z",
+  "intent_sections": [
+    {
+      "header": "[Milestone]",
+      "title": "Search Console Query Flow Verified",
+      "summary": "The operator can enter a query, watch the console move from idle to loading, and read a ranked list of matches. Ranking order, the result count the operator reads, and the narrow viewport floor were each verified against a captured artifact.",
+      "milestone_refs": ["M1_PURE_FILTER", "M2_API_ADAPTER", "M3_UI_QUERY_FLOW"]
+    },
+    {
+      "header": "[Risk]",
+      "title": "Search Boundary Latency Above the Client Guard",
+      "summary": "A search that takes longer than three seconds trips the client timeout guard and the console returns to idle rather than hanging. The boundary itself is not rate limited, so a slow index is the only way this fires.",
+      "mitigation": "The timeout guard is the invariant under watch. If the boundary starts to exceed it in normal use, the deadline belongs in the scenario matrix as a branch rather than as a guard."
+    },
+    {
+      "header": "[Decision Needed]",
+      "title": "Which Count the Result Summary Reads",
+      "summary": "The result summary can read the total the boundary reports for the whole corpus, or the number of rows on the page the operator is looking at. The two disagree whenever the corpus is larger than one page.",
+      "options": [
+        {
+          "option_id": "corpus_total",
+          "impact": "The summary reports the whole corpus match count, which matches what an operator expects from a search tool, and the page shows a subset of it."
+        },
+        {
+          "option_id": "page_rows",
+          "impact": "The summary reports what is on screen, which never disagrees with the visible rows but understates the corpus and reads as a bug on a large search."
+        }
+      ],
+      "resolution": {
+        "chosen_option_id": "corpus_total",
+        "rationale": "The operator is searching the corpus, not the page, so the corpus total is the number they came for. The page subset is already legible from the rows themselves."
+      }
+    }
+  ],
+  "milestone_evidence_records": [
+    {
+      "milestone_id": "M1_PURE_FILTER",
+      "slice_id": "slice_1_query_entry",
+      "artifact_path": "evidence/m1_pure_filter_run.json",
+      "claims_evaluated": [
+        {
+          "claim_id": "claim:logic:flat_and_filter_composition",
+          "claim_kind": "value_correctness"
+        }
+      ]
+    },
+    {
+      "milestone_id": "M2_API_ADAPTER",
+      "slice_id": "slice_1_query_entry",
+      "artifact_path": "evidence/m2_search_api_probe.json",
+      "claims_evaluated": [
+        {
+          "claim_id": "claim:contract:failure_envelope_handling",
+          "claim_kind": "state_observable_and_distinct",
+          "evidence_key": "state:RESULTS_POPULATED"
+        },
+        {
+          "claim_id": "claim:value:result_total_binding",
+          "claim_kind": "value_correctness"
+        }
+      ]
+    },
+    {
+      "milestone_id": "M3_UI_QUERY_FLOW",
+      "slice_id": "slice_1_query_entry",
+      "artifact_path": "evidence/m3_ui_query_capture.json",
+      "claims_evaluated": [
+        {
+          "claim_id": "claim:ui:observable_projections_distinct",
+          "claim_kind": "state_observable_and_distinct",
+          "evidence_key": "state:RESULTS_POPULATED"
+        },
+        {
+          "claim_id": "claim:layout:narrow_viewport_floor",
+          "claim_kind": "layout_viewport_floor_overflow"
+        }
+      ]
+    }
+  ]
+}

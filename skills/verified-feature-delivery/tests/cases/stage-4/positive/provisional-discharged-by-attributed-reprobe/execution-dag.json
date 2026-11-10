@@ -1,0 +1,19 @@
+{
+  "schema_version": "1.0.0",
+  "feature_slug": "search-console-web-ui",
+  "slices": [
+    {
+      "slice_id": "slice_1_query_entry",
+      "milestones": [
+        {
+          "milestone_id": "M1_QUERY_PANE_RENDERS",
+          "verification_medium": "rendered_ui"
+        },
+        {
+          "milestone_id": "M2_UI_REPROBE",
+          "verification_medium": "process_exit"
+        }
+      ]
+    }
+  ]
+}

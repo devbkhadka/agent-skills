@@ -1,0 +1,190 @@
+{
+  "schema_version": "1.0.0",
+  "feature_slug": "batch-migration-cli",
+  "updated_at": "2026-08-22T11:00:00Z",
+  "actors": [
+    {
+      "actor_id": "operator",
+      "description": "System engineer executing batch database migration command from terminal."
+    }
+  ],
+  "observers": [
+    {
+      "observer_id": "operator",
+      "medium": "process_exit",
+      "modality": "cli_stream"
+    }
+  ],
+  "triggers": [
+    {
+      "trigger_id": "run_migration",
+      "actor_id": "operator",
+      "is_actor_repeatable": false,
+      "description": "Single invocation of CLI migration executable with target configuration."
+    }
+  ],
+  "branch_coverage": {
+    "group_a_resource_and_state": [
+      {
+        "class_name": "ORPHANED_DELETED_TARGET_STATES",
+        "status": "NOT_APPLICABLE",
+        "inapplicable_reason": "Single-shot migration operates on locked target database."
+      },
+      {
+        "class_name": "RESOURCE_LEAK_AND_TERMINATION_INVARIANTS",
+        "status": "ADDRESSED",
+        "handling_description": "Database connection pool and scratch file handles closed on exit or interrupt.",
+        "related_states": ["EXECUTING_MIGRATION", "TERMINAL_SUCCESS", "TERMINAL_FAILED"]
+      },
+      {
+        "class_name": "EVENT_ORDERING_AND_MONOTONIC_SEQUENCE_CLOCKS",
+        "status": "NOT_APPLICABLE",
+        "inapplicable_reason": "Synchronous linear migration steps executed sequentially."
+      },
+      {
+        "class_name": "INGRESS_HANDOFF_DURABILITY",
+        "status": "NOT_APPLICABLE",
+        "inapplicable_reason": "No asynchronous queue handoff; transactions committed synchronously."
+      },
+      {
+        "class_name": "TEMPORAL_EGRESS_FROM_FINITE_LIFESPAN_STATES",
+        "status": "NOT_APPLICABLE",
+        "inapplicable_reason": "Synchronous CLI execution with no deadlines or background leases."
+      },
+      {
+        "class_name": "COMPOUND_PUBLICATION_ORDERING",
+        "status": "NOT_APPLICABLE",
+        "inapplicable_reason": "Atomic single-transaction schema promotion."
+      },
+      {
+        "class_name": "OPERATIONAL_EDGE_CASES",
+        "status": "ADDRESSED",
+        "handling_description": "Handles database connection loss and migration lock conflicts with non-zero exit.",
+        "related_states": ["TERMINAL_FAILED"]
+      }
+    ],
+    "group_b_trigger_and_observation": [
+      {
+        "class_name": "REPEAT_TRIGGER_OUT_OF_ORDER_SETTLEMENT",
+        "status": "NOT_APPLICABLE",
+        "inapplicable_reason": "Single-shot execution with exclusive database lock; no concurrent triggers."
+      },
+      {
+        "class_name": "DUPLICATE_TRIGGER",
+        "status": "NOT_APPLICABLE",
+        "inapplicable_reason": "Database migration lock prevents duplicate execution."
+      },
+      {
+        "class_name": "OBSERVER_TEARDOWN_MID_FLIGHT",
+        "status": "ADDRESSED",
+        "handling_description": "SIGINT signal handler traps terminal abort and rolls back open transaction.",
+        "related_states": ["TERMINAL_FAILED"]
+      },
+      {
+        "class_name": "STALE_OUTPUT_SUPERSESSION",
+        "status": "NOT_APPLICABLE",
+        "inapplicable_reason": "Process exits immediately upon completion; no persistent rendered UI."
+      },
+      {
+        "class_name": "SEMANTIC_CONTRADICTION",
+        "status": "NOT_APPLICABLE",
+        "inapplicable_reason": "Schema validation rejects incompatible migration versions before execution."
+      }
+    ]
+  },
+  "states": [
+    {
+      "state_id": "INIT",
+      "evidence_key": "state:INIT",
+      "is_initial": true,
+      "is_terminal": false,
+      "description": "CLI binary invoked, validating arguments and database connection.",
+      "observable_projections": [
+        {
+          "observer_id": "operator",
+          "medium": "process_exit",
+          "discriminator": {
+            "exit_code": 0,
+            "stream_template": "migration_started_banner"
+          }
+        }
+      ]
+    },
+    {
+      "state_id": "EXECUTING_MIGRATION",
+      "evidence_key": "state:EXECUTING_MIGRATION",
+      "is_initial": false,
+      "is_terminal": false,
+      "description": "Executing migration DDL scripts within database transaction.",
+      "observable_projections": [
+        {
+          "observer_id": "operator",
+          "medium": "process_exit",
+          "discriminator": {
+            "exit_code": 0,
+            "stream_template": "migration_progress_stream"
+          }
+        }
+      ]
+    },
+    {
+      "state_id": "TERMINAL_SUCCESS",
+      "evidence_key": "state:TERMINAL_SUCCESS",
+      "is_initial": false,
+      "is_terminal": true,
+      "terminal_classification": "TERMINAL_SUCCESS",
+      "description": "Migration completed and transaction committed successfully.",
+      "observable_projections": [
+        {
+          "observer_id": "operator",
+          "medium": "process_exit",
+          "discriminator": {
+            "exit_code": 0,
+            "stream_template": "migration_completed_clean"
+          }
+        }
+      ]
+    },
+    {
+      "state_id": "TERMINAL_FAILED",
+      "evidence_key": "state:TERMINAL_FAILED",
+      "is_initial": false,
+      "is_terminal": true,
+      "terminal_classification": "TERMINAL_FAILURE",
+      "description": "Migration failed, transaction rolled back, error stream output.",
+      "observable_projections": [
+        {
+          "observer_id": "operator",
+          "medium": "process_exit",
+          "discriminator": {
+            "exit_code": 1,
+            "stream_template": "migration_error_reported"
+          }
+        }
+      ]
+    }
+  ],
+  "transitions": [
+    {
+      "transition_id": "t_init_to_exec",
+      "from_state": "INIT",
+      "to_state": "EXECUTING_MIGRATION",
+      "trigger_ref": "run_migration",
+      "guard": null
+    },
+    {
+      "transition_id": "t_exec_to_success",
+      "from_state": "EXECUTING_MIGRATION",
+      "to_state": "TERMINAL_SUCCESS",
+      "trigger_ref": "migration_ddl_done",
+      "guard": "error == null"
+    },
+    {
+      "transition_id": "t_exec_to_fail",
+      "from_state": "EXECUTING_MIGRATION",
+      "to_state": "TERMINAL_FAILED",
+      "trigger_ref": "migration_ddl_error",
+      "guard": "error != null"
+    }
+  ]
+}

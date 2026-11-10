@@ -1,0 +1,209 @@
+#!/usr/bin/env python3
+"""Render the Ubiquitous Language Glossary from a domain-lexicon.json artifact.
+
+Improvement plan §3 / §4.1: `ubiquitous-language-glossary.md` is the rendered
+document a human reads to approve the feature's vocabulary. It has two
+sections, one per `provenance` value declared on each Entity, ValueObject,
+Action, StateEnum, Actor and Observer: terms this feature introduces, and
+terms borrowed from the codebase. Within the borrowed section,
+`glossary_visibility` suppresses repo vocabulary the feature does not use
+(`ASSUMED_COMMON`) so the reader is not shown terms nobody needed to approve.
+
+Every field this script reads is a declared field on the artifact (rule R2):
+it does not infer which section a term belongs in, does not rank or filter,
+and refuses rather than rendering a term whose classification or displayed
+text is missing.
+
+Exit 0: wrote <out>/ubiquitous-language-glossary.md via lib.render.render_document.
+Exit 1: printed one uppercase rejection code, wrote no document.
+
+Rejection codes:
+- ARTIFACT_UNREADABLE
+- MISSING_FEATURE_SLUG
+- MISSING_PROVENANCE
+- INVALID_PROVENANCE
+- MISSING_GLOSSARY_VISIBILITY
+- INVALID_GLOSSARY_VISIBILITY
+- MISSING_PLAIN_LANGUAGE_SUMMARY
+- BORROWED_WITHOUT_REPO_REFERENCE
+- TEMPLATE_CONTEXT_MISMATCH
+"""
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from lib.render import RenderError, render_document
+
+RENDERER_NAME = "render-glossary"
+DOC_NAME = "ubiquitous-language-glossary.md"
+TEMPLATE_NAME = "glossary.md.tmpl"
+
+PROVENANCE_VALUES = ("BORROWED_FROM_REPO", "FEATURE_INTRODUCED")
+VISIBILITY_VALUES = ("INCLUDE", "ASSUMED_COMMON")
+
+# (section heading, getter) for every term register §4.1 puts a provenance
+# field on. Order is the document's fixed presentation order.
+CATEGORIES = (
+    ("Entities", lambda data: data.get("entities") or []),
+    ("Value Objects", lambda data: data.get("value_objects") or []),
+    ("Actions", lambda data: data.get("actions") or []),
+    ("State Enums", lambda data: data.get("state_enums") or []),
+    ("Actors", lambda data: (data.get("actors_and_observers") or {}).get("actors") or []),
+    ("Observers", lambda data: (data.get("actors_and_observers") or {}).get("observers") or []),
+)
+
+
+class RefusalError(Exception):
+    def __init__(self, code):
+        super().__init__(code)
+        self.code = code
+
+
+def term_label(term):
+    return term.get("name") or term.get("id") or "<unnamed>"
+
+
+def classify(term):
+    provenance = term.get("provenance")
+    if provenance is None:
+        raise RefusalError("MISSING_PROVENANCE")
+    if provenance not in PROVENANCE_VALUES:
+        raise RefusalError("INVALID_PROVENANCE")
+
+    visibility = term.get("glossary_visibility")
+    if visibility is None:
+        raise RefusalError("MISSING_GLOSSARY_VISIBILITY")
+    if visibility not in VISIBILITY_VALUES:
+        raise RefusalError("INVALID_GLOSSARY_VISIBILITY")
+
+    return provenance, visibility
+
+
+def displayed_summary(term):
+    summary = term.get("plain_language_summary")
+    if not summary:
+        raise RefusalError("MISSING_PLAIN_LANGUAGE_SUMMARY")
+    return summary
+
+
+def displayed_repo_reference(term):
+    repo_reference = term.get("repo_reference")
+    if not isinstance(repo_reference, dict):
+        raise RefusalError("BORROWED_WITHOUT_REPO_REFERENCE")
+    path = repo_reference.get("path")
+    symbol = repo_reference.get("symbol")
+    if not path or not symbol:
+        raise RefusalError("BORROWED_WITHOUT_REPO_REFERENCE")
+    return path, symbol
+
+
+def render_section(heading, entries, empty_note, columns):
+    lines = ["## %s" % heading, ""]
+    if not entries:
+        lines.append(empty_note)
+        lines.append("")
+        return lines
+
+    current_category = None
+    for category, name, *rest in entries:
+        if category != current_category:
+            if current_category is not None:
+                lines.append("")
+            lines.append("### %s" % category)
+            lines.append("")
+            current_category = category
+        lines.append("- **%s** — %s" % (name, columns(name, *rest)))
+    lines.append("")
+    return lines
+
+
+def build_body(data):
+    feature_entries = []
+    borrowed_entries = []
+
+    for heading, getter in CATEGORIES:
+        for term in getter(data):
+            provenance, visibility = classify(term)
+            name = term_label(term)
+            if provenance == "FEATURE_INTRODUCED":
+                summary = displayed_summary(term)
+                feature_entries.append((heading, name, summary))
+            elif visibility == "INCLUDE":
+                summary = displayed_summary(term)
+                path, symbol = displayed_repo_reference(term)
+                borrowed_entries.append((heading, name, summary, path, symbol))
+            # BORROWED_FROM_REPO + ASSUMED_COMMON is suppressed: not displayed,
+            # so its summary and repo_reference are not required here.
+
+    lines = []
+    lines += render_section(
+        "Introduced by This Feature",
+        feature_entries,
+        "_No terms introduced by this feature._",
+        lambda name, summary: summary,
+    )
+    lines += render_section(
+        "Borrowed from the Codebase",
+        borrowed_entries,
+        "_No borrowed terms in use by this feature._",
+        lambda name, summary, path, symbol: "%s (`%s` — `%s`)" % (summary, path, symbol),
+    )
+
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def build_parser():
+    parser = argparse.ArgumentParser(
+        prog="render-glossary",
+        description="Render the Ubiquitous Language Glossary from domain-lexicon.json.",
+    )
+    parser.add_argument("--artifact", required=True, help="Path to domain-lexicon.json")
+    parser.add_argument("--out", required=True, help="Output directory for the rendered document")
+    return parser
+
+
+def main():
+    args = build_parser().parse_args()
+
+    artifact_path = Path(args.artifact)
+    try:
+        data = json.loads(artifact_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        print("ARTIFACT_UNREADABLE")
+        return 1
+
+    feature_slug = data.get("feature_slug")
+    if not feature_slug:
+        print("MISSING_FEATURE_SLUG")
+        return 1
+
+    try:
+        body = build_body(data)
+    except RefusalError as exc:
+        print(exc.code)
+        return 1
+
+    context = {"feature_slug": feature_slug, "body": body}
+
+    try:
+        render_document(
+            template_name=TEMPLATE_NAME,
+            context=context,
+            out_dir=args.out,
+            doc_name=DOC_NAME,
+            artifact_path=artifact_path.name,
+            renderer_name=RENDERER_NAME,
+        )
+    except RenderError:
+        print("TEMPLATE_CONTEXT_MISMATCH")
+        return 1
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

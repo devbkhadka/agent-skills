@@ -1,0 +1,24 @@
+{
+  "captured_artifact": "<div class=\"pane pane--results\" id=\"search-pane\"><h2 class=\"title\">Results for the indexed corpus</h2><ul class=\"result-list\"><li class=\"result-row\">First indexed chunk</li><li class=\"result-row\">Second indexed chunk</li></ul></div>",
+  "recorded_fixture_values": [
+    "First indexed chunk",
+    "Second indexed chunk"
+  ],
+  "layout_capture": {
+    "viewport": {
+      "width": 360,
+      "height": 640
+    },
+    "boxes": [
+      {
+        "selector": "ul.result-list",
+        "width": 328,
+        "height": 96,
+        "overflow_x": 0
+      }
+    ]
+  },
+  "observation_target": {
+    "entry_point": "evidence/m3_ui_query_capture.html"
+  }
+}

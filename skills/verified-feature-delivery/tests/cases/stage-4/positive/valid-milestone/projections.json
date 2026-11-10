@@ -1,0 +1,20 @@
+{
+  "schema_version": "1.0.0",
+  "feature_slug": "valid-milestone-feature",
+  "captured_projections": [
+    {
+      "evidence_key": "state:IDLE",
+      "observer_id": "operator",
+      "medium": "rendered_ui",
+      "normalised_projection": "[heading \"Search Corpus\"][textbox \"Search\"]",
+      "fingerprint_sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+    },
+    {
+      "evidence_key": "state:RESULTS_POPULATED",
+      "observer_id": "operator",
+      "medium": "rendered_ui",
+      "normalised_projection": "[heading \"Found # matches for <value>\"][button \"Clear filters\"]",
+      "fingerprint_sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+    }
+  ]
+}

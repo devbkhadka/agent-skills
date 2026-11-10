@@ -1,0 +1,14 @@
+{
+  "name": "fetch",
+  "description": "Web fetch and markdown conversion MCP server",
+  "transport": "stdio",
+  "command": "uvx",
+  "args": ["mcp-server-fetch"],
+  "env": {
+    "FETCH_USER_AGENT": {
+      "required": false,
+      "description": "Custom User-Agent header for fetching web resources",
+      "default": "AgentFetch/1.0"
+    }
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "schema_version": "1.0.0",
+  "boundary_class": "UI_RUNTIME",
+  "boundary_identifier": "react_client_runtime",
+  "property_name": "render_and_teardown_lifecycle",
+  "fixture_status": "PROVISIONAL_FROM_SCHEMA",
+  "pinned_reprobe_milestone": "M2_UI_REPROBE",
+  "contract_reference": "src/main.tsx",
+  "contract_variant_selectors": [],
+  "success_samples": [
+    {
+      "sample_id": "mount_and_unmount",
+      "payload": {"mounted": true, "portal_root_attached": true, "listeners_released_on_unmount": true}
+    }
+  ],
+  "failure_envelope_census": [
+    {
+      "envelope_id": "abort_on_unmount",
+      "error_class": "AbortError",
+      "payload_type": "Error",
+      "payload": {"message": "The in-flight query was aborted because the pane unmounted."},
+      "description": "The runtime cancels an in-flight request when the pane leaves the tree."
+    }
+  ]
+}

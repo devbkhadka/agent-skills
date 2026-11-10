@@ -1,0 +1,20 @@
+{
+  "schema_version": "1.0.0",
+  "feature_slug": "search-console-web-ui",
+  "generated_at": "2026-08-22T12:10:00Z",
+  "captured_projections": [
+    {
+      "evidence_key": "state:IDLE",
+      "observer_id": "operator",
+      "milestone_id": "M1_QUERY_PANE_RENDERS",
+      "captured_artifact": "<div class=\"pane pane--idle\" data-testid=\"search-pane\"><h2 class=\"title\">Search the indexed corpus</h2><input type=\"search\" aria-label=\"Search query\"><button class=\"btn\" aria-label=\"Run search\">Search</button></div>"
+    },
+    {
+      "evidence_key": "state:RESULTS_POPULATED",
+      "observer_id": "operator",
+      "milestone_id": "M2_RESULTS_RENDER",
+      "captured_artifact": "<div class=\"results-pane\" data-testid=\"results\"><h2 class=\"hdr\">Found 10 matches for \"database\"</h2><button class=\"btn\" aria-label=\"Clear filters\">Clear</button><ul role=\"list\"><li role=\"listitem\"><span>Result 1: SQL indexing guide</span></li></ul></div>",
+      "recorded_fixture_values": ["database", "SQL indexing guide"]
+    }
+  ]
+}

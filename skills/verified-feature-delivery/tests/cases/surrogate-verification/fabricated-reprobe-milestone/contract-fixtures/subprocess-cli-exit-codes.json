@@ -1,0 +1,40 @@
+{
+  "schema_version": "1.0.0",
+  "boundary_class": "SUBPROCESS_CLI",
+  "boundary_identifier": "jira issue list --jql",
+  "property_name": "exit_codes",
+  "fixture_status": "PROBED_LIVE",
+  "pinned_reprobe_milestone": null,
+  "contract_reference": "jira issue list --help",
+  "contract_variant_selectors": [],
+  "success_samples": [
+    {
+      "sample_id": "cli_success_exit_0",
+      "partition_cell": {},
+      "status_code": null,
+      "exit_code": 0,
+      "headers": {},
+      "payload": {
+        "issue_count": 5,
+        "keys": [
+          "PROJ-2521",
+          "PROJ-2520",
+          "PROJ-2519",
+          "PROJ-2492",
+          "PROJ-2486"
+        ]
+      }
+    }
+  ],
+  "failure_envelope_census": [
+    {
+      "envelope_id": "cli_error_exit_1",
+      "error_class": "CLI_NONZERO_EXIT",
+      "status_code": null,
+      "exit_code": 1,
+      "payload_type": "TEXT",
+      "payload": "Error: unexpected argument or authentication failure",
+      "description": "CLI exit code 1 on query failure or auth rejection."
+    }
+  ]
+}

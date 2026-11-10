@@ -1,0 +1,87 @@
+{
+  "_why": "One real capture per medium in the normalisation table. The table is a closed set of six, so a run that cannot fingerprint one of them has a medium whose evidence never gets refuted. Each sample is a raw capture — markup, a recorded response, a process result, a mutation record, a bus trace, a transcript — never a pre-normalised string.",
+  "samples": [
+    {
+      "medium": "rendered_ui",
+      "captured_artifact": "<div class=\"pane pane--results\" data-testid=\"results-pane\"><h2 class=\"title\">Found 10 matches for \"database\"</h2><button class=\"btn\" aria-label=\"Clear filters\">Clear</button><ul role=\"list\"><li role=\"listitem\"><span>Result 1: SQL indexing guide</span></li></ul></div>",
+      "recorded_fixture_values": ["database", "SQL indexing guide"]
+    },
+    {
+      "medium": "api_response",
+      "contract_headers": ["content-type"],
+      "captured_artifact": {
+        "status_code": 200,
+        "headers": {
+          "content-type": "application/json",
+          "date": "Sat, 22 Aug 2026 11:00:00 GMT",
+          "x-request-id": "req_88ab91c0-3e21"
+        },
+        "payload": {
+          "total_results": 4210,
+          "cursor": "cur_xyz",
+          "results": [
+            {"id": "chunk_101", "score": 0.94, "metadata": {"author": "dev", "cluster": "core"}}
+          ]
+        }
+      }
+    },
+    {
+      "medium": "process_exit",
+      "captured_artifact": {
+        "exit_code": 0,
+        "stdout": "[2026-08-22T11:00:01Z] PID 14202: Processing /var/app/scratch/job_1/chunk_001.mp4\nframe=120 fps=60.2 q=28.0 size=1024kB time=00:00:02.00 bitrate=4194.3kbits/s speed=1.0x\n[info] Transcode completed successfully in 2.14s",
+        "stderr": ""
+      }
+    },
+    {
+      "medium": "datastore_state",
+      "captured_artifact": {
+        "mutations": [
+          {
+            "table": "subscriptions",
+            "row_identity": "sub_uuid_111",
+            "changed_columns": [
+              {"name": "tier", "value": "FREE"},
+              {"name": "status", "value": "ACTIVE"},
+              {"name": "seat_count", "value": 3},
+              {"name": "updated_at", "value": 1724328000}
+            ]
+          },
+          {
+            "table": "organizations",
+            "row_identity": "org_uuid_aaa",
+            "changed_columns": [
+              {"name": "quota_status", "value": "QUOTA_EXCEEDED"},
+              {"name": "updated_at", "value": 1724328000}
+            ]
+          }
+        ],
+        "constraints": [
+          {"name": "fk_org_id", "outcome": "SATISFIED"},
+          {"name": "chk_seat_limit", "outcome": "SATISFIED"}
+        ]
+      }
+    },
+    {
+      "medium": "device_actuation",
+      "captured_artifact": {
+        "commands": [
+          {"opcode": "OP_MOTOR_SET_ANGLE", "operands": [0, 45.0], "elapsed_us": 1002},
+          {"opcode": "OP_SENSOR_EXPOSE", "operands": [100], "elapsed_us": 124310},
+          {"opcode": "OP_FRAME_TRANSFER", "operands": ["0x20001000"], "elapsed_us": 252004}
+        ]
+      }
+    },
+    {
+      "medium": "agent_transcript",
+      "recorded_fixture_values": ["authentication"],
+      "captured_artifact": {
+        "tool_calls": [
+          {"name": "query_graph", "arguments": {"topic": "auth"}, "prompt_tokens": 45, "latency_ms": 120},
+          {"name": "view_file", "arguments": {"path": "/src/auth.ts"}, "prompt_tokens": 120, "latency_ms": 80}
+        ],
+        "final_message": "Found 2 authentication modules in the repository."
+      }
+    }
+  ]
+}

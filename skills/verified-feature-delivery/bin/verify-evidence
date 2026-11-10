@@ -1,0 +1,345 @@
+#!/usr/bin/env python3
+"""Stage 5 evidence verifier: the intent header linter and the two independent evidence axes.
+
+Owner: stage-5.
+
+One subcommand per axis, plus the §4 transition gate and the abstraction check the stage's
+objective requires:
+
+    lint-intent        the five intent headers are a closed vocabulary, and each header's body
+                       carries what that header is for (§2 Stage 5 step 1)
+    check-gates        an unresolved [Decision Needed] or [Blocker] blocks the transition to
+                       COMPLETED, counted by differencing the sections against their resolutions
+                       rather than by reading a count the report states about itself (§4)
+    verify-medium      one evidence artifact per milestone, normalisable as the medium the
+                       execution DAG declared for it (§2 Stage 5 step 2)
+    verify-claim       the second axis: whether that same artifact carries the structure the
+                       criterion needs, and the [Accepted Constraint] discharge for the claims no
+                       artifact in the declared harness can address (§2 Stage 5 steps 3 and 4)
+    lint-abstraction   fenced code, diff hunks and code-syntax density refused in the passages a
+                       human reads (§2 Stage 5 objective)
+    check-all          all five in order, for the exit gate
+    prove-axis-independence
+                       a fixture where the medium matches and the claim does not: the medium axis
+                       must accept it and the claim axis must refuse it, and the run succeeds only
+                       when both hold
+
+The two axes are independent and that is the point. A rendered_ui snapshot serialises structure
+and text, so it satisfies the medium axis for a layout or viewport-floor claim and cannot possibly
+evidence it — a harness with no layout engine produces the same snapshot at every viewport. A
+checker that runs only the medium axis passes that case.
+
+Exit codes: 0 when the delivery report verifies; non-zero printing one bare token otherwise —
+INVALID_INTENT_HEADER, UNRESOLVED_DECISION_NEEDED, UNRESOLVED_BLOCKER, MISSING_MILESTONE_EVIDENCE,
+EVIDENCE_MEDIUM_MISMATCH, EVIDENCE_CLAIM_INADMISSIBLE, CLAIM_WITHOUT_ACCEPTED_CONSTRAINT,
+LOW_LEVEL_CODE_NOISE, and the structural refusals UNKNOWN_DELIVERY_ATTRIBUTE, UNKNOWN_CLAIM_KIND,
+UNKNOWN_VERIFICATION_MEDIUM, UNPLANNED_MILESTONE_EVIDENCE, UNPLANNED_CLAIM_EVALUATED,
+DUPLICATE_MILESTONE_ID, DISCHARGED_CLAIM_NOT_EVALUATED, CONSTRAINT_DISCHARGES_ADMISSIBLE_CLAIM and
+MISSING_GATE_ARTIFACT. The claim axis also runs `lib/arithmetic.py`'s pre-masking consistency
+check (ARITHMETIC_INCONSISTENCY, UNDECLARED_ARITHMETIC_RELATION) and `lib/ground_truth.py`'s
+reconciliation against recorded contract fixtures (GROUND_TRUTH_CONTRADICTED,
+GROUND_TRUTH_UNTRACEABLE, GROUND_TRUTH_SCOPE_UNCOVERED).
+"""
+
+import argparse
+import json
+from pathlib import Path
+import sys
+from typing import Dict, List, Tuple
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from lib.delivery import (
+    ABSTRACTION_SCOPE_NOTE,
+    MilestoneEvidence,
+    PlannedMilestone,
+    check_gates,
+    lint_abstraction,
+    lint_intent,
+    read_planned_milestones,
+    read_report,
+    verify_claim,
+    verify_medium,
+)
+from lib.primitives import check_closed_key_set, is_vacuous_container
+
+VALID_TOKEN = "VALID_DELIVERY_REPORT"
+
+
+def _load(report_path: str, dag_path: str) -> Tuple[Dict, Dict[str, PlannedMilestone], Path, List[str]]:
+    """Load the delivery report and the plan it is graded against."""
+    report_file = Path(report_path)
+    report, problems = read_report(report_file)
+    if report is None:
+        return {}, {}, report_file.parent, problems
+    planned, plan_problems = read_planned_milestones(Path(dag_path))
+    return report, planned, report_file.parent, problems + plan_problems
+
+
+def _report_only(report_path: str) -> Tuple[Dict, List[str]]:
+    report, problems = read_report(Path(report_path))
+    return (report or {}), problems
+
+
+def run_lint_intent(args) -> Tuple[int, List[str]]:
+    report, problems = _report_only(args.report)
+    if problems:
+        return 1, problems
+    problems = lint_intent(report)
+    if problems:
+        return 1, problems
+    return 0, [
+        "INTENT_HEADERS_VALID: %d section(s), every header drawn from the closed five"
+        % len(report.get("intent_sections", []))
+    ]
+
+
+def run_check_gates(args) -> Tuple[int, List[str]]:
+    report, problems = _report_only(args.report)
+    if problems:
+        return 1, problems
+    problems = check_gates(report)
+    if problems:
+        return 1, problems
+    return 0, [
+        "DELIVERY_GATES_CLEAR: no [Decision Needed] and no [Blocker] is left open, so §4 permits "
+        "STAGE_5_DELIVERY -> COMPLETED"
+    ]
+
+
+def run_verify_medium(args) -> Tuple[int, List[str]]:
+    report, planned, base_dir, problems = _load(args.report, args.execution_dag)
+    if problems:
+        return 1, problems
+    verified, problems = verify_medium(report, planned, base_dir)
+    if problems:
+        return 1, problems
+    lines = ["EVIDENCE_MEDIUM_VERIFIED: %d milestone(s) carry an artifact of their declared medium"
+             % len(verified)]
+    lines.extend(_evidence_lines(verified))
+    return 0, lines
+
+
+def run_verify_claim(args) -> Tuple[int, List[str]]:
+    report, planned, base_dir, problems = _load(args.report, args.execution_dag)
+    if problems:
+        return 1, problems
+    # The claim axis reads the same envelopes, so the medium axis runs first to load them. It is
+    # not a precondition of the claim axis's verdict: a medium failure is reported as a medium
+    # failure, and the fixture that proves the axes independent passes here and fails below.
+    verified, medium_problems = verify_medium(report, planned, base_dir)
+    if medium_problems:
+        return 1, medium_problems
+    notes, problems = verify_claim(report, planned, verified, base_dir=base_dir)
+    if problems:
+        return 1, notes + problems
+    lines = ["EVIDENCE_CLAIM_ADMISSIBLE: every claim the plan committed to is addressed by a "
+             "capture that can address it, or discharged as an [Accepted Constraint]"]
+    lines.extend(notes)
+    return 0, lines
+
+
+def run_lint_abstraction(args) -> Tuple[int, List[str]]:
+    report, problems = _report_only(args.report)
+    if problems:
+        return 1, problems
+    problems = lint_abstraction(report)
+    if problems:
+        return 1, problems + ["  %s" % ABSTRACTION_SCOPE_NOTE]
+    return 0, [
+        "ABSTRACTION_LEVEL_STRUCTURAL_PASS: no fenced code, diff hunk or code-syntax density in "
+        "any delivered passage",
+        "  %s" % ABSTRACTION_SCOPE_NOTE,
+    ]
+
+
+def _evidence_lines(verified: List[MilestoneEvidence]) -> List[str]:
+    return [
+        "  %s [%s] %s" % (
+            evidence.planned.milestone_id,
+            evidence.planned.verification_medium,
+            evidence.record.get("artifact_path"),
+        )
+        for evidence in verified
+    ]
+
+
+def run_check_all(args) -> Tuple[int, List[str]]:
+    """The exit gate, in the order the spec states the process."""
+    report, planned, base_dir, problems = _load(args.report, args.execution_dag)
+    if problems:
+        return 1, problems
+
+    for check in (lint_intent, lint_abstraction, check_gates):
+        problems = check(report)
+        if problems:
+            return 1, problems
+
+    verified, problems = verify_medium(report, planned, base_dir)
+    if problems:
+        return 1, problems
+
+    notes, problems = verify_claim(report, planned, verified, base_dir=base_dir)
+    if problems:
+        return 1, notes + problems
+
+    lines = [
+        "%s: %d milestone(s) evidenced on the medium axis and admissible on the claim axis, %d "
+        "claim(s) discharged as an [Accepted Constraint] (%s)"
+        % (VALID_TOKEN, len(verified), len(notes), report.get("feature_slug")),
+    ]
+    lines.extend(_evidence_lines(verified))
+    lines.extend("  %s" % note for note in notes)
+    lines.append("  %s" % ABSTRACTION_SCOPE_NOTE)
+    return 0, lines
+
+
+def run_prove_axis_independence(args) -> Tuple[int, List[str]]:
+    """Both axes over one fixture: the medium must accept it and the claim must refuse it.
+
+    The refusal is not asserted from a table in this file. Each axis is run over the same report
+    and the same capture envelopes, and the run succeeds only when the two disagree — which is
+    what makes them independent checks rather than one check named twice.
+    """
+    report, planned, base_dir, problems = _load(args.report, args.execution_dag)
+    if problems:
+        return 1, problems
+
+    verified, medium_problems = verify_medium(report, planned, base_dir)
+    if medium_problems:
+        return 1, [
+            "AXES_NOT_INDEPENDENT: the medium axis refused this fixture, so it cannot show that a "
+            "capture matching its medium is still refused on the claim axis",
+        ] + medium_problems
+
+    notes, claim_problems = verify_claim(report, planned, verified, base_dir=base_dir)
+
+    refusals = [line for line in claim_problems if line.startswith("EVIDENCE_CLAIM_INADMISSIBLE")]
+    if not refusals:
+        return 1, [
+            "AXES_NOT_INDEPENDENT: the claim axis accepted a capture the medium axis accepted, so "
+            "this fixture proves nothing about the second axis",
+        ] + notes + claim_problems
+
+    lines = [
+        "AXES_INDEPENDENT: the medium axis accepted %d milestone artifact(s) and the claim axis "
+        "refused %d of their claim(s)" % (len(verified), len(refusals)),
+    ]
+    lines.extend(_evidence_lines(verified))
+    lines.extend("  %s" % refusal for refusal in refusals)
+    return 0, lines
+
+
+VERDICT_ALLOWED = {
+    "claim_id",
+    "verdict",
+    "blocking",
+    "minimal_fix",
+    "evidence_examined",
+    "schema_version",
+    "$schema",
+}
+VERDICT_REQUIRED = {"claim_id", "verdict", "blocking", "minimal_fix", "evidence_examined"}
+ALLOWED_VERDICTS = {"CONFIRMED", "REFUTED", "COLLABORATE"}
+
+
+def run_verify_verdict(args) -> Tuple[int, List[str]]:
+    verdict_path = Path(args.verdict)
+    if not verdict_path.is_file():
+        return 1, ["ERROR: verdict file not found: %s" % verdict_path]
+    try:
+        data = json.loads(verdict_path.read_text(encoding="utf-8"))
+    except Exception as e:
+        return 1, ["ERROR: failed to parse verdict JSON: %s" % e]
+
+    res = check_closed_key_set(data, VERDICT_ALLOWED, "judge verdict")
+    if not res.is_valid:
+        return 1, ["UNKNOWN_VERDICT_ATTRIBUTE: %s" % res.message]
+
+    missing = VERDICT_REQUIRED - set(data.keys())
+    if missing:
+        return 1, ["MISSING_VERDICT_ATTRIBUTE: missing required fields: %s" % sorted(list(missing))]
+
+    v_token = data.get("verdict")
+    if v_token not in ALLOWED_VERDICTS:
+        return 1, [
+            "INVALID_JUDGE_VERDICT: verdict %r is outside closed vocabulary %s"
+            % (v_token, sorted(list(ALLOWED_VERDICTS)))
+        ]
+
+    blocking = data.get("blocking")
+    if not isinstance(blocking, bool):
+        return 1, ["INVALID_JUDGE_VERDICT: blocking must be a boolean, got %s" % type(blocking).__name__]
+
+    evidence_examined = data.get("evidence_examined")
+    if not isinstance(evidence_examined, list):
+        return 1, ["INVALID_JUDGE_VERDICT: evidence_examined must be a list"]
+
+    if blocking is True:
+        if is_vacuous_container(evidence_examined) or len(evidence_examined) == 0 or any(not str(x).strip() for x in evidence_examined):
+            return 1, [
+                "BLOCKING_VERDICT_WITHOUT_EVIDENCE: blocking: true requires non-empty evidence_examined list"
+            ]
+
+    if v_token == "COLLABORATE":
+        if blocking is True:
+            return 1, ["INVALID_JUDGE_VERDICT: COLLABORATE verdict must carry blocking: false"]
+        min_fix = data.get("minimal_fix")
+        if is_vacuous_container(min_fix):
+            return 1, ["INVALID_JUDGE_VERDICT: COLLABORATE verdict must carry a non-empty minimal_fix"]
+
+    return 0, [
+        "VALID_JUDGE_VERDICT: claim %s judged %s (blocking=%s, %d evidence ref(s) examined)"
+        % (data.get("claim_id"), v_token, blocking, len(evidence_examined))
+    ]
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Stage 5 evidence verifier", prog="verify-evidence",
+    )
+    subparsers = parser.add_subparsers(dest="subcommand")
+
+    report_only = ("lint-intent", "check-gates", "lint-abstraction")
+    with_dag = ("verify-medium", "verify-claim", "check-all", "prove-axis-independence")
+
+    for name in report_only:
+        sub = subparsers.add_parser(name)
+        sub.add_argument("report", help="the delivery report")
+    for name in with_dag:
+        sub = subparsers.add_parser(name)
+        sub.add_argument("report", help="the delivery report")
+        sub.add_argument("execution_dag", help="the execution DAG the milestones were planned in")
+
+    verdict_parser = subparsers.add_parser("verify-verdict")
+    verdict_parser.add_argument("--verdict", required=True, help="the judge verdict file")
+
+    return parser
+
+
+HANDLERS = {
+    "lint-intent": run_lint_intent,
+    "check-gates": run_check_gates,
+    "verify-medium": run_verify_medium,
+    "verify-claim": run_verify_claim,
+    "lint-abstraction": run_lint_abstraction,
+    "check-all": run_check_all,
+    "prove-axis-independence": run_prove_axis_independence,
+    "verify-verdict": run_verify_verdict,
+}
+
+
+def main() -> int:
+    parser = build_parser()
+    args = parser.parse_args()
+    handler = HANDLERS.get(args.subcommand)
+    if handler is None:
+        parser.print_help()
+        return 2
+    code, lines = handler(args)
+    print("\n".join(lines))
+    return code
+
+
+if __name__ == "__main__":
+    sys.exit(main())

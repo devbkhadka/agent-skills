@@ -1,0 +1,49 @@
+
+╭─── Claude Code v2.1.226 ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+
+  ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   Ready to code?
+
+   Here is Claude's plan:
+  ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+   Add multiply to calc, with tests and README docs
+
+   Context
+
+   calc.py is a two-function module (add, subtract) with no tests and a three-line
+   README that doesn't document the API. The ask is to round it out: a third operation,
+   test coverage for all three, and a README section that lists what the module offers.
+
+   Assumption worth flagging: there is no test framework in the repo and no dependency
+   file, so tests use unittest from the standard library — runnable with no install step.
+   Say the word if pytest is preferred; the test bodies stay the same either way.
+
+   Steps
+
+   1. Add multiply to calc.py — append def multiply(a, b): return a * b below
+   subtract, matching the existing two-blank-line spacing and bare-return style. No
+   type hints or docstrings, since neither existing function has them.
+   2. Create test_calc.py — one unittest.TestCase per function (TestAdd,
+   TestSubtract, TestMultiply). Each covers positives, negatives, and zero;
+   multiply also covers the identity case (x * 1). End with the standard
+   if __name__ == "__main__": unittest.main() block.
+   3. Add a Functions section to README.md — a ## Functions heading under the
+   existing description, listing add(a, b), subtract(a, b), multiply(a, b) with a
+   one-line description each.
+   4. Verify — run python -m unittest test_calc -v from the project root and confirm
+   all cases pass.
+
+   Files
+
+   - calc.py — modified
+   - test_calc.py — new                                                                                                                                ↓
+  ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   Claude has written up a plan and is ready to execute. Would you like to proceed?
+
+   ❯ 1. Yes, and use auto mode
+     2. Yes, manually approve edits
+     3. Tell Claude what to change
+        shift+tab to approve with this feedback
+
+   ctrl+g to edit in VS Code · ~/.claude/plans/read-calc-py-and-readme-md-warm-wreath.md

@@ -1,0 +1,68 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "SlicingRules",
+  "description": "Stage 3 Slicing Rules Definition. Governs the 6 Static Universal Architectural Dimensions, canonical strategies, and verification media.",
+  "universal_dimensions": {
+    "1_slicing_topology": {
+      "name": "Slicing Topology",
+      "purpose": "Forces single tracer-bullet anchor selection; rejects parallel/horizontal layer creation until Slice 1 is verified. Reads bootstrap_floor and DAG-derived substrate set.",
+      "strategies": [
+        "SINGLE_TRACER_BULLET_FIRST",
+        "ANCHOR_PLUS_BOOTSTRAP_FLOOR"
+      ]
+    },
+    "2_execution_semantics": {
+      "name": "Execution Semantics",
+      "purpose": "Resolves Sync vs Async vs Polling/Batch vs Event-driven execution constraints. Enforces drain-and-cancel barriers before failovers.",
+      "modes": [
+        "SYNC_REQUEST_RESPONSE",
+        "ASYNC_WORKER_POOL",
+        "POLLING_BATCH",
+        "EVENT_DRIVEN_STREAM"
+      ]
+    },
+    "3_state_and_lifecycle": {
+      "name": "State & Lifecycle",
+      "purpose": "Enforces explicit handling for entity deletion, mergers, cascade cleanups, and state transitions including ephemeral persistence and temporal egress.",
+      "persistence_models": [
+        "EPHEMERAL",
+        "RELATIONAL_PERSISTED",
+        "DOCUMENT_STORE",
+        "EVENT_SOURCED"
+      ]
+    },
+    "4_idempotency_and_ordering": {
+      "name": "Idempotency & Sequence Ordering",
+      "purpose": "Specifies duplicate detection strategy, token keys, monotonic clocks, and retry behavior. Forbidden to be marked NOT_APPLICABLE on actor-repeatable triggers.",
+      "canonical_strategies": [
+        "IDEMPOTENCY_KEY",
+        "MONOTONIC_EVENT_CLOCK",
+        "GENERATION_SEQUENCING",
+        "EXACTLY_ONCE_TRANSPORT",
+        "SYNTHETIC_CONTENT_WATERMARK",
+        "DISTRIBUTED_LEASE_FENCING"
+      ]
+    },
+    "5_external_boundaries": {
+      "name": "External Boundaries & Resource Lifecycle",
+      "purpose": "Maps required Boundary Class fixtures, environment isolation, signal/teardown handlers, and concurrency budgets against Stage 1 probed capacity.",
+      "resource_guards": [
+        "inflight_teardown_guard",
+        "signal_shutdown_handler",
+        "connection_pool_limiter"
+      ]
+    },
+    "6_observation_and_actor_modality": {
+      "name": "Observation & Actor Modality",
+      "purpose": "Defines per-state observers, verification media, discriminators, input modalities, environment floors, and headless fallback policies.",
+      "allowed_media": [
+        "rendered_ui",
+        "api_response",
+        "process_exit",
+        "datastore_state",
+        "device_actuation",
+        "agent_transcript"
+      ]
+    }
+  }
+}

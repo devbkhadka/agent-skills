@@ -1,0 +1,32 @@
+{
+  "schema_version": "1.0.0",
+  "feature_slug": "search-console-web-ui",
+  "generated_at": "2026-08-22T12:05:00Z",
+  "milestones": [
+    {
+      "milestone_id": "M1_QUERY_PANE_RENDERS",
+      "slice_id": "slice_1_query_entry",
+      "verification_medium": "rendered_ui",
+      "executed_command": "vitest run tests/idle.test.tsx",
+      "evidence_key": "state:IDLE",
+      "observer_id": "operator",
+      "captured_evidence": "<div class=\"pane pane--idle\" data-testid=\"search-pane\"><h2 class=\"title\">Search the indexed corpus</h2><input type=\"search\" aria-label=\"Search query\"><button class=\"btn\" aria-label=\"Run search\">Search</button></div>"
+    },
+    {
+      "milestone_id": "M3_SINGLE_DISPATCH_PER_SUBMIT",
+      "slice_id": "slice_1_query_entry",
+      "verification_medium": "process_exit",
+      "executed_command": "vitest run tests/queryDispatch.test.tsx",
+      "captured_evidence": {
+        "exit_code": 1,
+        "stdout": "FAIL tests/queryDispatch.test.tsx > dispatches one query per submit\nexpected 1 dispatch, received 2",
+        "stderr": "1 failed, 0 passed"
+      },
+      "failure_trace": {
+        "boundary_identifier": "react_client_runtime",
+        "boundary_property": "development_mode_effect_double_invocation",
+        "description": "The runtime invoked the query effect twice on mount, so one submit dispatched two searches and the second settled over the first."
+      }
+    }
+  ]
+}

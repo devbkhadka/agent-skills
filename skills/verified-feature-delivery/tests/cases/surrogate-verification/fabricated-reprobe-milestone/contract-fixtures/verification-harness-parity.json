@@ -1,0 +1,53 @@
+{
+  "schema_version": "1.0.0",
+  "boundary_class": "VERIFICATION_HARNESS",
+  "boundary_identifier": "Jira API Double Parity Test",
+  "property_name": "differential_parity_against_live",
+  "fixture_status": "PROBED_LIVE",
+  "pinned_reprobe_milestone": null,
+  "contract_reference": "Differential Parity Harness for Jira Boundary",
+  "contract_variant_selectors": [],
+  "differential_parity_audit": {
+    "live_boundary_failure_envelope": {
+      "errorMessages": [
+        "Error in the JQL Query"
+      ],
+      "errors": {}
+    },
+    "harness_observed_response": {
+      "errorMessages": [
+        "Error in the JQL Query"
+      ],
+      "errors": {}
+    },
+    "error_code": null,
+    "mitigation_notes": "Verification harness accurately matches Jira REST API 400 response structure without divergence."
+  },
+  "success_samples": [
+    {
+      "sample_id": "harness_parity_verified",
+      "partition_cell": {},
+      "status_code": 200,
+      "exit_code": null,
+      "headers": {},
+      "payload": {
+        "parity_status": "MATCHED",
+        "mismatch_count": 0
+      }
+    }
+  ],
+  "failure_envelope_census": [
+    {
+      "envelope_id": "harness_parity_mismatch",
+      "error_class": "PARITY_DRIFT",
+      "status_code": null,
+      "exit_code": null,
+      "payload_type": "JSON",
+      "payload": {
+        "error": "HARNESS_FIDELITY_DRIFT",
+        "detail": "Field mismatch between live and stub response"
+      },
+      "description": "Parity failure recorded if stub diverges from live schema."
+    }
+  ]
+}

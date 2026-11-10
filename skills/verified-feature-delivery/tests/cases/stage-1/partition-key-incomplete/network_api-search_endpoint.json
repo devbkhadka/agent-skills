@@ -1,0 +1,102 @@
+{
+  "schema_version": "1.0.0",
+  "boundary_class": "NETWORK_API",
+  "boundary_identifier": "POST /v1/search",
+  "fixture_status": "PROBED_LIVE",
+  "pinned_reprobe_milestone": null,
+  "contract_reference": "src/api/searchApi.ts#SearchResponse",
+  "contract_variant_selectors": ["is_summary", "is_promoted"],
+  "success_samples": [
+    {
+      "sample_id": "sample_summary_promoted",
+      "partition_cell": { "is_summary": true, "is_promoted": true },
+      "status_code": 200,
+      "headers": { "content-type": "application/json" },
+      "payload": {
+        "total_results": 4210,
+        "results": [
+          {
+            "id": "chunk_101",
+            "score": 0.94,
+            "is_summary": true,
+            "is_promoted": true,
+            "metadata": { "author": "dev", "cluster": "core", "tags": ["search", "v1"] },
+            "links": { "canonical": "https://docs.corp/p/101" }
+          }
+        ]
+      }
+    },
+    {
+      "sample_id": "sample_summary_unpromoted",
+      "partition_cell": { "is_summary": true, "is_promoted": false },
+      "status_code": 200,
+      "headers": { "content-type": "application/json" },
+      "payload": {
+        "total_results": 4210,
+        "results": [
+          {
+            "id": "chunk_102",
+            "score": 0.81,
+            "is_summary": true,
+            "is_promoted": false,
+            "metadata": { "author": "sre", "doc_type": "guide" },
+            "links": {}
+          }
+        ]
+      }
+    },
+    {
+      "sample_id": "sample_detailed_unpromoted",
+      "partition_cell": { "is_summary": false, "is_promoted": false },
+      "status_code": 200,
+      "headers": { "content-type": "application/json" },
+      "payload": {
+        "total_results": 4210,
+        "results": [
+          {
+            "id": "chunk_103",
+            "score": 0.76,
+            "is_summary": false,
+            "is_promoted": false,
+            "metadata": { "raw_bytes": 1024, "checksum": "a1b2c3d4", "retrieval_model": "embed-v3", "tokens": 240 },
+            "links": { "canonical": "https://docs.corp/p/103", "detailed": "https://docs.corp/p/103/full" }
+          }
+        ]
+      }
+    }
+  ],
+  "failure_envelope_census": [
+    {
+      "envelope_id": "http_400_bad_request",
+      "status_code": 400,
+      "payload_type": "JSON",
+      "payload": { "detail": "Invalid filter parameter: categories cannot be empty." },
+      "description": "Validation failure on malformed search request body."
+    },
+    {
+      "envelope_id": "http_502_nginx_html",
+      "status_code": 502,
+      "payload_type": "HTML",
+      "payload": "<html><head><title>502 Bad Gateway</title></head><body>502 Bad Gateway</body></html>",
+      "description": "Reverse proxy gateway timeout returning HTML error page."
+    }
+  ],
+  "variance_census": {
+    "unbounded_regions": [
+      "payload.results[].metadata",
+      "payload.results[].links"
+    ],
+    "contract_variant_selectors": ["is_summary", "is_promoted"],
+    "declared_partition_key": ["is_summary"],
+    "declaration_reason": "Manual partition",
+    "partition_cells_evaluated": [
+      { "cell": { "is_summary": true, "is_promoted": true }, "sample_ref": "sample_summary_promoted" },
+      { "cell": { "is_summary": true, "is_promoted": false }, "sample_ref": "sample_summary_unpromoted" },
+      { "cell": { "is_summary": false, "is_promoted": false }, "sample_ref": "sample_detailed_unpromoted" }
+    ],
+    "variance_analysis": {
+      "key_intersection": ["id", "score", "is_summary", "is_promoted", "metadata", "links"],
+      "key_union": ["id", "score", "is_summary", "is_promoted", "metadata", "links"]
+    }
+  }
+}

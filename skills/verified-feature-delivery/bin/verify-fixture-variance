@@ -1,0 +1,573 @@
+#!/usr/bin/env python3
+"""Stage 1 Exit Gate Validator: verify-fixture-variance.
+
+Owner: stage-1
+Purpose: Validates boundary manifest rows across all 10 register classes, per-property
+verdicts, fixture provenance stamps (fixture_status), contract-derived partition coverage,
+evaluates census floors (per-cell first, total second), and rejects homogeneous variance censuses.
+
+Exit Codes:
+- 0: Manifest and all fixtures validated clean (prints BOUNDARY_MANIFEST_VALIDATED_CLEAN)
+- Non-zero: Emits bare error code token on stderr/stdout
+
+Supported Error Codes:
+- EMPTY_FAILURE_ENVELOPE_CENSUS
+- EMPTY_FAILURE_ENVELOPE_ENTRY
+- HARNESS_FIDELITY_DRIFT
+- MANIFEST_ABSENCE_UNREASONED
+- MANIFEST_CLASS_MISSING
+- MISSING_FIXTURE_STATUS
+- MISSING_SUCCESS_SAMPLE
+- PARTITION_KEY_INCOMPLETE
+- PARTITION_KEY_UNJUSTIFIED
+- PROPERTY_VERDICT_MISSING
+- PROVISIONAL_WITHOUT_REPROBE
+- UNBOUNDED_REGION_UNPARTITIONED
+- VARIANCE_CELL_UNCOVERED
+- VARIANCE_CENSUS_HOMOGENEOUS
+- VARIANCE_SAMPLE_FLOOR_UNMET
+"""
+
+import argparse
+import json
+import os
+from pathlib import Path
+import sys
+from typing import Dict, List, Optional, Set, Tuple, Any
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from lib.primitives import is_reason_meaningful, is_vacuous_container
+
+
+CANONICAL_BOUNDARY_CLASSES = [
+    "SUBPROCESS_CLI",
+    "NETWORK_API",
+    "FRAMEWORK_MIDDLEWARE",
+    "DATASTORE",
+    "MESSAGE_TRANSPORT",
+    "DEVICE_IO",
+    "MODEL_ENDPOINT",
+    "UI_RUNTIME",
+    "VERIFICATION_HARNESS",
+    "OTHER",
+]
+
+CANONICAL_CLASS_PROPERTIES = {
+    "SUBPROCESS_CLI": [
+        "exit_codes",
+        "stream_delimiters",
+        "ansi_color_suppression",
+        "locale_encoding_normalization",
+        "argument_terminator_handling",
+        "signal_propagation",
+        "environment_inheritance",
+        "scratch_space_expansion_bounds",
+        "non_fatal_stream_warnings",
+    ],
+    "NETWORK_API": [
+        "status_codes",
+        "error_envelope_shapes",
+        "rate_limit_headers",
+        "auth_expiry",
+        "credential_rotation",
+        "authorization_asymmetry",
+        "redirect_proxy_interposition",
+    ],
+    "FRAMEWORK_MIDDLEWARE": [
+        "raw_body_buffer_requirements",
+        "parser_ordering",
+        "stream_framing",
+        "signing_secret_rotation_windows",
+    ],
+    "DATASTORE": [
+        "transaction_timeout_semantics",
+        "constraint_conflict_error_codes",
+        "lock_behavior_contention",
+        "connection_pool_capacity",
+        "multi_root_linked_instances",
+    ],
+    "MESSAGE_TRANSPORT": [
+        "delivery_guarantee",
+        "redelivery_duplication",
+        "ordering_guarantee",
+        "offline_buffering",
+        "qos_ack_semantics",
+        "visibility_timeout_lease_duration",
+    ],
+    "DEVICE_IO": [
+        "units_sample_rate",
+        "stale_absent_out_of_range_readings",
+        "reconnect_behavior",
+        "host_clock_drift",
+        "power_state_transitions",
+    ],
+    "MODEL_ENDPOINT": [
+        "context_output_limits",
+        "truncation_behavior",
+        "refusal_safety_responses",
+        "malformed_structured_output",
+        "tool_call_schema_drift",
+        "input_non_determinism",
+    ],
+    "UI_RUNTIME": [
+        "render_and_teardown_lifecycle",
+        "development_mode_double_invocation",
+        "overlay_portal_mounting",
+        "platform_permission_dialogs",
+        "background_low_memory_eviction",
+    ],
+    "VERIFICATION_HARNESS": [
+        "fake_clock_flush_semantics",
+        "query_scope",
+        "differential_parity_against_live",
+    ],
+    "OTHER": [],
+}
+
+VALID_FIXTURE_STATUSES = {
+    "PROBED_LIVE",
+    "REPLAYED_FROM_RECORDING",
+    "PROVISIONAL_FROM_SCHEMA",
+}
+
+
+def normalize_token(name: str) -> str:
+    """Normalize property or token string for robust matching."""
+    if not name:
+        return ""
+    s = name.lower()
+    for drop in ["_and_", "_or_", "_for_", "_with_"]:
+        s = s.replace(drop, "_")
+    return s.replace("_", "").replace("-", "")
+
+
+def extract_all_leaf_keys(obj: Any, prefix: str = "") -> Set[str]:
+    """Recursively extract all nested key paths in an object."""
+    keys = set()
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            path = f"{prefix}.{k}" if prefix else str(k)
+            keys.add(path)
+            keys.update(extract_all_leaf_keys(v, path))
+    elif isinstance(obj, list):
+        for item in obj:
+            keys.update(extract_all_leaf_keys(item, prefix))
+    return keys
+
+
+def extract_nodes_at_path(obj: Any, path: str) -> List[Any]:
+    """Extract all sub-objects/values located at the given dot/bracket path."""
+    raw_segments = [seg.strip() for seg in path.split(".") if seg.strip()]
+    cleaned_segments = []
+    for s in raw_segments:
+        if s.endswith("[]"):
+            s = s[:-2]
+        elif s.endswith("[*]"):
+            s = s[:-3]
+        if s:
+            cleaned_segments.append(s)
+
+    current_nodes = [obj]
+    for seg in cleaned_segments:
+        next_nodes = []
+        for node in current_nodes:
+            if isinstance(node, dict):
+                if seg in node:
+                    val = node[seg]
+                    if isinstance(val, list):
+                        next_nodes.extend(val)
+                    else:
+                        next_nodes.append(val)
+            elif isinstance(node, list):
+                for item in node:
+                    if isinstance(item, dict) and seg in item:
+                        val = item[seg]
+                        if isinstance(val, list):
+                            next_nodes.extend(val)
+                        else:
+                            next_nodes.append(val)
+        current_nodes = next_nodes
+    return current_nodes
+
+
+
+def validate_manifest_and_fixtures(manifest_data: dict, manifest_dir: Path) -> Tuple[bool, Optional[str], str]:
+    """Validate boundary manifest and all referenced contract fixtures.
+    
+    Returns (is_valid: bool, error_code: Optional[str], message: str).
+    """
+    if not isinstance(manifest_data, dict):
+        return False, "MANIFEST_CLASS_MISSING", "Manifest root must be a JSON object"
+
+    rows = manifest_data.get("boundary_classes") or manifest_data.get("manifest_rows")
+    if not isinstance(rows, list):
+        return False, "MANIFEST_CLASS_MISSING", "Missing boundary_classes array in manifest"
+
+    # -------------------------------------------------------------
+    # 1. Check: MANIFEST_CLASS_MISSING
+    # -------------------------------------------------------------
+    present_class_names = set()
+    rows_by_class = {}
+    for r in rows:
+        if isinstance(r, dict) and "class_name" in r:
+            cname = r["class_name"]
+            present_class_names.add(cname)
+            rows_by_class[cname] = r
+
+    for canonical_class in CANONICAL_BOUNDARY_CLASSES:
+        if canonical_class not in present_class_names:
+            return False, "MANIFEST_CLASS_MISSING", f"Boundary Class Register class missing from manifest: {canonical_class}"
+
+    # -------------------------------------------------------------
+    # 2. Check: MANIFEST_ABSENCE_UNREASONED & PROPERTY_VERDICT_MISSING
+    # -------------------------------------------------------------
+    fixture_references_to_check = []
+
+    for cname, row in rows_by_class.items():
+        verdict = row.get("verdict") or row.get("status")
+        if verdict not in ["PRESENT", "NOT_PRESENT"]:
+            return False, "MANIFEST_CLASS_MISSING", f"Invalid verdict '{verdict}' for class {cname}"
+
+        if verdict == "NOT_PRESENT":
+            absence_reason = row.get("absence_reason") or row.get("reason_if_not_present") or row.get("reason")
+            if not is_reason_meaningful(absence_reason):
+                return (
+                    False,
+                    "MANIFEST_ABSENCE_UNREASONED",
+                    f"Class {cname} marked NOT_PRESENT lacks meaningful architectural absence reason (requires prose justification of at least 3 words, predominantly letters), got: {absence_reason!r}",
+                )
+            continue
+
+        # Class is PRESENT
+        properties = row.get("properties")
+        if not isinstance(properties, list) or len(properties) == 0:
+            return False, "PROPERTY_VERDICT_MISSING", f"Present class {cname} has no properties list recorded"
+
+        # Check coverage of canonical properties for this class
+        canonical_props = CANONICAL_CLASS_PROPERTIES.get(cname, [])
+        if canonical_props:
+            row_prop_names = []
+            for p in properties:
+                if isinstance(p, dict) and p.get("property_name"):
+                    row_prop_names.append(p["property_name"])
+
+            normalized_row_props = {normalize_token(pn): pn for pn in row_prop_names}
+
+            for cp in canonical_props:
+                cp_norm = normalize_token(cp)
+                matched = False
+                if cp in row_prop_names:
+                    matched = True
+                else:
+                    for nrp in normalized_row_props:
+                        if nrp == cp_norm or nrp.startswith(cp_norm) or cp_norm.startswith(nrp):
+                            matched = True
+                            break
+                if not matched:
+                    return False, "PROPERTY_VERDICT_MISSING", f"Present class {cname} missing verdict for canonical property '{cp}'"
+
+        # Check each property verdict
+        for prop in properties:
+            if not isinstance(prop, dict):
+                continue
+            pname = prop.get("property_name", "unnamed")
+            p_verdict = prop.get("verdict")
+            if p_verdict not in ["PROBED", "NOT_PRESENT"]:
+                return False, "PROPERTY_VERDICT_MISSING", f"Property '{pname}' in class {cname} missing valid verdict (must be PROBED or NOT_PRESENT)"
+
+            if p_verdict == "NOT_PRESENT":
+                p_reason = prop.get("reason_if_not_present") or prop.get("absence_reason") or prop.get("reason")
+                if not is_reason_meaningful(p_reason):
+                    return (
+                        False,
+                        "MANIFEST_ABSENCE_UNREASONED",
+                        f"Property '{pname}' in class {cname} marked NOT_PRESENT lacks meaningful architectural absence reason (requires prose justification of at least 3 words, predominantly letters), got: {p_reason!r}",
+                    )
+            elif p_verdict == "PROBED":
+                fixture_ref = prop.get("fixture_ref")
+                if not fixture_ref:
+                    return False, "PROPERTY_VERDICT_MISSING", f"Probed property '{pname}' in class {cname} missing fixture_ref"
+                fixture_references_to_check.append((cname, pname, fixture_ref))
+
+    # -------------------------------------------------------------
+    # 3. Load and Validate Fixtures
+    # -------------------------------------------------------------
+    for cname, pname, fixture_ref in fixture_references_to_check:
+        # Resolve fixture path
+        fixture_path = None
+        candidates = [
+            manifest_dir / fixture_ref,
+            Path.cwd() / fixture_ref,
+            manifest_dir / Path(fixture_ref).name,
+            manifest_dir.parent / fixture_ref,
+            manifest_dir.parent.parent / fixture_ref,
+        ]
+        for cand in candidates:
+            if cand.is_file():
+                fixture_path = cand.resolve()
+                break
+
+        if not fixture_path:
+            # Try finding fixture inside contract-fixtures in manifest_dir
+            sub_cand = manifest_dir / "contract-fixtures" / Path(fixture_ref).name
+            if sub_cand.is_file():
+                fixture_path = sub_cand.resolve()
+
+        if not fixture_path:
+            return False, "MISSING_GATE_ARTIFACT", f"Fixture file not found for {cname}.{pname}: {fixture_ref}"
+
+        try:
+            with open(fixture_path, "r", encoding="utf-8") as ff:
+                fixture_data = json.load(ff)
+        except Exception as e:
+            return False, "MISSING_FIXTURE_STATUS", f"Failed to parse fixture JSON {fixture_path}: {e}"
+
+        # ---------------------------------------------------------
+        # Check: MISSING_FIXTURE_STATUS
+        # ---------------------------------------------------------
+        f_status = fixture_data.get("fixture_status")
+        if f_status not in VALID_FIXTURE_STATUSES:
+            return False, "MISSING_FIXTURE_STATUS", f"Fixture {fixture_path.name} has missing or invalid fixture_status: '{f_status}'"
+
+        # ---------------------------------------------------------
+        # Check: PROVISIONAL_WITHOUT_REPROBE
+        # ---------------------------------------------------------
+        if f_status == "PROVISIONAL_FROM_SCHEMA":
+            reprobe = fixture_data.get("pinned_reprobe_milestone")
+            if reprobe is None or not str(reprobe).strip():
+                return False, "PROVISIONAL_WITHOUT_REPROBE", f"Fixture {fixture_path.name} marked PROVISIONAL_FROM_SCHEMA lacks pinned_reprobe_milestone"
+
+        # ---------------------------------------------------------
+        # Check: HARNESS_FIDELITY_DRIFT
+        # ---------------------------------------------------------
+        parity_audit = fixture_data.get("differential_parity_audit")
+        if isinstance(parity_audit, dict):
+            live_env = parity_audit.get("live_boundary_failure_envelope")
+            harness_env = parity_audit.get("harness_observed_response")
+            if live_env is not None and harness_env is not None:
+                if live_env != harness_env:
+                    return False, "HARNESS_FIDELITY_DRIFT", f"Verification harness fixture {fixture_path.name} records drift against live boundary failure envelope: {live_env!r} != {harness_env!r}"
+            if parity_audit.get("error_code") == "HARNESS_FIDELITY_DRIFT":
+                return False, "HARNESS_FIDELITY_DRIFT", f"Verification harness fixture {fixture_path.name} records HARNESS_FIDELITY_DRIFT"
+
+        # ---------------------------------------------------------
+        # Check: MISSING_SUCCESS_SAMPLE
+        # ---------------------------------------------------------
+        success_samples = fixture_data.get("success_samples")
+        if not isinstance(success_samples, list) or len(success_samples) < 1 or is_vacuous_container(success_samples):
+            return False, "MISSING_SUCCESS_SAMPLE", f"Fixture {fixture_path.name} has empty or vacuous success_samples list"
+
+        # ---------------------------------------------------------
+        # Check: EMPTY_FAILURE_ENVELOPE_CENSUS & EMPTY_FAILURE_ENVELOPE_ENTRY
+        # ---------------------------------------------------------
+        failure_census = fixture_data.get("failure_envelope_census")
+        if not isinstance(failure_census, list) or len(failure_census) < 1:
+            return False, "EMPTY_FAILURE_ENVELOPE_CENSUS", f"Fixture {fixture_path.name} has empty failure_envelope_census"
+
+        for idx, env in enumerate(failure_census):
+            if not isinstance(env, dict) or not env or is_vacuous_container(env):
+                return False, "EMPTY_FAILURE_ENVELOPE_ENTRY", f"Failure envelope entry at index {idx} in {fixture_path.name} is empty or vacuous"
+
+        # ---------------------------------------------------------
+        # Check: UNBOUNDED_REGION_UNPARTITIONED, PARTITION_KEY_*, VARIANCE_CENSUS_HOMOGENEOUS
+        # ---------------------------------------------------------
+        vc = fixture_data.get("variance_census")
+        unbounded = fixture_data.get("unbounded_regions")
+        if not unbounded and isinstance(vc, dict):
+            unbounded = vc.get("unbounded_regions")
+
+        if isinstance(unbounded, list) and len(unbounded) > 0:
+            if not isinstance(vc, dict) or not vc:
+                return False, "UNBOUNDED_REGION_UNPARTITIONED", f"Fixture {fixture_path.name} declares UNBOUNDED regions but lacks variance_census"
+
+            # Derive partition from recorded contract variant selectors vs declared keys
+            contract_selectors = (
+                fixture_data.get("contract_variant_selectors")
+                or vc.get("contract_variant_selectors")
+                or []
+            )
+
+            declared_key = (
+                vc.get("declared_partition_key")
+                or vc.get("partition_key")
+                or fixture_data.get("declared_partition_key")
+                or vc.get("declared_selectors")
+                or None
+            )
+            declaration_reason = (
+                vc.get("declaration_reason")
+                or fixture_data.get("declaration_reason")
+                or None
+            )
+
+            if contract_selectors:
+                # Contract contains machine-readable variant selectors
+                if declared_key is not None and len(declared_key) > 0:
+                    # If declared key omits any contract selector -> PARTITION_KEY_INCOMPLETE
+                    omitted = [s for s in contract_selectors if s not in declared_key]
+                    if omitted:
+                        return False, "PARTITION_KEY_INCOMPLETE", f"Declared partition key in {fixture_path.name} omits contract variant selector(s): {omitted}"
+                    # If declared key is supplied at all where selectors exist -> PARTITION_KEY_UNJUSTIFIED
+                    return False, "PARTITION_KEY_UNJUSTIFIED", f"Declared partition key in {fixture_path.name} supplied where contract selectors exist"
+            else:
+                # Contract offers no variant selectors
+                if declared_key is not None and len(declared_key) > 0:
+                    if not is_reason_meaningful(declaration_reason):
+                        return (
+                            False,
+                            "PARTITION_KEY_UNJUSTIFIED",
+                            f"Declared partition key in {fixture_path.name} without contract selectors lacks meaningful architectural declaration_reason (requires prose justification of at least 3 words, predominantly letters), got: {declaration_reason!r}",
+                        )
+
+            # Check partition cells evaluated
+            cells_eval = vc.get("partition_cells_evaluated")
+            if not isinstance(cells_eval, list) or len(cells_eval) == 0:
+                return False, "UNBOUNDED_REGION_UNPARTITIONED", f"Fixture {fixture_path.name} declares UNBOUNDED regions with empty partition_cells_evaluated"
+
+            # Check Census Floor:
+            # 1. Per-cell floor: Every cell in partition_cells_evaluated must have >= 1 sample assigned
+            sample_ids_available = {
+                s.get("sample_id") for s in success_samples if isinstance(s, dict) and s.get("sample_id")
+            }
+            for ce in cells_eval:
+                if not isinstance(ce, dict):
+                    return False, "VARIANCE_CELL_UNCOVERED", "Invalid partition cell entry"
+                sref = ce.get("sample_ref")
+                if not sref or not str(sref).strip():
+                    return False, "VARIANCE_CELL_UNCOVERED", f"A cell in the derived partition in {fixture_path.name} has no sample assigned"
+                if sref not in sample_ids_available:
+                    return False, "VARIANCE_CELL_UNCOVERED", f"Sample ref '{sref}' in {fixture_path.name} not found in success_samples"
+
+            # 2. Total floor: >= 3 samples across the census (checked after per-cell requirement)
+            if len(success_samples) < 3:
+                return False, "VARIANCE_SAMPLE_FLOOR_UNMET", f"Variance census in {fixture_path.name} has {len(success_samples)} samples total, which is fewer than the required floor of 3"
+
+            # Structural key set inspection across success samples scoped to each unbounded region
+            for region in unbounded:
+                region_sample_keys = []
+                for s in success_samples:
+                    nodes = extract_nodes_at_path(s, region)
+                    if not nodes and isinstance(s.get("payload"), (dict, list)):
+                        nodes = extract_nodes_at_path(s["payload"], region)
+                    sample_keys = set()
+                    for node in nodes:
+                        sample_keys.update(extract_all_leaf_keys(node))
+                    region_sample_keys.append(sample_keys)
+
+                if len(region_sample_keys) >= 2:
+                    common_keys = set.intersection(*region_sample_keys)
+                    all_keys = set.union(*region_sample_keys)
+                    if common_keys == all_keys:
+                        return (
+                            False,
+                            "VARIANCE_CENSUS_HOMOGENEOUS",
+                            f"Unbounded region '{region}' is homogeneous across all samples in {fixture_path.name} (key intersection equals union: {sorted(list(common_keys))})",
+                        )
+
+    return True, None, "BOUNDARY_MANIFEST_VALIDATED_CLEAN"
+
+
+def resolve_manifest_path(path_str: Optional[str], feature_slug: Optional[str] = None, dir_override: Optional[str] = None, root_override: Optional[str] = None) -> Optional[Path]:
+    """Resolve target manifest.json path robustly."""
+    if path_str:
+        p = Path(path_str)
+        if p.is_file():
+            return p.resolve()
+
+        p_cwd = Path.cwd() / path_str
+        if p_cwd.is_file():
+            return p_cwd.resolve()
+
+        script_dir = Path(__file__).resolve().parent
+        skill_root = script_dir.parent
+        p_skill = skill_root / path_str
+        if p_skill.is_file():
+            return p_skill.resolve()
+
+        if path_str.startswith("skills/verified-feature-delivery/"):
+            stripped = path_str[len("skills/verified-feature-delivery/"):]
+            if (skill_root / stripped).is_file():
+                return (skill_root / stripped).resolve()
+            if (Path.cwd() / stripped).is_file():
+                return (Path.cwd() / stripped).resolve()
+
+        return p_cwd
+
+    if dir_override:
+        p = Path(dir_override)
+        if (p / "manifest.json").is_file():
+            return (p / "manifest.json").resolve()
+        if (p / "contract-fixtures" / "manifest.json").is_file():
+            return (p / "contract-fixtures" / "manifest.json").resolve()
+        return (p / "manifest.json").resolve()
+
+    if feature_slug:
+        root = Path(root_override).resolve() if root_override else Path.cwd()
+        candidate = root / ".verified-feature-delivery" / feature_slug / "contract-fixtures" / "manifest.json"
+        if candidate.is_file():
+            return candidate.resolve()
+        candidate2 = root / feature_slug / "manifest.json"
+        if candidate2.is_file():
+            return candidate2.resolve()
+        return candidate
+
+    cand_default = Path.cwd() / "contract-fixtures" / "manifest.json"
+    if cand_default.is_file():
+        return cand_default.resolve()
+    cand_default2 = Path.cwd() / "manifest.json"
+    return cand_default2.resolve()
+
+
+def build_parser():
+    parser = argparse.ArgumentParser(
+        description="Verified Feature Delivery - Stage 1 Boundary Manifest & Variance Validator",
+        prog="verify-fixture-variance",
+    )
+    parser.add_argument("path", nargs="?", help="Path to manifest.json or contract-fixtures directory")
+    parser.add_argument("--file", "-f", help="Explicit path to manifest.json")
+    parser.add_argument("--feature", "-s", help="Feature slug")
+    parser.add_argument("--dir", "-d", help="Directory containing manifest.json")
+    parser.add_argument("--root", help="Target project root directory")
+    return parser
+
+
+def main():
+    parser = build_parser()
+    args = parser.parse_args()
+
+    target_path_str = args.file or args.path
+    resolved_path = resolve_manifest_path(target_path_str, args.feature, args.dir, args.root)
+
+    if not resolved_path or not resolved_path.is_file():
+        sys.stderr.write(f"Manifest file not found: {resolved_path}\n")
+        print("MISSING_GATE_ARTIFACT")
+        return 1
+
+    try:
+        with open(resolved_path, "r", encoding="utf-8") as f:
+            manifest_data = json.load(f)
+    except json.JSONDecodeError as e:
+        sys.stderr.write(f"Invalid JSON in {resolved_path}: {e}\n")
+        print("MANIFEST_CLASS_MISSING")
+        return 1
+    except Exception as e:
+        sys.stderr.write(f"Error reading {resolved_path}: {e}\n")
+        return 1
+
+    manifest_dir = resolved_path.parent
+    is_valid, error_code, msg = validate_manifest_and_fixtures(manifest_data, manifest_dir)
+
+    if is_valid:
+        feature_slug = manifest_data.get("feature_slug", "unknown")
+        print(f"BOUNDARY_MANIFEST_VALIDATED_CLEAN: {feature_slug}")
+        return 0
+    else:
+        # Print bare error token to stdout
+        print(error_code)
+        sys.stderr.write(f"{error_code}: {msg}\n")
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

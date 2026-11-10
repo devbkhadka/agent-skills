@@ -1,0 +1,24 @@
+{
+  "schema_version": "1.0.0",
+  "feature_slug": "stripe-subscription-downgrade",
+  "generated_at": "2026-08-22T12:05:00Z",
+  "milestones": [
+    {
+      "milestone_id": "M5_PRORATION_CREDIT_APPLIED",
+      "slice_id": "slice_2_downgrade_proration",
+      "verification_medium": "process_exit",
+      "executed_command": "pytest tests/test_proration.py",
+      "captured_evidence": {
+        "exit_code": 1,
+        "stdout": "FAIL tests/test_proration.py::test_credit_matches_invoice\nassert 1499 == 14.99",
+        "stderr": "1 failed, 0 passed"
+      },
+      "failure_trace": {
+        "domain_term": "amount_due",
+        "observed_unit": "dollars",
+        "observed_value": 14.99,
+        "description": "The proration step read the invoice amount as a decimal dollar figure, so every credit it computed was off by two orders of magnitude."
+      }
+    }
+  ]
+}

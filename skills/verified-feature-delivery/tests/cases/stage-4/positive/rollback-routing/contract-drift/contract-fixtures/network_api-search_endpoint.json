@@ -1,0 +1,32 @@
+{
+  "schema_version": "1.0.0",
+  "boundary_class": "NETWORK_API",
+  "boundary_identifier": "POST /v1/search",
+  "fixture_status": "PROBED_LIVE",
+  "pinned_reprobe_milestone": null,
+  "contract_reference": "src/api/searchApi.ts#SearchResponse",
+  "success_samples": [
+    {
+      "sample_id": "sample_summary",
+      "status_code": 200,
+      "headers": {"content-type": "application/json"},
+      "payload": {
+        "total_results": 4210,
+        "cursor": "cur_xyz",
+        "results": [
+          {"id": "chunk_101", "score": 0.94, "metadata": {"author": "dev", "cluster": "core"}}
+        ]
+      }
+    }
+  ],
+  "failure_envelope_census": [
+    {
+      "envelope_id": "http_400_bad_request",
+      "error_class": "InvalidFilterParameter",
+      "status_code": 400,
+      "payload_type": "JSON",
+      "payload": {"detail": "The filter list may not be empty when a category facet is applied."},
+      "description": "Validation failure on a malformed search request body."
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "captured_artifact": "<div class=\"app-container\"><div class=\"daily-card\"><div class=\"daily-card-header\"><span class=\"daily-date\">2026-07-01</span><span class=\"daily-hours-badge\">8.00 hrs</span></div><ul class=\"ticket-list\"><li class=\"ticket-item\"><span class=\"ticket-key\">PROJ-2400</span><p class=\"ticket-summary\">Feature design</p><span class=\"ticket-hours\">8.00 hrs</span></li></ul></div></div>",
+  "recorded_fixture_values": [],
+  "layout_capture": null,
+  "focus_sequence": null,
+  "time_travel": null,
+  "value_bindings": null,
+  "observation_target": {
+    "entry_point": "evidence/capture.html"
+  }
+}

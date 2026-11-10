@@ -1,0 +1,27 @@
+{
+  "schema_version": "1.0.0",
+  "feature_slug": "search-console-web-ui",
+  "generated_at": "2026-08-23T12:05:00Z",
+  "milestones": [
+    {
+      "milestone_id": "M1_QUERY_PANE_RENDERS",
+      "slice_id": "slice_1_query_entry",
+      "verification_medium": "rendered_ui",
+      "executed_command": "vitest run tests/idle.test.tsx",
+      "evidence_key": "state:IDLE",
+      "observer_id": "operator",
+      "captured_evidence": "<div class=\"pane pane--idle\" data-testid=\"search-pane\"><h2 class=\"title\">Search the indexed corpus</h2><input type=\"search\" aria-label=\"Search query\"><button class=\"btn\" aria-label=\"Run search\">Search</button></div>"
+    },
+    {
+      "milestone_id": "M2_UI_REPROBE",
+      "slice_id": "slice_1_query_entry",
+      "verification_medium": "process_exit",
+      "executed_command": "vitest run tests/searchApi.smoke.test.ts",
+      "boundary_identifier": "POST /v1/search",
+      "captured_evidence": {
+        "exit_code": 0,
+        "stdout": "search API smoke check passed"
+      }
+    }
+  ]
+}

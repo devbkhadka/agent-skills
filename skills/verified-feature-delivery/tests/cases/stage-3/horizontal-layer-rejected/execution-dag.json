@@ -1,0 +1,24 @@
+{
+  "schema_version": "1.0.0",
+  "feature_slug": "horizontal-layer-rejected-feature",
+  "bootstrap_floor": ["src/main.ts"],
+  "slices": [
+    {
+      "slice_id": "slice_layer_models",
+      "name": "Data Models Layer",
+      "dependencies": [],
+      "legs": {
+        "adapter_persistence": {
+          "optional_leg_present": true,
+          "adapter_files": ["src/models/user_profile.ts"]
+        }
+      },
+      "files_touched": [
+        "src/models/user_profile.ts"
+      ],
+      "files_read": [
+        "src/models/user_profile.ts"
+      ]
+    }
+  ]
+}

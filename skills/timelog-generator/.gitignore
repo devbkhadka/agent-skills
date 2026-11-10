@@ -1,0 +1,36 @@
+# Generated outputs and states in data/
+data/daily-summaries/*
+!data/daily-summaries/.gitkeep
+data/scan-results/*
+!data/scan-results/.gitkeep
+data/monthly-worklogs/*
+!data/monthly-worklogs/.gitkeep
+data/states/*
+!data/states/.gitkeep
+
+# Legacy output directories
+test-output/
+trial-output/
+timelog-out/
+*.log
+
+# Intermediate data
+.extracted.json
+.inferred.json
+.timelog_last_run.json
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.pytest_cache/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# macOS
+.DS_Store

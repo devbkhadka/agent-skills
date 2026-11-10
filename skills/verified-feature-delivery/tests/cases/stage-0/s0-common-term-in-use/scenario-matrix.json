@@ -1,0 +1,27 @@
+{
+  "schema_version": "1.0.0",
+  "feature_slug": "common-term-in-use-feature",
+  "flows": [
+    {
+      "flow_id": "flow_1",
+      "group_id": "grp_1",
+      "name": "Flow 1",
+      "actor_id": "Operator",
+      "preconditions": [],
+      "steps": [
+        {
+          "step_no": 1,
+          "action": "AuditLog",
+          "actor_id": "Operator",
+          "transition_ref": "t1"
+        }
+      ],
+      "expected_outcome": {
+        "description": "done",
+        "evidence_key": "ev1",
+        "observer_id": "Operator",
+        "medium": "rendered_ui"
+      }
+    }
+  ]
+}
