@@ -49,15 +49,21 @@ later call: `export` does not survive between your shell calls.
 
 ## 2. Post an Update
 
-`agent-desk update "Tests green; starting the migration"`: one line, at each milestone (phase
-started or done, blocker hit, work handed off). Put longer text in `--body`. An Update never gets
-a Reply. Don't wait after it.
+Prefix milestone Updates with `[k/n]` step progress or a phase tag so the user can see progress at
+a glance on the Agent Desk page:
+`agent-desk update "[2/4] Tests green; starting the migration"`.
+
+Post an Update at every phase transition (planning done, implementation slice complete, verification
+started/passed, blocker hit, work handed off). Put verification output or multi-line context in
+`--body`. An Update never gets a Reply. Don't wait after it.
 
 ## 3. Raise an Ask
 
 Ask instead of guessing when only the user can decide and the choice changes the outcome:
 
-- `agent-desk ask "JWT or session cookies?" --choices jwt,cookies` for a **question**.
+- `agent-desk ask "JWT or session cookies?" --choices jwt,cookies` for a **question**. Always pass
+  `--choices a,b,c` (2–4 short options) whenever the decision is between known options so the user
+  can answer in one click on the page without typing.
 - `agent-desk ask --risk "Dropping table orders_old deletes 2 GB of data. Go ahead?"` before anything
   destructive or irreversible, or when you find a **risk** the user must know about. The user can
   answer a risk with **Accept**, **Stop** or free text.
@@ -92,6 +98,10 @@ later. `inbox` prints every answer in your Workstream not yet received, whicheve
 Ask, and marks each received.
 
 ## 5. Withdraw Asks you no longer need
+
+Proactively run `agent-desk withdraw <ask-id>` right away whenever an open `--no-wait` Ask (or an Ask
+carried over from an earlier Session) is answered by code inspection or made obsolete by a change in
+plan, so irrelevant open Asks never clutter the desk.
 
 - `agent-desk withdraw ask_3 ask_4` withdraws those Asks.
 - `agent-desk withdraw --all` withdraws every open Ask in your Workstream. Use it only when the user
