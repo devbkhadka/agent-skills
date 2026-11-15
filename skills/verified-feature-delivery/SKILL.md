@@ -110,10 +110,10 @@ Executable BDD scenarios bridge Stage 2 flow simulation and Stage 4 milestone ex
 
 The pipeline is explicitly long-running (spanning six stages and many milestone waves). The driving agent is the singular context that must survive the entire delivery as an independent, neutral judge:
 
-1. **Driver Produces No Evidence & Reads No Source**: The driver never runs test suites, gate validators, compilers, repository diffs, raw file reads, migrations, or log inspection directly.
+1. **Driver Produces No Evidence & Reads No Source**: The driver never runs test suites, compilers, repository diffs, raw file reads, migrations, or log inspection directly. **Exception — deterministic checks:** the driver may run a check whose verdict is its exit code and whose output is a reason code (`bin/planner-state`, the `bin/validate-*` gates, `bin/triage-change`, `bin/find-gaps`, an emitted `check_architecture.py`). Their verdict is not the driver's judgement, so it is not tainted.
 2. **Structured Worker Dispatch**: Every exploratory or evidence-generating command is dispatched to a worker subagent or Herdr pane and returns as a structured claim object. The driver's tool use is strictly restricted to dispatching tasks, evaluating structured handoffs, and recording state decisions via `bin/planner-state`.
 3. **Independent Cross-Verification**: When the driver questions or rejects an evidence claim, it must spawn an independent cross-verification agent. Re-running the command directly converts the judge into a producer and destroys the independence of the verdict.
-4. **Self-Verification Penalty**: Any evidence generated directly by the driving agent is tainted as `SELF_VERIFIED` and cannot satisfy independent gate criteria.
+4. **Self-Verification Penalty**: Any *judged* claim the driving agent produces itself — a reading of a log, a diff, a rendering or prose — is tainted as `SELF_VERIFIED` and cannot satisfy independent gate criteria. Exit-code verdicts of deterministic checks (rule 1) are not judged claims.
 
 
 

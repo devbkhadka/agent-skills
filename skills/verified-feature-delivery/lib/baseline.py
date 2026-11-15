@@ -749,3 +749,99 @@ def merge_contract_fixtures(baseline_dir: Union[str, Path], feature_fixtures_dir
     for item in f_dir.iterdir():
         if item.is_file() and item.name.endswith(".json") and item.name != "manifest.json":
             shutil.copy2(item, b_fixtures_dir / item.name)
+
+
+# ---------------------------------------------------------------------------
+# Seeding a feature from the baseline (planner-state init --baseline-dir)
+# ---------------------------------------------------------------------------
+
+# Fixture statuses that met the real boundary; PROVISIONAL_FROM_SCHEMA never did, so it is re-probed.
+REUSABLE_FIXTURE_STATUSES = ("PROBED_LIVE", "REPLAYED_FROM_RECORDING")
+
+
+def reusable_boundary_classes(manifest: Any, fixtures: Dict[str, Any]) -> List[str]:
+    """Boundary classes Stage 1 may reuse from the baseline instead of re-probing.
+
+    A class is reusable only when its row is PRESENT, every property carries a verdict, and every
+    PROBED property's fixture (fixtures maps fixture_ref -> loaded fixture) exists with a status in
+    REUSABLE_FIXTURE_STATUSES. A NOT_PRESENT row is never reused: the baseline's placeholder rows
+    ("Baseline initialized unprobed.") mean never probed, not probed absent.
+    """
+    reusable: List[str] = []
+    rows = manifest.get("boundary_classes") if isinstance(manifest, dict) else None
+    for row in rows or []:
+        if not isinstance(row, dict) or row.get("verdict") != "PRESENT" or not row.get("class_name"):
+            continue
+        properties = [p for p in row.get("properties") or [] if isinstance(p, dict)]
+        if not properties:
+            continue
+        ok = True
+        for prop in properties:
+            verdict = prop.get("verdict")
+            if verdict == "NOT_PRESENT":
+                continue
+            fixture = fixtures.get(str(prop.get("fixture_ref") or ""))
+            if verdict != "PROBED" or not isinstance(fixture, dict) or \
+                    fixture.get("fixture_status") not in REUSABLE_FIXTURE_STATUSES:
+                ok = False
+                break
+        if ok:
+            reusable.append(row["class_name"])
+    return sorted(reusable)
+
+
+def seed_feature_from_baseline(baseline_dir: Union[str, Path], feature_dir: Union[str, Path]) -> Dict[str, Any]:
+    """Copy the baseline lexicon and the reusable contract fixtures into a new feature directory.
+
+    Never overwrites: a feature lexicon or manifest already present is left as it is. The seeded
+    manifest holds only the reusable rows, so Stage 1 still has to probe (and record a row for)
+    every other boundary class before its gate can pass.
+    """
+    b_dir = Path(baseline_dir).resolve()
+    f_dir = Path(feature_dir).resolve()
+    if not (b_dir / "baseline.json").is_file():
+        raise BaselineError("BASELINE_NOT_FOUND", f"No baseline.json under {b_dir}; run `baseline init` first")
+    f_dir.mkdir(parents=True, exist_ok=True)
+    result: Dict[str, Any] = {"lexicon_seeded": False, "reused_boundary_classes": []}
+
+    b_lexicon = b_dir / "domain-lexicon.json"
+    f_lexicon = f_dir / "domain-lexicon.json"
+    if b_lexicon.is_file() and not f_lexicon.exists():
+        shutil.copyfile(b_lexicon, f_lexicon)
+        f_lexicon.chmod(0o644)
+        result["lexicon_seeded"] = True
+
+    b_fixtures = b_dir / "contract-fixtures"
+    f_fixtures = f_dir / "contract-fixtures"
+    b_manifest_path = b_fixtures / "manifest.json"
+    if not b_manifest_path.is_file() or (f_fixtures / "manifest.json").exists():
+        return result
+    try:
+        manifest = json.loads(b_manifest_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise BaselineError("INVALID_FIXTURE_MANIFEST", f"Malformed baseline fixture manifest: {exc}")
+    fixtures: Dict[str, Any] = {}
+    for path in b_fixtures.glob("*.json"):
+        if path.name == "manifest.json":
+            continue
+        try:
+            fixtures[path.name] = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue  # an unreadable fixture makes its class non-reusable, not the seed a failure
+    reusable = reusable_boundary_classes(manifest, fixtures)
+    if not reusable:
+        return result
+
+    rows = [r for r in manifest["boundary_classes"] if isinstance(r, dict) and r.get("class_name") in reusable]
+    f_fixtures.mkdir(parents=True, exist_ok=True)
+    for row in rows:
+        for prop in row.get("properties") or []:
+            ref = str(prop.get("fixture_ref") or "") if isinstance(prop, dict) else ""
+            if ref and not (f_fixtures / ref).exists():
+                shutil.copyfile(b_fixtures / ref, f_fixtures / ref)
+                (f_fixtures / ref).chmod(0o644)
+    seeded = {k: v for k, v in manifest.items() if k != "boundary_classes"}
+    seeded["boundary_classes"] = rows
+    (f_fixtures / "manifest.json").write_text(json.dumps(seeded, indent=2) + "\n", encoding="utf-8")
+    result["reused_boundary_classes"] = reusable
+    return result

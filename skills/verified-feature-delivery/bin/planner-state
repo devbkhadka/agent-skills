@@ -498,9 +498,41 @@ def cmd_init(args):
             }
         ],
     }
+    lane = getattr(args, "lane", None) or "NEW_CAPABILITY"
+    state_data["lane"] = lane
+    baseline_dir = getattr(args, "baseline_dir", None)
+    seeded = None
+    if baseline_dir:
+        _skill_lib()
+        from lib.baseline import BaselineError, seed_feature_from_baseline
+        root = Path(args.root).resolve() if getattr(args, "root", None) else Path.cwd()
+        baseline_path = Path(baseline_dir)
+        if not baseline_path.is_absolute():
+            baseline_path = root / baseline_path
+        if not (baseline_path / "baseline.json").is_file():
+            print("BASELINE_NOT_FOUND")
+            sys.stderr.write("BASELINE_NOT_FOUND: no baseline.json under %s; nothing was written\n"
+                             % baseline_path)
+            return 1
+        if not args.dry_run:
+            try:
+                seeded = seed_feature_from_baseline(baseline_path, feature_dir)
+            except BaselineError as error:
+                print(error.code)
+                sys.stderr.write("%s\n" % error)
+                return 1
+        state_data["baseline"] = {
+            "dir": str(baseline_dir),
+            "reused_boundary_classes": (seeded or {}).get("reused_boundary_classes", []),
+        }
     if not args.dry_run:
         save_state(feature_dir, state_data)
-    print("INITIALIZED: %s at UNINITIALIZED" % args.feature)
+    print("INITIALIZED: %s at UNINITIALIZED (lane %s)" % (args.feature, lane))
+    if seeded is not None:
+        reused = seeded["reused_boundary_classes"]
+        print("BASELINE_SEEDED: lexicon %s; Stage 1 reuses %s"
+              % ("copied" if seeded["lexicon_seeded"] else "kept",
+                 ", ".join(reused) if reused else "no boundary class (every class is probed)"))
     print(json.dumps(state_data, indent=2))
     return 0
 
@@ -779,6 +811,7 @@ def cmd_advance(args):
                     check_gates,
                     verify_medium,
                     verify_claim,
+                    live_observation_scope,
                 )
                 report, rep_problems = read_report(delivery_json)
                 if rep_problems:
@@ -805,7 +838,9 @@ def cmd_advance(args):
                     print(token)
                     sys.stderr.write("EVIDENCE_VERIFICATION_FAILED: %s\n" % med_problems[0])
                     return 1
-                _notes, claim_problems = verify_claim(report, planned, verified, base_dir=feature_dir)
+                _notes, claim_problems = verify_claim(
+                    report, planned, verified, base_dir=feature_dir,
+                    observe_milestones=live_observation_scope(state_data))
                 if claim_problems:
                     token = claim_problems[0].split(":")[0].strip()
                     print(token)
@@ -900,6 +935,12 @@ def cmd_rollback(args):
             if art_key in state_data["artifacts"]:
                 state_data["artifacts"][art_key] = None
     if scope:
+        # Scoped rollbacks before the next delivery accumulate: every slice any of them
+        # invalidated must be re-run and re-observed.
+        previous = state_data.get("rollback_scope")
+        if isinstance(previous, dict):
+            scope = {key: sorted(set(scope[key]) | set(previous.get(key) or []))
+                     for key in ("elements", "slices", "milestones")}
         state_data["rollback_scope"] = dict(scope, cause=cause, timestamp=now_iso_utc())
     else:
         state_data.pop("rollback_scope", None)
@@ -1324,6 +1365,10 @@ def build_parser():
     p_init.add_argument("--dir", help="Explicit target directory for state files")
     p_init.add_argument("--root", help="Project root directory")
     p_init.add_argument("--dry-run", action="store_true", help="Validate without writing state to disk")
+    p_init.add_argument("--lane", choices=["TWEAK", "EXTENSION", "NEW_CAPABILITY"], default="NEW_CAPABILITY",
+                        help="Change lane from triage-change; sizes the Stage 5 exit tier (default NEW_CAPABILITY)")
+    p_init.add_argument("--baseline-dir", help="Seed the feature lexicon and reusable contract fixtures "
+                        "from this project baseline (relative to --root or cwd)")
 
     # show
     p_show = subparsers.add_parser("show", help="Show current state and artifacts")

@@ -25,7 +25,7 @@ new attribute cannot be introduced and then quietly believed.
 import json
 import re
 from pathlib import Path
-from typing import Any, Dict, List, NamedTuple, Optional, Sequence, Tuple
+from typing import AbstractSet, Any, Dict, List, NamedTuple, Optional, Sequence, Set, Tuple
 
 from .arithmetic import verify_arithmetic_consistency
 from .ground_truth import verify_ground_truth_reconciliation
@@ -817,11 +817,28 @@ def discharged_claims(report: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
     return out
 
 
+def live_observation_scope(state: Any) -> Optional[Set[str]]:
+    """The milestones whose rendered_ui claims Stage 5 observes live, or None for all of them.
+
+    NEW_CAPABILITY (the default lane) observes every rendered_ui milestone, as before lanes. A
+    TWEAK or EXTENSION delivery observes only the slices new or invalidated in it: after a scoped
+    rollback that is the rollback scope's milestones, whose evidence was re-run; with no scoped
+    rollback every slice of the delivery is new, so all are observed.
+    """
+    if not isinstance(state, dict) or (state.get("lane") or "NEW_CAPABILITY") == "NEW_CAPABILITY":
+        return None
+    scope = state.get("rollback_scope")
+    if not isinstance(scope, dict) or not isinstance(scope.get("milestones"), list):
+        return None
+    return {str(m) for m in scope["milestones"]}
+
+
 def verify_claim(
     report: Dict[str, Any],
     planned: Dict[str, PlannedMilestone],
     verified: Sequence[MilestoneEvidence],
     base_dir: Optional[Path] = None,
+    observe_milestones: Optional[AbstractSet[str]] = None,
 ) -> Tuple[List[str], List[str]]:
     """Steps 3 and 4: the second axis, and the escape hatch that is a first-class outcome.
 
@@ -847,7 +864,8 @@ def verify_claim(
 
     # Live browser observation: verify that rendered_ui captures were produced by live
     # observation of an executable target rather than agent self-testimony.
-    observation_problems = verify_rendered_ui_observation(report, planned, verified, base_dir=base_dir)
+    observation_problems = verify_rendered_ui_observation(
+        report, planned, verified, base_dir=base_dir, observe_milestones=observe_milestones)
     problems.extend(observation_problems)
 
     for evidence in verified:
