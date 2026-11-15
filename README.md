@@ -32,8 +32,12 @@ agent-skills/
 ├── skills/              # Reusable agent skills
 │   ├── agent-desk/              # User communication & human-in-the-loop asks
 │   ├── agent-herder/            # Unattended multi-agent terminal fleet orchestration
+│   ├── architecture-rules/      # Pure-core boundaries emitted as repo fitness checks (VFD)
 │   ├── beads-task-scheduler/    # DAG task scheduling via Beads
 │   ├── browser-app-debugger/    # Chrome/Playwright + DAP live browser debugger
+│   ├── change-lane/             # Triage a diff into TWEAK / EXTENSION / NEW_CAPABILITY (VFD)
+│   ├── domain-baseline/         # Committed project domain baseline in docs/domain (VFD)
+│   ├── feature-gaps/            # Find missing states, branches & terms in a feature (VFD)
 │   ├── js-runtime-debugger/     # Runtime TS/JS breakpoint & logpoint debugger
 │   ├── playwright-cli/          # Headless browser testing & visual review
 │   ├── quick-prompt/            # Reusable prompt template runner
@@ -44,7 +48,7 @@ agent-skills/
 │   ├── subagent-feature-driver/ # Autonomous multi-step feature implementation
 │   ├── terminal-agent-runner/   # Herdr terminal runner for coding fleets
 │   ├── timelog-generator/       # Deterministic Git & Jira monthly time logging
-│   └── verified-feature-delivery# Contract-driven 6-stage feature verification
+│   └── verified-feature-delivery# Contract-driven 6-stage pipeline; engine + router for the 4 VFD skills
 ├── mcp/                 # Model Context Protocol (MCP) server definitions
 │   ├── context7/                # Context7 API server integration
 │   └── fetch/                   # Web resource fetch server
