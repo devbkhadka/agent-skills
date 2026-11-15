@@ -1,178 +1,110 @@
-# Playwright Visual Annotation & Component-to-Code Mapping
+# Live Element Annotation & Component-to-Code Mapping
 
-Use this workflow when collaborating interactively with the user on UI/UX reviews, visual defect debugging, design feedback, or rapid feature tweaks via `playwright-cli`.
-
----
-
-## 1. End-to-End Workflow Lifecycle
-
-```
-[1. Open Headed Browser] 
-       │
-[2. Launch Annotation Dashboard] ──> User draws boxes & notes ──> User clicks Submit
-       │
-[3. Read Annotation Output] ──> Extract (x, y, w, h) bounding boxes (Tier 1: ~150 tokens)
-       │
-[4. React Fiber / DOM Probe] ──> Identify Component & Source File (Tier 2: ~80 tokens)
-       │
-[5. Targeted Code Modification] ──> Edit source component & props wiring
-       │
-[6. Visual Verification] ──> Targeted screenshot diff & cleanup
-```
+Use this workflow when the user wants to point at parts of a running page and leave feedback: UI/UX reviews, visual defects, design tweaks, "change this one". The user selects real DOM elements in a headed browser, comments on each, and presses **Submit**. You receive the comments as structured JSON on stdout — element selector, Playwright locator, box, and the React component/source when the dev build exposes it. No images are produced.
 
 ---
 
-## 2. Launching the Interactive Session
+## 1. Lifecycle
 
-### Step 1: Open Headed Browser
-Always open with `--headed` so the user has full visual visibility and control over mouse/keyboard interaction:
-
-```bash
-# Launch headed browser
-playwright-cli open <url> --headed --browser=chrome
 ```
-
-> [!TIP]
-> If testing a mobile viewport or responsive layout, pass `--mobile` or `--device="iPhone 15"`:
-> ```bash
-> playwright-cli open <url> --headed --mobile
-> ```
-
-### Step 2: Launch Annotation Dashboard
-Run the annotation dashboard:
-
-```bash
-playwright-cli show --annotate
+[1. Open headed browser]
+       │
+[2. Run element-annotator.js] ── blocks ──> user toggles Select, clicks elements, writes comments, presses Submit
+       │
+[3. Read JSON from stdout] ──> one entry per comment: note + selector + locator + box + component/source
+       │
+[4. Edit code] ──> jump to `source`, or grep `component`
+       │
+[5. Verify] ──> re-check the element by `locator`, then close the session
 ```
-
-> [!IMPORTANT]
-> The annotation dashboard is a blocking interactive tool. It waits until the user draws one or more bounding boxes, writes review notes, and clicks **Submit** (or closes the window).
-> When running inside agent fleets or asynchronous runners, listen for completion notifications rather than polling in a tight loop.
 
 ---
 
-## 3. Token Optimization Strategy
+## 2. Start a Review
 
-Indiscriminately loading full DOM dumps or large high-resolution screenshots into LLM context will quickly consume 20,000–60,000 tokens per interaction. Use this strictly tiered approach:
+```bash
+playwright-cli open <url> --headed            # add --mobile or --device="iPhone 15" for responsive reviews
+playwright-cli --raw run-code --filename="$S/element-annotator.js"
+```
 
-| Tier | Artifact | Token Cost | When to Use | Action |
-| :--- | :--- | :--- | :--- | :--- |
-| **Tier 1 (Default)** | CLI Output Summary | **~100–200 tokens** | Immediate after submit | Extract `{ x, y, width, height }` coordinates, note text, and active URL from the CLI stdout. |
-| **Tier 2 (Targeted)** | React Fiber / DOM Probe | **~50–100 tokens** | Locating component code | Evaluate the element at the center of the bounding box to extract component names, source files, and test IDs. |
-| **Tier 3 (Visual)** | Cropped / Annotated PNG | **~1,000–1,500 tokens** | Complex visual layout/iconography | Use `view_file` on `annotations-*.png` only if visual context cannot be resolved via component hierarchy. |
-| **Tier 4 (Forbidden)** | Full `.yaml` DOM Snapshot | **~15,000–50,000+ tokens** | **Avoid** | **Do not read raw YAML snapshots into context.** They dump whole DOM trees without adding value. |
+The `run-code` call **blocks** until the user presses **Submit** or closes the page, then prints JSON and exits 0. Other `playwright-cli` commands keep working against the same session while it blocks. In agent fleets, run it as a background job and wait for its exit instead of polling.
+
+Tell the user how to drive it:
+
+| Control | Effect |
+| :--- | :--- |
+| **Select** switch (bottom-right) or **Alt+S** | Toggle selection mode. Starts **on**. |
+| Hover / click (selection on) | Hovered element is outlined; click opens a comment box anchored to it. The page does not receive the click. |
+| **Cmd/Ctrl+Enter** / **Esc** | Save / cancel the comment box. |
+| Numbered pin | Edit or delete that comment. Pins stay visible in both modes. |
+| **Submit** | Finish and hand all comments back. |
+
+With selection **off** the page behaves exactly as normal (links navigate, buttons fire, inputs accept text), so the user can reach deeper views, then switch selection back on. Toggle state survives SPA route changes, reloads, and full navigations; the overlay re-injects itself on every new document. Pins show only on the page where their comment was made.
 
 ---
 
-## 4. React Fiber & Component-to-Code Mapping
-
-Modern React development servers (Vite, Webpack, Next.js, CRA) attach internal Fiber nodes to DOM elements. Probing the DOM element at the annotated coordinates reveals the exact component name, parent container, and source file location (`_debugSource` / `_debugOwner`).
-
-### Option A: Using the Fiber Probe Script (Recommended)
-
-Run the bundled probe helper located in `scripts/probe-fiber.js`:
-
-```bash
-# Evaluate at annotation coordinates (e.g. x: 340, y: 220, width: 120, height: 40)
-playwright-cli eval "($(< scripts/probe-fiber.js))({ x: 340, y: 220, width: 120, height: 40 })"
-```
-
-### Option B: Inline CLI Evaluation
-
-If scripts are not in your working directory, execute this compact snippet:
-
-```bash
-playwright-cli eval '
-(() => {
-  const x = <TARGET_X> + (<TARGET_WIDTH> || 0) / 2;
-  const y = <TARGET_Y> + (<TARGET_HEIGHT> || 0) / 2;
-  const el = document.elementFromPoint(x, y);
-  if (!el) return { error: "No element found at point" };
-
-  const fiberKey = Object.keys(el).find(k => k.startsWith("__reactFiber$") || k.startsWith("__reactInternalInstance$"));
-  if (!fiberKey) return { tag: el.tagName, testId: el.getAttribute("data-testid"), id: el.id, className: el.className };
-
-  let fiber = el[fiberKey];
-  const hierarchy = [];
-  while (fiber && hierarchy.length < 8) {
-    const name = fiber.type?.displayName || fiber.type?.name || (typeof fiber.type === "string" ? fiber.type : null);
-    const source = fiber._debugSource ? `${fiber._debugSource.fileName}:${fiber._debugSource.lineNumber}` : null;
-    const owner = fiber._debugOwner?.type?.displayName || fiber._debugOwner?.type?.name || null;
-    if (name && !["div", "span", "p", "button", "section", "main"].includes(name.toLowerCase())) {
-      hierarchy.push({ name, source, owner });
-    }
-    fiber = fiber.return;
-  }
-  return {
-    element: el.tagName.toLowerCase(),
-    testId: el.getAttribute("data-testid") || el.getAttribute("data-cy"),
-    hierarchy
-  };
-})()
-'
-```
-
-### Probe Output Example
+## 3. Output
 
 ```json
 {
-  "point": { "x": 340, "y": 220 },
-  "element": {
-    "tagName": "button",
-    "testId": "submit-checkout-btn",
-    "selector": "[data-testid=\"submit-checkout-btn\"]"
-  },
-  "framework": "react",
-  "reactHierarchy": [
+  "status": "submitted",
+  "count": 2,
+  "annotations": [
     {
-      "name": "CheckoutSubmitButton",
-      "source": "apps/web/src/features/checkout/components/CheckoutSubmitButton.tsx:28"
-    },
-    {
-      "name": "CheckoutForm",
-      "source": "apps/web/src/features/checkout/CheckoutForm.tsx:142",
-      "owner": "CheckoutPage"
-    },
-    {
-      "name": "CheckoutPage",
-      "source": "apps/web/src/pages/checkout.tsx:45"
+      "id": 1,
+      "note": "Rename to Save",
+      "selector": "[data-testid=\"save-btn\"]",
+      "locator": "getByTestId('save-btn')",
+      "testId": "save-btn",
+      "tag": "button",
+      "text": "Save changes",
+      "box": { "x": 161, "y": 128, "w": 100, "h": 21 },
+      "url": "http://localhost:5173/settings",
+      "component": "SaveButton",
+      "source": "src/features/settings/SaveButton.tsx:12",
+      "componentStack": ["SaveButton", "SettingsForm", "SettingsPage"]
     }
   ]
 }
 ```
 
----
+| Field | Meaning |
+| :--- | :--- |
+| `status` | `submitted` (Submit pressed) or `closed` (page/window closed; comments made so far are still returned). |
+| `selector` | Unique CSS path, anchored on the nearest unique `id` or test id. Usable directly as a `playwright-cli` target. |
+| `locator` | Playwright's own best-practice locator (`locator.normalize()`): role, test id, label, or text. Prefer it in tests. |
+| `box` | Viewport-relative `getBoundingClientRect()` at selection time, CSS px. |
+| `component` / `componentStack` | Nearest React components (innermost first). Present only on React dev builds. |
+| `source` | JSX location of the element. React ≤18: `_debugSource` file:line. React 19: first app frame of `_debugStack` (served module URL:line:col). Bundler transforms can shift the line, so treat `component` as the reliable key. |
 
-## 5. Navigating and Modifying Code
-
-With the component hierarchy and source files in hand:
-
-1. **Direct File Navigation**: Jump straight to the identified file and line (e.g. `apps/web/src/features/checkout/components/CheckoutSubmitButton.tsx:28`).
-2. **Symbol Search (if source path is obfuscated/relative)**:
-   Use `grep_search` with exact component export signatures:
-   ```json
-   { "Query": "export (const|function) CheckoutSubmitButton", "IsRegex": true }
-   ```
-3. **Trace Upstream Props**:
-   Inspect the parent component (`CheckoutForm.tsx`) to check how state, handlers, and design props are wired down.
-4. **Targeted Edits**: Modify only the identified component or its immediate parent container. Avoid sweeping codebase refactors.
+With no comments the command prints `{"status":"closed"|"submitted","message":"No annotations","annotations":[]}` and still exits 0. Read the stdout JSON only; never load page snapshots to "see" what the user meant.
 
 ---
 
-## 6. Verification and Visual Diffing
+## 4. Map Comments to Code
 
-After modifying the code:
+1. **`source` present**: open that file at that line. For a React 19 URL such as `http://localhost:5173/src/Card.tsx:44:21`, the path after the origin is the repo-relative file.
+2. **Only `component`**: search for its definition, e.g. regex `export (default )?(const|function) SaveButton\b`.
+3. **No React info**: search the codebase for `testId`, then for distinctive `text`.
+4. Check how the parent (next entry in `componentStack`) wires props and handlers before editing.
+5. Edit only the identified component or its direct parent.
 
-1. **Targeted Screenshot Capture**:
-   ```bash
-   playwright-cli screenshot --filename=.playwright-cli/verify-fix.png
-   ```
-2. **Inspect Screenshot**:
-   Use `view_file` on `.playwright-cli/verify-fix.png` to confirm that the reported visual defect or layout misalignment has been fixed.
-3. **Cleanup**:
-   ```bash
-   # Close the browser session when done
-   playwright-cli close
-   ```
-4. **Git Hygiene**:
-   Ensure `.playwright-cli/` is listed in `.gitignore` so temporary review screenshots and snapshots are never committed to git history.
+---
+
+## 5. Verify and Clean Up
+
+```bash
+playwright-cli eval "el => getComputedStyle(el).backgroundColor" "<selector>"   # assert the changed property
+playwright-cli close
+```
+
+For a follow-up round, run the annotator again; each run starts with an empty comment list.
+
+---
+
+## 6. Limits
+
+- **Iframes**: only the top-level document is annotatable; clicks inside an iframe are not captured.
+- **Shadow DOM targets**: selection stops at the shadow host (events are retargeted), so a comment on a web component's internals is recorded against its host element.
+- **Cross-origin navigation**: comments persist (they live in the CLI process), but toggle state is per-origin `sessionStorage` and resets to on after crossing origins.
+- **Single tab**: only the page that was current when the command started is annotated; popups and new tabs are not.
