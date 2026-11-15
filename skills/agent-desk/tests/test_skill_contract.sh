@@ -42,7 +42,7 @@ for agent in 'Claude Code' 'Codex' 'AGY'; do
 done
 
 # --- CLI surface ---------------------------------------------------------------------------------
-COMMANDS=(start update ask detail wait inbox withdraw end)
+COMMANDS=(start update ask detail wait inbox withdraw end submit reviews comment)
 for cmd in "${COMMANDS[@]}"; do
   has_re "agent-desk ${cmd}( |\$|\`)" || fail "surface: 'agent-desk ${cmd}' not documented"
 done
