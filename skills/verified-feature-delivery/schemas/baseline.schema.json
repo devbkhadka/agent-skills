@@ -1,0 +1,47 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ProjectBaseline",
+  "description": "Project Domain Baseline Index Schema. Committed under docs/domain/baseline.json. Maps schema version, update timestamp, source features, element canonical digests, and element approvals.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "updated_at",
+    "sources",
+    "element_digests",
+    "approvals"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "description": "Semantic version of the baseline format (e.g. 1.0.0)."
+    },
+    "updated_at": {
+      "type": "string",
+      "description": "ISO-8601 UTC timestamp of last baseline promotion or approval."
+    },
+    "sources": {
+      "type": "array",
+      "description": "List of feature slugs or sources that have contributed to this baseline.",
+      "items": {
+        "type": "string"
+      }
+    },
+    "element_digests": {
+      "type": "object",
+      "description": "Map of element ID (<kind>:<id>) to sha256 hex digest of its canonical JSON.",
+      "additionalProperties": {
+        "type": "string",
+        "pattern": "^[a-f0-9]{64}$"
+      }
+    },
+    "approvals": {
+      "type": "object",
+      "description": "Map of element ID (<kind>:<id>) to approved sha256 hex digest.",
+      "additionalProperties": {
+        "type": "string",
+        "pattern": "^[a-f0-9]{64}$"
+      }
+    }
+  },
+  "additionalProperties": false
+}

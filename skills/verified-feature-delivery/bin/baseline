@@ -1,0 +1,522 @@
+#!/usr/bin/env python3
+"""Project Domain Baseline CLI — manage, inspect, diff, promote, approve, and check domain baseline.
+
+Owner: M1 — Project baseline engine
+Purpose: Enforces committed repository-level domain baseline under docs/domain/.
+
+Subcommands:
+  init       Create baseline.json + empty-but-valid layout
+  show       Display baseline element census and approval status [--json]
+  diff       Diff a lexicon against the baseline [--json]
+  promote    Merge feature lexicon + contract-fixtures into baseline
+  approve    Record element digests into baseline approvals (--all | --element <id> ...)
+  check      CI drift gate: validates lexicon and rendered docs, reports unapproved/stale elements
+"""
+
+import argparse
+import json
+import os
+from pathlib import Path
+import sys
+from typing import Any, Dict, List, Optional, Set
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from lib.baseline import (
+    DEFAULT_BASELINE_DIR,
+    BaselineConflictError,
+    BaselineError,
+    check_rendered_docs_fresh,
+    diff_lexicons,
+    element_digest,
+    element_index,
+    init_baseline_layout,
+    load_baseline_index,
+    load_baseline_lexicon,
+    merge,
+    merge_contract_fixtures,
+    normalize_element_id,
+    now_iso,
+    render_baseline_docs,
+    save_baseline_index,
+    save_baseline_lexicon,
+    validate_baseline_lexicon,
+)
+
+
+def resolve_baseline_dir(baseline_dir_arg: Optional[str]) -> Path:
+    """Resolve the baseline directory path relative to current working directory."""
+    if baseline_dir_arg:
+        p = Path(baseline_dir_arg)
+        return p if p.is_absolute() else (Path.cwd() / p)
+    return Path.cwd() / DEFAULT_BASELINE_DIR
+
+
+# ---------------------------------------------------------------------------
+# Subcommand Handlers
+# ---------------------------------------------------------------------------
+
+def handle_init(args: argparse.Namespace) -> int:
+    b_dir = resolve_baseline_dir(args.baseline_dir)
+    init_baseline_layout(b_dir)
+    print(f"BASELINE_INITIALIZED: {b_dir}")
+    return 0
+
+
+def handle_show(args: argparse.Namespace) -> int:
+    b_dir = resolve_baseline_dir(args.baseline_dir)
+    try:
+        index_data = load_baseline_index(b_dir)
+        lexicon_data = load_baseline_lexicon(b_dir)
+    except BaselineError as exc:
+        sys.stderr.write(f"{exc.code}: {exc.message}\n")
+        print(exc.code)
+        return 1
+
+    idx = element_index(lexicon_data)
+    element_digests = index_data.get("element_digests") or {}
+    approvals = index_data.get("approvals") or {}
+
+    unapproved = [k for k in sorted(element_digests.keys()) if k not in approvals]
+    stale = [k for k in sorted(element_digests.keys()) if k in approvals and approvals[k] != element_digests[k]]
+    approved = [k for k in sorted(element_digests.keys()) if k in approvals and approvals[k] == element_digests[k]]
+
+    # Kind breakdown
+    breakdown: Dict[str, int] = {}
+    for k in idx.keys():
+        kind = k.split(":", 1)[0]
+        breakdown[kind] = breakdown.get(kind, 0) + 1
+
+    if args.json:
+        payload = {
+            "schema_version": index_data.get("schema_version"),
+            "updated_at": index_data.get("updated_at"),
+            "baseline_dir": str(b_dir),
+            "sources": index_data.get("sources", []),
+            "total_elements": len(idx),
+            "breakdown": breakdown,
+            "approved_count": len(approved),
+            "unapproved_count": len(unapproved),
+            "stale_count": len(stale),
+            "approved": approved,
+            "unapproved": unapproved,
+            "stale_approvals": stale,
+            "element_digests": element_digests,
+            "approvals": approvals,
+        }
+        print(json.dumps(payload, indent=2))
+        return 0
+
+    print(f"Baseline: {b_dir}")
+    print(f"Updated:  {index_data.get('updated_at', 'unknown')}")
+    print(f"Sources:  {', '.join(index_data.get('sources', [])) or '(none)'}")
+    print(f"Elements: {len(idx)} total")
+    for kind, count in sorted(breakdown.items()):
+        print(f"  - {kind}: {count}")
+    print("Approvals:")
+    print(f"  Approved:   {len(approved)}")
+    print(f"  Unapproved: {len(unapproved)}")
+    print(f"  Stale:      {len(stale)}")
+    return 0
+
+
+def handle_diff(args: argparse.Namespace) -> int:
+    b_dir = resolve_baseline_dir(args.baseline_dir)
+    try:
+        baseline_lex = load_baseline_lexicon(b_dir)
+    except BaselineError as exc:
+        sys.stderr.write(f"{exc.code}: {exc.message}\n")
+        print(exc.code)
+        return 1
+
+    lex_path = Path(args.lexicon)
+    if not lex_path.is_absolute():
+        lex_path = Path.cwd() / lex_path
+
+    if not lex_path.is_file():
+        sys.stderr.write(f"Lexicon file not found: {lex_path}\n")
+        print("FILE_NOT_FOUND")
+        return 1
+
+    try:
+        feature_lex = json.loads(lex_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        sys.stderr.write(f"Invalid JSON in {lex_path}: {exc}\n")
+        print("INVALID_LEXICON_JSON")
+        return 1
+
+    diff = diff_lexicons(baseline_lex, feature_lex)
+    added = sorted(list(diff["added"]))
+    changed = sorted(list(diff["changed"]))
+    removed = sorted(list(diff["removed"]))
+
+    if args.json:
+        payload = {
+            "baseline_dir": str(b_dir),
+            "lexicon_path": str(lex_path),
+            "added": added,
+            "changed": changed,
+            "removed": removed,
+        }
+        print(json.dumps(payload, indent=2))
+        return 0
+
+    print(f"Diff against baseline ({b_dir}):")
+    print(f"Added ({len(added)}):")
+    for a in added:
+        print(f"  + {a}")
+    print(f"Changed ({len(changed)}):")
+    for c in changed:
+        print(f"  ~ {c}")
+    print(f"Removed ({len(removed)}):")
+    for r in removed:
+        print(f"  - {r}")
+    return 0
+
+
+def handle_promote(args: argparse.Namespace) -> int:
+    b_dir = resolve_baseline_dir(args.baseline_dir)
+    try:
+        baseline_index = load_baseline_index(b_dir)
+        baseline_lex = load_baseline_lexicon(b_dir)
+    except BaselineError as exc:
+        sys.stderr.write(f"{exc.code}: {exc.message}\n")
+        print(exc.code)
+        return 1
+
+    feat_dir = Path(args.feature_dir)
+    if not feat_dir.is_absolute():
+        feat_dir = Path.cwd() / feat_dir
+
+    feat_lex_path = feat_dir / "domain-lexicon.json"
+    if not feat_lex_path.is_file():
+        # Try direct file path if feature_dir was a file
+        if feat_dir.is_file() and feat_dir.name.endswith(".json"):
+            feat_lex_path = feat_dir
+            feat_dir = feat_dir.parent
+        else:
+            sys.stderr.write(f"Feature lexicon not found: {feat_lex_path}\n")
+            print("MISSING_FEATURE_LEXICON")
+            return 1
+
+    try:
+        feature_lex = json.loads(feat_lex_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        sys.stderr.write(f"Invalid JSON in feature lexicon: {exc}\n")
+        print("INVALID_FEATURE_LEXICON")
+        return 1
+
+    # Flatten amend items
+    amend_items: List[str] = []
+    for item in args.amend or []:
+        if isinstance(item, list):
+            for sub in item:
+                amend_items.extend([x.strip() for x in str(sub).split(",") if x.strip()])
+        elif isinstance(item, str):
+            amend_items.extend([x.strip() for x in item.split(",") if x.strip()])
+
+    # 1. Merge feature lexicon into baseline
+    try:
+        merged_lex = merge(baseline_lex, feature_lex, amend=amend_items)
+    except BaselineConflictError as exc:
+        sys.stderr.write(f"{exc.message}\n")
+        print("BASELINE_CONFLICT")
+        return 1
+
+    # 2. Validate merged lexicon
+    is_valid, err_code, err_msg = validate_baseline_lexicon(merged_lex, file_path=str(feat_lex_path))
+    if not is_valid:
+        sys.stderr.write(f"Merged lexicon validation failed: {err_code}: {err_msg}\n")
+        print(err_code)
+        return 1
+
+    # 3. Save merged lexicon
+    save_baseline_lexicon(b_dir, merged_lex)
+
+    # 4. Merge contract fixtures if present
+    feat_fixtures_dir = feat_dir / "contract-fixtures"
+    if feat_fixtures_dir.is_dir():
+        try:
+            merge_contract_fixtures(b_dir, feat_fixtures_dir)
+        except BaselineError as exc:
+            sys.stderr.write(f"{exc.code}: {exc.message}\n")
+            print(exc.code)
+            return 1
+
+    # 5. Re-render docs into <baseline>/docs/
+    try:
+        render_baseline_docs(b_dir)
+    except BaselineError as exc:
+        sys.stderr.write(f"{exc.code}: {exc.message}\n")
+        print(exc.code)
+        return 1
+
+    # 6. Update baseline.json element_digests & sources
+    new_idx = element_index(merged_lex)
+    element_digests = {k: element_digest(el) for k, el in new_idx.items()}
+    baseline_index["element_digests"] = element_digests
+
+    feature_slug = feature_lex.get("feature_slug") or feat_dir.name
+    sources = baseline_index.get("sources") or []
+    if feature_slug not in sources:
+        sources.append(feature_slug)
+    baseline_index["sources"] = sources
+    baseline_index["updated_at"] = now_iso()
+
+    save_baseline_index(b_dir, baseline_index)
+
+    print(f"BASELINE_PROMOTED: {feature_slug}")
+    return 0
+
+
+def handle_approve(args: argparse.Namespace) -> int:
+    b_dir = resolve_baseline_dir(args.baseline_dir)
+    try:
+        baseline_index = load_baseline_index(b_dir)
+    except BaselineError as exc:
+        sys.stderr.write(f"{exc.code}: {exc.message}\n")
+        print(exc.code)
+        return 1
+
+    element_digests = baseline_index.get("element_digests") or {}
+    approvals = baseline_index.setdefault("approvals", {})
+
+    if args.all:
+        approvals.clear()
+        for k, d in element_digests.items():
+            approvals[k] = d
+        count = len(element_digests)
+    else:
+        raw_elements: List[str] = []
+        for item in args.element or []:
+            if isinstance(item, list):
+                for sub in item:
+                    raw_elements.extend([x.strip() for x in str(sub).split(",") if x.strip()])
+            elif isinstance(item, str):
+                raw_elements.extend([x.strip() for x in item.split(",") if x.strip()])
+
+        if not raw_elements:
+            sys.stderr.write("Must specify --all or --element <id> ...\n")
+            print("INVALID_ARGUMENTS")
+            return 1
+
+        for raw_id in raw_elements:
+            target_id = raw_id
+            if target_id not in element_digests:
+                # Try normalization
+                norm_id = normalize_element_id(target_id)
+                if norm_id in element_digests:
+                    target_id = norm_id
+                elif target_id.startswith("boundary:") and ("entity_boundary:" + target_id[len("boundary:"):]) in element_digests:
+                    target_id = "entity_boundary:" + target_id[len("boundary:"):]
+                else:
+                    sys.stderr.write(f"Element '{raw_id}' not found in baseline element_digests\n")
+                    print("UNKNOWN_ELEMENT")
+                    return 1
+            approvals[target_id] = element_digests[target_id]
+        count = len(raw_elements)
+
+    baseline_index["updated_at"] = now_iso()
+    save_baseline_index(b_dir, baseline_index)
+
+    print(f"BASELINE_APPROVED: {count} elements")
+    return 0
+
+
+def handle_check(args: argparse.Namespace) -> int:
+    b_dir = resolve_baseline_dir(args.baseline_dir)
+    try:
+        baseline_index = load_baseline_index(b_dir)
+        baseline_lex = load_baseline_lexicon(b_dir)
+    except BaselineError as exc:
+        sys.stderr.write(f"{exc.code}: {exc.message}\n")
+        if args.json:
+            print(json.dumps({"status": "REFUSED", "error_code": exc.code, "message": exc.message}, indent=2))
+        else:
+            print(exc.code)
+        return 1
+
+    # 1. Lexicon validation
+    is_valid, err_code, err_msg = validate_baseline_lexicon(baseline_lex, file_path=str(b_dir / "domain-lexicon.json"))
+    if not is_valid:
+        sys.stderr.write(f"Invalid domain lexicon: {err_code}: {err_msg}\n")
+        if args.json:
+            print(json.dumps({"status": "REFUSED", "error_code": err_code, "message": err_msg}, indent=2))
+        else:
+            print(err_code)
+        return 1
+
+    # 2. Rendered docs fresh
+    docs_fresh, stale_reason = check_rendered_docs_fresh(b_dir)
+    if not docs_fresh:
+        sys.stderr.write(f"STALE_RENDERED_DOCS: {stale_reason}\n")
+        if args.json:
+            print(json.dumps({"status": "REFUSED", "error_code": "STALE_RENDERED_DOCS", "message": stale_reason}, indent=2))
+        else:
+            print("STALE_RENDERED_DOCS")
+        return 1
+
+    # 3. Element approvals audit
+    element_digests = baseline_index.get("element_digests") or {}
+    approvals = baseline_index.get("approvals") or {}
+
+    unapproved = [k for k in sorted(element_digests.keys()) if k not in approvals]
+    stale = [k for k in sorted(element_digests.keys()) if k in approvals and approvals[k] != element_digests[k]]
+    approved = [k for k in sorted(element_digests.keys()) if k in approvals and approvals[k] == element_digests[k]]
+
+    has_drift = bool(unapproved or stale)
+
+    if has_drift:
+        if args.strict_approvals:
+            err_code = "UNAPPROVED_ELEMENT" if unapproved else "STALE_APPROVAL"
+            if args.json:
+                payload = {
+                    "status": "REFUSED",
+                    "error_code": err_code,
+                    "approved": approved,
+                    "unapproved": unapproved,
+                    "stale_approvals": stale,
+                }
+                print(json.dumps(payload, indent=2))
+            else:
+                for u in unapproved:
+                    print(f"UNAPPROVED_ELEMENT: {u}")
+                for s in stale:
+                    print(f"STALE_APPROVAL: {s}")
+                print(err_code)
+            return 1
+        else:
+            if args.json:
+                payload = {
+                    "status": "PASS",
+                    "approved": approved,
+                    "unapproved": unapproved,
+                    "stale_approvals": stale,
+                }
+                print(json.dumps(payload, indent=2))
+            else:
+                for u in unapproved:
+                    print(f"UNAPPROVED_ELEMENT: {u}")
+                for s in stale:
+                    print(f"STALE_APPROVAL: {s}")
+                print(f"BASELINE_CHECK_PASSED: {len(approved)} approved, {len(unapproved)} unapproved, {len(stale)} stale")
+            return 0
+
+    # Everything clean
+    if args.json:
+        payload = {
+            "status": "PASS",
+            "approved": approved,
+            "unapproved": [],
+            "stale_approvals": [],
+        }
+        print(json.dumps(payload, indent=2))
+    else:
+        print("BASELINE_CHECK_CLEAN")
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# CLI Parser Setup
+# ---------------------------------------------------------------------------
+
+def build_parser() -> argparse.ArgumentParser:
+    base_parent = argparse.ArgumentParser(add_help=False)
+    base_parent.add_argument(
+        "--baseline-dir",
+        default=DEFAULT_BASELINE_DIR,
+        help="Baseline directory (default: docs/domain)",
+    )
+
+    base_child = argparse.ArgumentParser(add_help=False)
+    base_child.add_argument(
+        "--baseline-dir",
+        default=argparse.SUPPRESS,
+        help="Baseline directory (default: docs/domain)",
+    )
+
+    parser = argparse.ArgumentParser(
+        prog="baseline",
+        description="Verified Feature Delivery — Project Domain Baseline Management",
+        parents=[base_parent],
+    )
+    subparsers = parser.add_subparsers(dest="subcommand", required=True)
+
+    # 1. init
+    subparsers.add_parser(
+        "init",
+        parents=[base_child],
+        help="Create baseline.json + empty-but-valid layout",
+    )
+
+    # 2. show
+    p_show = subparsers.add_parser(
+        "show",
+        parents=[base_child],
+        help="Display baseline element census and approvals",
+    )
+    p_show.add_argument("--json", action="store_true", help="Output summary in JSON format")
+
+    # 3. diff
+    p_diff = subparsers.add_parser(
+        "diff",
+        parents=[base_child],
+        help="Diff a domain lexicon against the baseline",
+    )
+    p_diff.add_argument("--lexicon", required=True, help="Path to domain-lexicon.json to compare against baseline")
+    p_diff.add_argument("--json", action="store_true", help="Output diff in JSON format")
+
+    # 4. promote
+    p_promote = subparsers.add_parser(
+        "promote",
+        parents=[base_child],
+        help="Merge feature lexicon + contract-fixtures into baseline",
+    )
+    p_promote.add_argument("--feature-dir", required=True, help="Path to feature directory containing domain-lexicon.json")
+    p_promote.add_argument("--amend", nargs="*", action="extend", default=[], help="Allow changing an existing baseline element ID (e.g. entity:Foo)")
+
+    # 5. approve
+    p_approve = subparsers.add_parser(
+        "approve",
+        parents=[base_child],
+        help="Record element digests into baseline approvals",
+    )
+    grp = p_approve.add_mutually_exclusive_group(required=True)
+    grp.add_argument("--all", action="store_true", help="Approve all current element digests in baseline")
+    grp.add_argument("--element", nargs="+", action="extend", default=[], help="Approve specific element IDs")
+
+    # 6. check
+    p_check = subparsers.add_parser(
+        "check",
+        parents=[base_child],
+        help="CI drift gate for baseline lexicon, rendered docs, and approvals",
+    )
+    p_check.add_argument("--json", action="store_true", help="Output audit in JSON format")
+    p_check.add_argument("--strict-approvals", action="store_true", help="Exit non-zero on UNAPPROVED_ELEMENT or STALE_APPROVAL")
+
+    return parser
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+
+    dispatch = {
+        "init": handle_init,
+        "show": handle_show,
+        "diff": handle_diff,
+        "promote": handle_promote,
+        "approve": handle_approve,
+        "check": handle_check,
+    }
+
+    handler = dispatch.get(args.subcommand)
+    if not handler:
+        parser.print_help()
+        return 1
+
+    return handler(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
