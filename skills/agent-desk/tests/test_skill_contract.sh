@@ -3,7 +3,8 @@
 #
 # Static checks (always): frontmatter, every command of the agent-desk CLI surface, the closed exit-code
 # set 0-4 with each code's next step, per-agent long-command guidance, Session id resolution, carried-over
-# open Asks, Workstream-wide inbox, bulk withdraw, and the exact domain vocabulary (no synonyms).
+# open Asks, Workstream-wide inbox, bulk withdraw, Artifact Review (submit/reviews/comment surface and
+# exit codes), and the exact domain vocabulary (no synonyms).
 #
 # Drift check (when a CLI is available): set AGENT_DESK_CLI to the CLI entry (e.g.
 # ~/projects/tools/agent-desk/dist/delivery/cli/main.js), or have `agent-desk` on PATH. The CLI's usage
@@ -82,6 +83,42 @@ has_re '9 minutes|540 s' || fail "wait deadline (9 minutes / 540 s) not stated"
 grep -A3 -F '**Long waits.**' <<<"$SKILL" | grep -qF -- '--no-wait' || fail "long waits: --no-wait not described"
 grep -A4 -F '**Long waits.**' <<<"$SKILL" | grep -qF 'agent-desk inbox' || fail "long waits: inbox not described"
 
+# --- Artifact Review: submit / reviews / comment (contracts.md section 5) ------------------------
+REVIEW_COMMANDS=(submit reviews comment)
+for cmd in "${REVIEW_COMMANDS[@]}"; do
+  has_re "agent-desk ${cmd}( |\$|\`)" || fail "review surface: 'agent-desk ${cmd}' not documented"
+done
+has_cmd 'agent-desk submit <path> [--title T] [--kind K] [--no-wait]' || fail "review surface: submit flags"
+has_cmd 'agent-desk reviews [art_<n>] [--wait]' || fail "review surface: reviews [art_<n>] [--wait]"
+has_cmd 'agent-desk comment <thr_id> "text" [--resolve] [--wait]' || fail "review surface: comment flags"
+has_cmd 'agent-desk withdraw art_<n...>' || fail "review surface: withdraw art_<n...>"
+has '## 7. Submit an Artifact for review' || fail "review: 'Submit an Artifact for review' section missing"
+grep -A3 -F '## 4. Long-running' <<<"$SKILL" | tr '\n' ' ' | grep -qF 'submit` (without `--no-wait`), `reviews --wait` and `comment --wait`' \
+  || fail "review: submit, reviews --wait and comment --wait not under the 9-minute rule"
+sed -n '/^## 1\. Start a Session/,/^## 2\./p' <<<"$SKILL" | grep -qF 'unreceived Reviews' || fail "review: start does not list Artifacts with unreceived Reviews"
+
+# Submit exit codes use plain digits, so the Ask table above remains the only backticked 0-4 table.
+REVIEW_SECTION="$(sed -n '/^## 7\. Submit an Artifact for review/,/^## Setup/p' <<<"$SKILL")"
+REVIEW_EXIT_ROWS="$(grep -E '^\| [0-9] \|' <<<"$REVIEW_SECTION")"
+review_codes="$(sed -E 's/^\| ([0-9]) \|.*/\1/' <<<"$REVIEW_EXIT_ROWS" | tr '\n' ' ')"
+[ "$review_codes" = "0 3 2 4 1 " ] || fail "submit exit codes: table rows are '${review_codes}', expected exactly 0 3 2 4 1"
+review_row() { grep -E "^\| $1 \|" <<<"$REVIEW_EXIT_ROWS"; }
+review_row 0 | grep -qi 'approved' || fail "submit exit 0: does not say approved"
+review_row 3 | grep -qi 'changes requested' || fail "submit exit 3: does not say changes requested"
+review_row 3 | grep -qi 'Comment block' || fail "submit exit 3: does not point to the Comment block"
+review_row 2 | grep -qi 'timed out' || fail "submit exit 2: does not say timed out"
+review_row 2 | grep -qF 'agent-desk reviews art_<n> --wait' || fail "submit exit 2: next step is not 'agent-desk reviews art_<n> --wait'"
+review_row 4 | grep -qi 'withdrawn' || fail "submit exit 4: does not say withdrawn"
+review_row 4 | grep -qi 'closed' || fail "submit exit 4: does not say closed"
+review_row 1 | grep -qi 'error' || fail "submit exit 1: does not say error"
+grep -qF 'Never re-submit' <<<"$REVIEW_SECTION" || fail "submit exit 2: does not forbid re-submitting to keep waiting"
+
+# Acting on the A4 block: edit + submit, resolve via comment, ask back via comment --wait.
+has 'agent-desk comment thr_7 "Switched to branch deploy in §3" --resolve' || fail "review: resolve example missing"
+has 'agent-desk comment thr_7 "Does staging have a slot?" --wait' || fail "review: ask-back --wait example missing"
+has 'Resolving every Thread does not approve' || fail "review: resolving must not approve is not stated"
+has 'never a **Reply** or a **Detail**' || fail "review: review traffic must never be a Reply or Detail"
+
 # --- Session id resolution ----------------------------------------------------------------------
 has '`--session ID` > `$AGENT_DESK_SESSION` >' || fail "session: precedence --session > \$AGENT_DESK_SESSION > native id not stated"
 for var in CLAUDE_CODE_SESSION_ID CODEX_THREAD_ID ANTIGRAVITY_CONVERSATION_ID; do
@@ -102,18 +139,27 @@ grep -A6 -F '## 5. Withdraw Asks you no longer need' <<<"$SKILL" | grep -qF 'age
 grep -A6 -F '## 5. Withdraw Asks you no longer need' <<<"$SKILL" | grep -qi 'no longer needed\|obsolete\|clutter' || fail "withdraw: proactive cleanup when no longer needed missing"
 
 # --- Exact vocabulary ----------------------------------------------------------------------------
-for term in Workstream Session Update Ask Reply Detail; do
+for term in Workstream Session Update Ask Reply Detail Artifact Revision Thread Comment Review; do
   grep -qE "\\b${term}\\b" <<<"$SKILL" || fail "vocabulary: '$term' never used"
 done
 for kind in question risk answer clarify; do
   grep -qF "\`${kind}\`" <<<"$SKILL" || fail "vocabulary: kind '\`${kind}\`' not named"
 done
 # Synonyms for the lexicon terms are defects (case-sensitive, whole word).
-for synonym in Workspace Channel Ticket Thread Conversation Request Response Clarification Followup Follow-up Note Notification Message Prompt Job Task; do
+for synonym in Workspace Channel Ticket Conversation Request Response Clarification Followup Follow-up Notification Message Prompt Job Task; do
   if grep -qE "\\b${synonym}s?\\b" <<<"$SKILL"; then
     fail "vocabulary: synonym '$synonym' used; use the lexicon term"
   fi
 done
+# Artifact Review synonyms (case-insensitive, whole word). "note" is checked only where it names a
+# review message, because "progress note" is a legitimate Update description.
+grep -qiE '\bfeedback\b' <<<"$SKILL" && fail "vocabulary: synonym 'feedback' used; use Comment or Review"
+grep -qiE '\bannotations?\b' <<<"$SKILL" && fail "vocabulary: synonym 'annotation' used; use Comment"
+grep -qiE '\bdocs?\b' <<<"$SKILL" && fail "vocabulary: synonym 'doc' used; use Artifact"
+grep -qiE '\b(review|comment|thread|artifact|reviewer|user|agent|inline|draft)s? notes?\b' <<<"$SKILL" \
+  && fail "vocabulary: 'note' used for a review message; use Comment"
+grep -qiE '\bnotes? (on|for|about|to) (the |a |an |this |that |your |their )?(artifact|thread|revision|review|comment|plan|file)\b' <<<"$SKILL" \
+  && fail "vocabulary: 'note' used for a review message; use Comment"
 
 # --- Drift against the real CLI (optional) ------------------------------------------------------
 CLI=()
