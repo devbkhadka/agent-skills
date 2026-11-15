@@ -777,7 +777,8 @@ def route_and_execute(bundle: RunBundle, finding: Any, write: bool) -> Tuple[int
         )
 
     if write:
-        code, executed_target = execute_rollback(bundle.feature_dir, bundle.feature_slug, finding.cause)
+        code, executed_target = execute_rollback(
+            bundle.feature_dir, bundle.feature_slug, finding.cause, finding=finding)
         if code != 0 or executed_target is None:
             lines.append("  the state transition to %s was refused by the state engine" % target)
         else:
@@ -1134,7 +1135,8 @@ def test_rollback_routing(fixture_dir: Path) -> Tuple[int, str]:
                     "under OTHER and a register amendment raised" % scenario
                 )
 
-        code, executed_target = execute_rollback(bundle.feature_dir, bundle.feature_slug, finding.cause)
+        code, executed_target = execute_rollback(
+            bundle.feature_dir, bundle.feature_slug, finding.cause, finding=finding)
         if code != 0 or executed_target is None:
             return 1, "ROLLBACK_REFUSED: the state engine refused %s for scenario %r" % (
                 finding.cause, scenario,

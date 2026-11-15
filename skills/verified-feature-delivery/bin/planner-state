@@ -108,11 +108,37 @@ def find_approval(ledger_data, milestone_id):
     return None
 
 
-def mark_approval_stale(feature_dir, ledger_data, milestone_id):
+def mark_approval_stale(feature_dir, ledger_data, milestone_id, stale_elements=None):
     for r in ledger_data.get("approvals", []):
         if r.get("milestone_id") == milestone_id:
             r["status"] = "STALE"
+            if stale_elements is not None:
+                r["stale_elements"] = stale_elements
     save_ledger(feature_dir, ledger_data)
+
+
+def _skill_lib():
+    """Put the skill root on sys.path so the shared lib/ package imports."""
+    skill_root = str(Path(__file__).resolve().parent.parent)
+    if skill_root not in sys.path:
+        sys.path.insert(0, skill_root)
+
+
+def stale_element_ids(feature_dir, milestone_id):
+    """The element ids a stale approval no longer matches, or None for a legacy record.
+
+    A record written before element-scoped approvals carries no element_digests; it stays
+    whole-section, exactly as before.
+    """
+    rec = find_approval(load_ledger(feature_dir), milestone_id)
+    if not rec or not isinstance(rec.get("element_digests"), dict):
+        return None
+    meta = MILESTONES[milestone_id]
+    artifact = load_artifact(feature_dir, meta["artifact_path"])
+    _skill_lib()
+    from lib.baseline import changed_element_ids, scoped_element_digests
+    current = scoped_element_digests(artifact, meta["digest_scope"])
+    return changed_element_ids(rec["element_digests"], current)
 
 
 def _remove_derived_file(p):
@@ -389,6 +415,14 @@ STAGE_INVALIDATED_ARTIFACTS = {
 }
 
 
+# A rollback whose scope is derivable keeps every upstream artifact registered: only the
+# evidence of the affected slices is invalidated, and the gates re-check everything on re-advance.
+SCOPED_INVALIDATED_ARTIFACTS = ["stage_4_milestone_evidence", "stage_5_delivery_report"]
+EXECUTIONS_PATH = "milestones/executions.json"
+EVIDENCE_SUMMARY_PATH = "milestones/evidence-summary.json"
+INVALIDATED_EXECUTIONS_PATH = "milestones/invalidated-executions.json"
+
+
 def now_iso_utc():
     """Return current UTC timestamp in ISO-8601 format."""
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -521,6 +555,7 @@ def cmd_advance(args):
     stale_id = find_stale_milestone(feature_dir, state_data)
     if stale_id:
         meta = MILESTONES[stale_id]
+        stale_elements = stale_element_ids(feature_dir, stale_id)
         prev_state = state_data["current_state"]
         if prev_state != meta["awaiting_state"]:
             state_data["current_state"] = meta["awaiting_state"]
@@ -540,14 +575,21 @@ def cmd_advance(args):
         if not args.dry_run:
             ledger_data = load_ledger(feature_dir)
             if ledger_data:
-                mark_approval_stale(feature_dir, ledger_data, stale_id)
+                mark_approval_stale(feature_dir, ledger_data, stale_id, stale_elements)
             delete_derived_docs(feature_dir, meta["derived_docs"])
         print("STALE_APPROVAL_INVALIDATED")
+        if stale_elements:
+            print("STALE_ELEMENTS: %s" % ", ".join(stale_elements))
         sys.stderr.write(
             "STALE_APPROVAL_INVALIDATED: %s approval no longer matches the current content of "
             "%s; record marked STALE, its rendered documents deleted, and the feature returned "
-            "to %s. Re-run bin/record-approval to re-open the path.\n"
-            % (stale_id, meta["artifact_path"], meta["awaiting_state"])
+            "to %s. %s Re-run bin/record-approval to re-open the path.\n"
+            % (
+                stale_id, meta["artifact_path"], meta["awaiting_state"],
+                ("Only these elements changed since approval and need review: %s."
+                 % ", ".join(stale_elements)) if stale_elements else
+                "The record predates element-scoped approvals, so the whole section needs review.",
+            )
         )
         return 1
 
@@ -846,12 +888,21 @@ def cmd_rollback(args):
         )
         return 1
 
-    # Invalidate downstream artifacts
-    invalidated = STAGE_INVALIDATED_ARTIFACTS.get(target_state, [])
+    scope, scope_problem = derive_rollback_scope(feature_dir, args)
+
+    # Invalidate downstream artifacts: all of them when the scope is underivable (the safe
+    # default), only the evidence of the affected slices when it is.
+    invalidated = (
+        SCOPED_INVALIDATED_ARTIFACTS if scope else STAGE_INVALIDATED_ARTIFACTS.get(target_state, [])
+    )
     if "artifacts" in state_data:
         for art_key in invalidated:
             if art_key in state_data["artifacts"]:
                 state_data["artifacts"][art_key] = None
+    if scope:
+        state_data["rollback_scope"] = dict(scope, cause=cause, timestamp=now_iso_utc())
+    else:
+        state_data.pop("rollback_scope", None)
 
     state_data["current_state"] = target_state
     state_data["updated_at"] = now_iso_utc()
@@ -868,9 +919,82 @@ def cmd_rollback(args):
 
     if not args.dry_run:
         save_state(feature_dir, state_data)
+        if scope:
+            invalidate_slice_evidence(feature_dir, scope["milestones"], cause)
 
     print("ROLLED_BACK: %s -> %s (cause: %s)" % (current_state, target_state, cause))
+    if scope:
+        print("ROLLBACK_SCOPE: elements=%s slices=%s" % (
+            ",".join(scope["elements"]), ",".join(scope["slices"])))
+        sys.stderr.write(
+            "ROLLBACK_SCOPE: upstream artifacts kept; evidence invalidated only for milestone(s) "
+            "%s of the affected slice(s). Every gate still re-checks on re-advance.\n"
+            % (", ".join(scope["milestones"]) or "none")
+        )
+    else:
+        print("ROLLBACK_SCOPE_UNDERIVABLE")
+        sys.stderr.write(
+            "ROLLBACK_SCOPE_UNDERIVABLE: %s; every downstream artifact of %s was invalidated.\n"
+            % (scope_problem, target_state)
+        )
     return 0
+
+
+def derive_rollback_scope(feature_dir, args):
+    """(scope, None) when the regression names elements the DAG's slices reference, else
+    (None, why). The scope comes from lib/rollback.rollback_scope; this only gathers inputs."""
+    milestone_id = getattr(args, "scope_milestone", None)
+    trace = getattr(args, "scope_trace", None)
+    trace_file = getattr(args, "trace", None)
+    if trace_file:
+        try:
+            data = json.loads(Path(trace_file).read_text(encoding="utf-8"))
+        except (OSError, ValueError) as error:
+            return None, "the failure trace %s is unreadable (%s)" % (trace_file, error)
+        if not isinstance(data, dict):
+            return None, "the failure trace %s is not an object" % trace_file
+        milestone_id = data.get("milestone_id")
+        trace = data.get("trace")
+    if not milestone_id and not trace:
+        return None, "no failure trace was given, so the affected elements cannot be derived"
+    dag = load_artifact(feature_dir, "execution-dag.json")
+    lexicon = load_artifact(feature_dir, "domain-lexicon.json")
+    _skill_lib()
+    from lib.rollback import rollback_scope
+    scope = rollback_scope(milestone_id, trace, lexicon, dag)
+    if scope is None:
+        return None, "the failure trace names nothing any slice of execution-dag.json references"
+    return scope, None
+
+
+def invalidate_slice_evidence(feature_dir, milestone_ids, cause):
+    """Move the affected milestones' execution records aside and retire the evidence summary.
+
+    Records of unaffected slices stay in milestones/executions.json, so the harness re-grades them
+    unchanged once the affected slices are re-run. Nothing is deleted: moved records are appended
+    to milestones/invalidated-executions.json and the summary is renamed, both for audit.
+    """
+    affected = set(milestone_ids)
+    executions_file = feature_dir / EXECUTIONS_PATH
+    executions = load_artifact(feature_dir, EXECUTIONS_PATH)
+    if isinstance(executions, dict) and isinstance(executions.get("milestones"), list):
+        kept, moved = [], []
+        for record in executions["milestones"]:
+            is_affected = isinstance(record, dict) and str(record.get("milestone_id")) in affected
+            (moved if is_affected else kept).append(record)
+        if moved:
+            ledger = load_artifact(feature_dir, INVALIDATED_EXECUTIONS_PATH)
+            if not isinstance(ledger, dict) or not isinstance(ledger.get("invalidated"), list):
+                ledger = {"schema_version": "1.0.0", "invalidated": []}
+            ledger["invalidated"].append(
+                {"cause": cause, "timestamp": now_iso_utc(), "milestones": moved})
+            (feature_dir / INVALIDATED_EXECUTIONS_PATH).write_text(
+                json.dumps(ledger, indent=2) + "\n", encoding="utf-8")
+            executions["milestones"] = kept
+            executions_file.write_text(json.dumps(executions, indent=2) + "\n", encoding="utf-8")
+    summary = feature_dir / EVIDENCE_SUMMARY_PATH
+    if summary.is_file():
+        summary.replace(summary.with_name("evidence-summary.invalidated.json"))
 
 
 def cmd_status(args):
@@ -1239,6 +1363,8 @@ def build_parser():
     p_rb.add_argument("--dir", help="Explicit target directory for state files")
     p_rb.add_argument("--root", help="Project root directory")
     p_rb.add_argument("--dry-run", action="store_true", help="Validate without writing state to disk")
+    p_rb.add_argument("--trace", help='Failure trace JSON {"milestone_id": ..., "trace": {...}}; scopes '
+                      "the rollback to the slices it touches (full invalidation when underivable)")
 
     # sidecar
     p_sc = subparsers.add_parser("sidecar", help="Generate slice sidecar state for worker")

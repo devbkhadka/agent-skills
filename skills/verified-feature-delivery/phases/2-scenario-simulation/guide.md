@@ -54,4 +54,10 @@ python3 bin/verify-projections .verified-feature-delivery/<feature-slug>/flow-si
   the record goes `STALE`, and its derived documents are deleted, in that order. A `STALE` record found
   past its gate (an interrupted invalidation) routes the feature back to the gate the same way, so
   re-running `advance` then `record-approval` always recovers.
+- Approvals are element-scoped: each record also stores a digest per element (`boundary:<id>`,
+  `entity_relationship:<from>-><to>`, `simulated_dependency:<class>`; `flow:<id>`, `flow_group:<id>`,
+  `state:<id>`, `transition:<id>` for `FLOW_SIMULATION`). When the record goes stale, `advance` prints
+  `STALE_ELEMENTS: …` and writes them to the record's `stale_elements`, so the reviewer re-checks only
+  those; `record-approval` then prints `REAPPROVED_ELEMENTS: …`. A record that predates element
+  digests stays whole-section.
 

@@ -225,6 +225,19 @@ precedence, and the order is load-bearing:
 
 `description` must be meaningful prose; a failure recorded as `-` is not a traced failure.
 
+### Rollback is scoped to what the failure touched
+
+When the rollback carries the classified failure (the harness passes it; by hand,
+`planner-state rollback … --trace failure.json` with `{"milestone_id", "trace"}`), the affected
+elements come from the trace's own keys and the affected slices are those that own the failed
+milestone or reference a named element, plus every slice depending on them. Upstream artifacts stay
+registered, the scope is written to `state.json` as `rollback_scope`, and only the affected
+milestones' records leave `milestones/executions.json` (moved to `invalidated-executions.json`, with
+the evidence summary renamed, never deleted). The harness re-grades the preserved records unchanged,
+and every gate still re-checks on re-advance. When nothing in the trace maps to a slice — no trace, no
+DAG, or a trace naming nothing any slice references — the rollback falls back to full invalidation
+and prints `ROLLBACK_SCOPE_UNDERIVABLE`.
+
 ### The fourth edge is the expensive one
 
 The first three causes all assume the boundary was known. A boundary that is present and

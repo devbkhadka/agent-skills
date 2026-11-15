@@ -346,6 +346,92 @@ def classify_failure(
 
 
 # ---------------------------------------------------------------------------
+# Rollback scope: which elements and slices a regression actually touches
+# ---------------------------------------------------------------------------
+
+# The trace keys that name an element of the plan, in the trace's own vocabulary. Observed values
+# (observed_response, observed_unit, observed_value) and the description name nothing.
+SCOPE_TRACE_KEYS = ("boundary_identifier", "boundary_property", "domain_term", "broken_invariant")
+
+
+def _slice_milestone_ids(slice_entry: Dict[str, Any]) -> Set[str]:
+    ids: Set[str] = set()
+    for milestone in slice_entry.get("milestones") or []:
+        if isinstance(milestone, dict) and str(milestone.get("milestone_id") or "").strip():
+            ids.add(str(milestone["milestone_id"]).strip())
+    return ids
+
+
+def rollback_scope(
+    milestone_id: str,
+    trace: Any,
+    lexicon: Any,
+    dag: Any,
+) -> Optional[Dict[str, List[str]]]:
+    """The elements a classified regression names and the slices that depend on them.
+
+    Returns {"elements": [...], "slices": [...], "milestones": [...]}, or None when the scope
+    cannot be derived — then the caller falls back to full invalidation, the safe default.
+
+    Elements are named in the failure trace's own keys ('domain_term:<term>', plus the lexicon's
+    'unit_precision:<id>' when the term declares one). A slice is affected when it owns the failed
+    milestone or its declaration mentions any named element; every slice depending on an affected
+    slice, directly or transitively, is affected too. Matching on the declaration's text
+    over-invalidates rather than under-invalidates.
+    """
+    if not isinstance(dag, dict) or not isinstance(dag.get("slices"), list):
+        return None
+    slices = [s for s in dag["slices"] if isinstance(s, dict) and s.get("slice_id")]
+    if not slices:
+        return None
+
+    trace = trace if isinstance(trace, dict) else {}
+    elements: List[str] = []
+    tokens: Set[str] = set()
+    for key in SCOPE_TRACE_KEYS:
+        value = str(trace.get(key) or "").strip()
+        if value:
+            elements.append("%s:%s" % (key, value))
+            tokens.add(value)
+    domain_term = str(trace.get("domain_term") or "").strip()
+    if domain_term:
+        precision = declared_unit_precision(lexicon, domain_term)
+        if precision is not None and precision.get("id"):
+            elements.append("unit_precision:%s" % precision["id"])
+            tokens.add(str(precision["id"]))
+    milestone_id = str(milestone_id or "").strip()
+    if milestone_id:
+        elements.append("milestone:%s" % milestone_id)
+
+    affected: Set[str] = set()
+    for entry in slices:
+        text = json.dumps(entry, sort_keys=True)
+        if milestone_id in _slice_milestone_ids(entry) or any(t in text for t in tokens):
+            affected.add(str(entry["slice_id"]))
+    if not affected:
+        return None
+
+    changed = True
+    while changed:
+        changed = False
+        for entry in slices:
+            sid = str(entry["slice_id"])
+            if sid not in affected and any(str(d) in affected for d in entry.get("dependencies") or []):
+                affected.add(sid)
+                changed = True
+
+    milestones: Set[str] = set()
+    for entry in slices:
+        if str(entry["slice_id"]) in affected:
+            milestones |= _slice_milestone_ids(entry)
+    return {
+        "elements": sorted(set(elements)),
+        "slices": sorted(affected),
+        "milestones": sorted(milestones),
+    }
+
+
+# ---------------------------------------------------------------------------
 # Executing the rollback
 # ---------------------------------------------------------------------------
 
@@ -410,6 +496,7 @@ def execute_rollback(
     feature_slug: str,
     cause: str,
     skill_root: Optional[Path] = None,
+    finding: Optional[RollbackFinding] = None,
 ) -> Tuple[int, Optional[str]]:
     """Perform the state transition through `bin/planner-state`'s own rollback command.
 
@@ -428,5 +515,7 @@ def execute_rollback(
         to_state=target,
         cause=cause,
         dry_run=False,
+        scope_milestone=finding.milestone_id if finding is not None else None,
+        scope_trace=finding.trace if finding is not None else None,
     )
     return planner_state.cmd_rollback(args), target

@@ -226,6 +226,60 @@ def diff_lexicons(old: Dict[str, Any], new: Dict[str, Any]) -> Dict[str, Set[str
     }
 
 
+# Scenario-matrix sections an approval may guard, with the field that names each element.
+# Lexicon sections are indexed by element_index, whose ids the baseline already uses.
+MATRIX_ELEMENT_ID_FIELDS = {
+    "flows": ("flow", "flow_id"),
+    "flow_groups": ("flow_group", "group_id"),
+    "states": ("state", "state_id"),
+    "transitions": ("transition", "transition_id"),
+}
+
+# The element kinds element_index derives from each lexicon section.
+LEXICON_SECTION_KINDS = {
+    "entity_boundaries": "boundary",
+    "entity_relationships": "entity_relationship",
+    "simulated_dependencies": "simulated_dependency",
+}
+
+
+def scoped_element_digests(artifact: Any, scope_keys: Iterable[str]) -> Dict[str, str]:
+    """Map '<kind>:<id>' -> element_digest for every element inside the named sections.
+
+    The per-element counterpart of an approval's whole-scope digest: when the scope digest goes
+    stale, comparing these maps names the elements that changed. An element without its id field
+    is keyed by position ('<section>[<i>]') so it is still guarded.
+    """
+    digests: Dict[str, str] = {}
+    if not isinstance(artifact, dict):
+        return digests
+    lexicon_index = None
+    for section in scope_keys:
+        if section in LEXICON_SECTION_KINDS:
+            if lexicon_index is None:
+                lexicon_index = element_index(artifact)
+            prefix = LEXICON_SECTION_KINDS[section] + ":"
+            for key, element in lexicon_index.items():
+                if key.startswith(prefix):
+                    digests[key] = element_digest(element)
+            continue
+        kind, id_field = MATRIX_ELEMENT_ID_FIELDS.get(section, (section, None))
+        items = artifact.get(section)
+        if isinstance(items, dict):
+            items = [items]
+        for position, item in enumerate(items or []):
+            element_id = item.get(id_field) if isinstance(item, dict) and id_field else None
+            key = "%s:%s" % (kind, element_id) if element_id else "%s[%d]" % (section, position)
+            digests[key] = element_digest(item)
+    return digests
+
+
+def changed_element_ids(approved: Dict[str, str], current: Dict[str, str]) -> List[str]:
+    """Element ids added, removed or edited between two scoped_element_digests maps."""
+    keys = set(approved) | set(current)
+    return sorted(k for k in keys if approved.get(k) != current.get(k))
+
+
 def normalize_element_id(element_id: str) -> str:
     """Normalize aliases for element kinds (e.g. entity_boundary -> boundary)."""
     if element_id.startswith("entity_boundary:"):

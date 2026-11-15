@@ -19,6 +19,10 @@ import json
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from lib.baseline import changed_element_ids, scoped_element_digests  # noqa: E402
+
 # Kept in step with the identical table in bin/planner-state. Both scripts
 # read this from the same lease and are small enough that the duplication is
 # cheaper than a shared import across two independently-invoked executables.
@@ -235,6 +239,17 @@ def main():
             record["slice_id"] = args.slice_id
         records.append(record)
 
+    # Element-scoped approval: per-element digests let a later stale check name exactly which
+    # elements changed, and let this re-approval say which ones the human just reviewed.
+    reapproved = None
+    if not is_ui_layout:
+        element_digests = scoped_element_digests(artifact, meta["digest_scope"])
+        previous = record.get("element_digests")
+        if isinstance(previous, dict):
+            reapproved = changed_element_ids(previous, element_digests)
+        record["element_digests"] = element_digests
+        record.pop("stale_elements", None)
+
     record["artifact_path"] = meta["artifact_path"]
     record["approved_digest"] = digest
     record["digest_scope"] = "ui_layout" if is_ui_layout else ",".join(meta["digest_scope"])
@@ -253,6 +268,8 @@ def main():
         "APPROVED: feature=%s milestone=%s%s digest=%s"
         % (args.feature, args.milestone, (" slice=%s" % args.slice_id) if args.slice_id else "", digest)
     )
+    if reapproved is not None:
+        print("REAPPROVED_ELEMENTS: %s" % (", ".join(reapproved) if reapproved else "none changed"))
     return 0
 
 
