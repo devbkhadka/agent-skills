@@ -276,6 +276,25 @@ def check_slice_spans_vertical_legs(sl: dict) -> bool:
     return True
 
 
+def collect_declared_pure_modules(data: dict) -> Set[str]:
+    """Every module the DAG declares pure: top-level pure_modules, each slice's pure_modules, and
+    each slice's legs.core_pure_logic.pure_module_files."""
+    declared_pure_modules: Set[str] = set(data.get("pure_modules", []))
+    for sl in data.get("slices", []):
+        if not isinstance(sl, dict):
+            continue
+        legs = sl.get("legs", {})
+        if isinstance(legs, dict):
+            core = legs.get("core_pure_logic", {})
+            if isinstance(core, dict):
+                for pm in core.get("pure_module_files", []):
+                    declared_pure_modules.add(pm)
+        if isinstance(sl.get("pure_modules"), list):
+            for pm in sl["pure_modules"]:
+                declared_pure_modules.add(pm)
+    return declared_pure_modules
+
+
 def validate_execution_dag_dict(data: dict, file_path: Optional[Path] = None) -> Tuple[bool, Optional[str], str]:
     """Validate execution DAG against Stage 3 architectural specifications.
 
@@ -480,17 +499,7 @@ def validate_execution_dag_dict(data: dict, file_path: Optional[Path] = None) ->
     # -------------------------------------------------------------
     # 7. Check: Computed Purity (IMPURE_PURE_MODULE) & (IMPURE_TEST_IMPORT)
     # -------------------------------------------------------------
-    declared_pure_modules: Set[str] = set(data.get("pure_modules", []))
-    for sl in slices:
-        legs = sl.get("legs", {})
-        if isinstance(legs, dict):
-            core = legs.get("core_pure_logic", {})
-            if isinstance(core, dict):
-                for pm in core.get("pure_module_files", []):
-                    declared_pure_modules.add(pm)
-        if isinstance(sl.get("pure_modules"), list):
-            for pm in sl["pure_modules"]:
-                declared_pure_modules.add(pm)
+    declared_pure_modules = collect_declared_pure_modules(data)
 
     for pm in declared_pure_modules:
         resolved_pm = resolve_file_on_disk(pm, search_roots)

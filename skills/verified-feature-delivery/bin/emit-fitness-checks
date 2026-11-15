@@ -1,0 +1,296 @@
+#!/usr/bin/env python3
+"""Emit CI-enforced architecture fitness checks from a Stage 3 execution DAG.
+
+Owner: architecture-rules
+Purpose: The Stage 3 gate proves the declared pure modules are pure once, at planning time. This
+tool turns that decision into checks the user's repository keeps running in CI:
+
+- <out>/check_architecture.py — zero-dependency, runs without this skill installed. Its import
+  walking is copied verbatim from bin/validate-execution-dag at generation time and its rule data
+  (pure modules, forbidden packages) is embedded, so the CI check and the gate cannot disagree.
+- a linter config for the repository's own toolchain: `.importlinter` (python) or
+  `.dependency-cruiser.cjs` (typescript) — editor-time feedback; check_architecture.py is the gate.
+
+Output is deterministic: re-running on the same DAG produces no diff.
+
+Emitted checker reason codes (exit 1 on any):
+- IMPURE_PURE_MODULE   declared pure module transitively reaches a framework/I/O/device/model package
+- OUTWARD_DEPENDENCY   declared pure module transitively imports a local file outside the pure roots
+- PURE_MODULE_NOT_FOUND declared pure module missing on disk (a rename would silently disable the check)
+
+Exit 0 on emit; 1 when the DAG declares no pure modules; 2 on unreadable input.
+"""
+
+import argparse
+import importlib.util
+from importlib.machinery import SourceFileLoader
+import inspect
+import json
+from pathlib import Path
+import re
+import sys
+from typing import Dict, List, Optional
+
+BIN_DIR = Path(__file__).resolve().parent
+
+
+def _load_bin(module_name: str, file_name: str):
+    loader = SourceFileLoader(module_name, str(BIN_DIR / file_name))
+    spec = importlib.util.spec_from_loader(module_name, loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
+
+
+_ved = _load_bin("_validate_execution_dag", "validate-execution-dag")
+
+# Functions copied verbatim into the emitted checker, in dependency order.
+_EMBEDDED_FUNCTIONS = (
+    "extract_imports_from_source",
+    "resolve_file_on_disk",
+    "get_transitive_imports",
+    "extract_package_names",
+)
+
+PYTHON_EXTENSIONS = {".py"}
+TYPESCRIPT_EXTENSIONS = {".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"}
+
+
+def forbidden_packages() -> Dict[str, List[str]]:
+    return {
+        "framework": sorted(_ved.IMPURE_FRAMEWORKS),
+        "transport": sorted(_ved.IMPURE_TRANSPORTS),
+        "device": sorted(_ved.IMPURE_DEVICES),
+        "model": sorted(_ved.IMPURE_MODELS),
+    }
+
+
+def rule_data(dag: dict) -> dict:
+    pure_modules = sorted(_ved.collect_declared_pure_modules(dag))
+    pure_roots = sorted({str(Path(pm).parent).replace("\\", "/") for pm in pure_modules})
+    return {
+        "feature_slug": dag.get("feature_slug", "unknown"),
+        "pure_modules": pure_modules,
+        "pure_roots": pure_roots,
+        "forbidden_packages": forbidden_packages(),
+    }
+
+
+def detect_stack(rules: dict, repo: Optional[Path]) -> Optional[str]:
+    """python | typescript from the pure modules' extensions, else from repo manifests."""
+    suffixes = {Path(pm).suffix for pm in rules["pure_modules"]}
+    if suffixes & TYPESCRIPT_EXTENSIONS and not suffixes & PYTHON_EXTENSIONS:
+        return "typescript"
+    if suffixes & PYTHON_EXTENSIONS and not suffixes & TYPESCRIPT_EXTENSIONS:
+        return "python"
+    if repo is not None:
+        if (repo / "package.json").is_file() or (repo / "tsconfig.json").is_file():
+            return "typescript"
+        if any((repo / f).is_file() for f in ("pyproject.toml", "setup.py", "requirements.txt")):
+            return "python"
+    return None
+
+
+_CHECKER_MAIN = '''
+
+def _is_within(path: Path, roots: List[Path]) -> bool:
+    for root in roots:
+        try:
+            path.relative_to(root)
+            return True
+        except ValueError:
+            continue
+    return False
+
+
+def check(repo_root: Path) -> List[str]:
+    violations: List[str] = []
+    search_roots = [repo_root]
+    pure_roots = [(repo_root / r).resolve() for r in RULES["pure_roots"]]
+    forbidden = RULES["forbidden_packages"]
+    for pm in RULES["pure_modules"]:
+        resolved = resolve_file_on_disk(str(repo_root / pm), search_roots)
+        if resolved is None:
+            violations.append("PURE_MODULE_NOT_FOUND: declared pure module '%s' is missing; "
+                              "update the execution DAG and re-emit" % pm)
+            continue
+        packages, visited = get_transitive_imports(resolved, search_roots)
+        for pkg in sorted(packages):
+            names = extract_package_names(pkg)
+            for kind in sorted(forbidden):
+                if names & set(forbidden[kind]):
+                    violations.append("IMPURE_PURE_MODULE: pure module '%s' transitively reaches "
+                                      "%s package '%s'" % (pm, kind, pkg))
+                    break
+        for local in sorted(visited):
+            if not _is_within(local, pure_roots):
+                rel = local.relative_to(repo_root) if _is_within(local, [repo_root]) else local
+                violations.append("OUTWARD_DEPENDENCY: pure module '%s' imports '%s', outside the "
+                                  "pure roots %s" % (pm, str(rel).replace(chr(92), "/"),
+                                                     RULES["pure_roots"]))
+    return violations
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Architecture fitness check for %s"
+                                     % RULES["feature_slug"])
+    parser.add_argument("--root", default=".", help="Repository root (default: cwd)")
+    args = parser.parse_args()
+    violations = check(Path(args.root).resolve())
+    for line in violations:
+        print(line)
+    if violations:
+        return 1
+    print("ARCHITECTURE_CHECK_PASSED: %d pure module(s)" % len(RULES["pure_modules"]))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+'''
+
+
+def render_checker(rules: dict) -> str:
+    embedded = "\n\n".join(inspect.getsource(getattr(_ved, name)).rstrip()
+                           for name in _EMBEDDED_FUNCTIONS)
+    return (
+        "#!/usr/bin/env python3\n"
+        '"""Architecture fitness check for %s.\n\n'
+        "GENERATED by verified-feature-delivery/bin/emit-fitness-checks from execution-dag.json.\n"
+        "Do not edit: change the DAG and re-emit. Zero dependencies; run from the repo root.\n"
+        "Exit 1 with IMPURE_PURE_MODULE / OUTWARD_DEPENDENCY / PURE_MODULE_NOT_FOUND on violation.\n"
+        '"""\n\n'
+        "import argparse\n"
+        "from pathlib import Path\n"
+        "import re\n"
+        "import sys\n"
+        "from typing import List, Optional, Set, Tuple\n\n"
+        "RULES = %s\n\n\n"
+        "%s\n%s"
+    ) % (rules["feature_slug"], json.dumps(rules, indent=4, sort_keys=True), embedded,
+         _CHECKER_MAIN)
+
+
+def _python_module(path: str) -> str:
+    return re.sub(r"\.py$", "", path).replace("/", ".").replace("\\", ".")
+
+
+def render_importlinter(rules: dict) -> str:
+    modules = [_python_module(pm) for pm in rules["pure_modules"]]
+    root_packages = sorted({m.split(".")[0] for m in modules})
+    python_packages = sorted({
+        pkg for pkgs in rules["forbidden_packages"].values() for pkg in pkgs
+        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", pkg)
+    })
+    lines = [
+        "# GENERATED by emit-fitness-checks from execution-dag.json; re-emit instead of editing.",
+        "# Editor-time feedback only; check_architecture.py is the CI gate. Remove forbidden",
+        "# packages your environment does not install if import-linter reports them missing.",
+        "[importlinter]",
+        "root_packages =",
+    ]
+    lines += ["    %s" % p for p in root_packages]
+    lines += [
+        "include_external_packages = True",
+        "",
+        "[importlinter:contract:pure-modules-stay-pure]",
+        "name = Declared pure modules import no framework, I/O, device or model package",
+        "type = forbidden",
+        "source_modules =",
+    ]
+    lines += ["    %s" % m for m in modules]
+    lines += ["forbidden_modules ="]
+    lines += ["    %s" % p for p in python_packages]
+    return "\n".join(lines) + "\n"
+
+
+def _alternation(items: List[str]) -> str:
+    return "|".join(re.escape(i).replace("/", "\\/") for i in items)
+
+
+def render_dependency_cruiser(rules: dict) -> str:
+    packages = sorted({pkg for pkgs in rules["forbidden_packages"].values() for pkg in pkgs})
+    pure = "^(?:%s)$" % _alternation(rules["pure_modules"])
+    roots = "^(?:%s)\\/" % _alternation(rules["pure_roots"])
+    forbidden = "^(?:node_modules\\/)?(?:%s)(?:\\/|$)" % _alternation(packages)
+    config = {
+        "forbidden": [
+            {
+                "name": "pure-module-impure-import",
+                "comment": "Declared pure modules import no framework, I/O, device or model package.",
+                "severity": "error",
+                "from": {"path": pure},
+                "to": {"path": forbidden},
+            },
+            {
+                "name": "pure-module-outward-dependency",
+                "comment": "Declared pure modules import only files inside the pure roots.",
+                "severity": "error",
+                "from": {"path": pure},
+                "to": {"dependencyTypes": ["local"], "pathNot": roots},
+            },
+        ],
+    }
+    return (
+        "// GENERATED by emit-fitness-checks from execution-dag.json; re-emit instead of editing.\n"
+        "// Editor-time feedback only; check_architecture.py is the CI gate.\n"
+        "/** @type {import('dependency-cruiser').IConfiguration} */\n"
+        "module.exports = %s;\n" % json.dumps(config, indent=2)
+    )
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Emit CI architecture fitness checks from an execution DAG",
+        prog="emit-fitness-checks",
+    )
+    parser.add_argument("dag_path", help="Path to execution-dag.json")
+    parser.add_argument("--out", required=True, help="Output directory")
+    parser.add_argument("--stack", choices=["python", "typescript", "auto"], default="auto",
+                        help="Linter config to emit (default: auto-detect)")
+    parser.add_argument("--repo", help="Repository root used for stack auto-detection")
+    return parser
+
+
+def main() -> int:
+    args = build_parser().parse_args()
+    dag_path = Path(args.dag_path)
+    try:
+        dag = json.loads(dag_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as e:
+        sys.stderr.write("Error reading execution DAG %s: %s\n" % (dag_path, e))
+        return 2
+    if not isinstance(dag, dict):
+        sys.stderr.write("Execution DAG %s is not a JSON object\n" % dag_path)
+        return 2
+
+    rules = rule_data(dag)
+    if not rules["pure_modules"]:
+        print("NO_PURE_MODULES_DECLARED")
+        sys.stderr.write("The DAG declares no pure modules; nothing to enforce.\n")
+        return 1
+
+    out_dir = Path(args.out)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    written = [out_dir / "check_architecture.py"]
+    written[0].write_text(render_checker(rules), encoding="utf-8")
+    written[0].chmod(0o755)
+
+    stack = args.stack
+    if stack == "auto":
+        stack = detect_stack(rules, Path(args.repo) if args.repo else None)
+    if stack == "python":
+        written.append(out_dir / ".importlinter")
+        written[-1].write_text(render_importlinter(rules), encoding="utf-8")
+    elif stack == "typescript":
+        written.append(out_dir / ".dependency-cruiser.cjs")
+        written[-1].write_text(render_dependency_cruiser(rules), encoding="utf-8")
+
+    print("FITNESS_CHECKS_EMITTED: %d pure module(s), stack=%s -> %s"
+          % (len(rules["pure_modules"]), stack or "none",
+             ", ".join(str(p) for p in written)))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
