@@ -1,0 +1,393 @@
+#!/usr/bin/env python3
+"""Emit acceptance rules from a flow-simulation matrix as Gherkin or Markdown.
+
+Owner: feature-gaps
+Purpose: Generate one Feature per flow group, one Scenario per flow, with
+Given = precondition state, When = trigger/action by actor, Then = observable
+projection per observer. Deterministic output (stable ordering) so re-runs
+produce no diff.
+
+Exit 0 on success. Exit 1 on structural error (missing flows, bad matrix).
+"""
+
+import argparse
+import json
+from pathlib import Path
+import sys
+from typing import Any, Dict, List, Optional, Tuple
+
+
+
+def _build_transition_map(matrix: dict) -> Dict[str, dict]:
+    """Map transition_id -> transition object."""
+    return {
+        t.get("transition_id"): t
+        for t in matrix.get("transitions", [])
+        if isinstance(t, dict) and t.get("transition_id")
+    }
+
+
+def _build_state_map(matrix: dict) -> Dict[str, dict]:
+    """Map state_id -> state object."""
+    return {
+        s.get("state_id"): s
+        for s in matrix.get("states", [])
+        if isinstance(s, dict) and s.get("state_id")
+    }
+
+
+def _build_trigger_map(matrix: dict) -> Dict[str, dict]:
+    """Map trigger_id -> trigger object."""
+    return {
+        t.get("trigger_id"): t
+        for t in matrix.get("triggers", [])
+        if isinstance(t, dict) and t.get("trigger_id")
+    }
+
+
+def _build_actor_map(matrix: dict) -> Dict[str, dict]:
+    """Map actor_id -> actor object."""
+    return {
+        a.get("actor_id"): a
+        for a in matrix.get("actors", [])
+        if isinstance(a, dict) and a.get("actor_id")
+    }
+
+
+def _build_observer_map(matrix: dict) -> Dict[str, dict]:
+    """Map observer_id -> observer object."""
+    return {
+        o.get("observer_id"): o
+        for o in matrix.get("observers", [])
+        if isinstance(o, dict) and o.get("observer_id")
+    }
+
+
+def _format_discriminator(disc: Any) -> str:
+    """Format a discriminator dict as a readable string."""
+    if isinstance(disc, dict):
+        parts = []
+        for key in sorted(disc):
+            val = disc[key]
+            if isinstance(val, list):
+                parts.append("%s=[%s]" % (key, ", ".join(str(v) for v in val)))
+            else:
+                parts.append("%s=%s" % (key, val))
+        return "; ".join(parts)
+    return str(disc)
+
+
+def _flow_sort_key(flow: dict) -> Tuple[str, str]:
+    """Stable sort key: group_id then flow_id."""
+    return (flow.get("group_id", ""), flow.get("flow_id", ""))
+
+
+def _group_sort_key(group: dict) -> str:
+    return group.get("group_id", "")
+
+
+def _chain_repeated_keywords(lines: List[str]) -> List[str]:
+    """Idiomatic Gherkin: a step repeating the previous step's keyword becomes And."""
+    chained: List[str] = []
+    previous = None
+    for line in lines:
+        stripped = line.lstrip()
+        keyword = stripped.split(" ", 1)[0]
+        if keyword in ("Given", "When", "Then"):
+            if keyword == previous:
+                line = line[: len(line) - len(stripped)] + "And" + stripped[len(keyword):]
+            previous = keyword
+        elif keyword != "And":
+            previous = None
+        chained.append(line)
+    return chained
+
+
+def emit_gherkin(matrix: dict) -> str:
+    """Generate Gherkin acceptance rules from a matrix."""
+    feature_slug = matrix.get("feature_slug", "unknown")
+    flows = matrix.get("flows", [])
+    if not isinstance(flows, list) or not flows:
+        return "# No flows defined in matrix '%s'\n" % feature_slug
+
+    flow_groups = matrix.get("flow_groups", [])
+    transition_map = _build_transition_map(matrix)
+    state_map = _build_state_map(matrix)
+    trigger_map = _build_trigger_map(matrix)
+    actor_map = _build_actor_map(matrix)
+    observer_map = _build_observer_map(matrix)
+
+    # Group flows by group_id
+    groups_map: Dict[str, dict] = {}
+    if isinstance(flow_groups, list):
+        for g in flow_groups:
+            if isinstance(g, dict) and g.get("group_id"):
+                groups_map[g["group_id"]] = g
+
+    flows_by_group: Dict[str, List[dict]] = {}
+    for flow in sorted(flows, key=_flow_sort_key):
+        if not isinstance(flow, dict):
+            continue
+        gid = flow.get("group_id", "_ungrouped")
+        flows_by_group.setdefault(gid, []).append(flow)
+
+    output_lines: List[str] = []
+
+    # Process groups in stable order
+    sorted_group_ids = sorted(flows_by_group.keys())
+    for gid in sorted_group_ids:
+        group = groups_map.get(gid, {})
+        group_name = group.get("name", gid)
+        group_summary = group.get("summary", "")
+
+        output_lines.append("Feature: %s" % group_name)
+        if group_summary:
+            output_lines.append("  %s" % group_summary)
+        output_lines.append("")
+
+        # Shared preconditions as Background
+        shared_preconds = group.get("shared_preconditions", [])
+        if shared_preconds:
+            output_lines.append("  Background:")
+            for pc in shared_preconds:
+                output_lines.append("    Given %s" % pc)
+            output_lines.append("")
+
+        group_flows = flows_by_group[gid]
+        for flow in group_flows:
+            fid = flow.get("flow_id", "unnamed")
+            fname = flow.get("name", fid)
+            output_lines.append("  Scenario: %s" % fname)
+
+            # Flow-specific preconditions
+            preconds = flow.get("preconditions", [])
+            for pc in preconds:
+                output_lines.append("    Given %s" % pc)
+
+            steps = flow.get("steps", [])
+            if isinstance(steps, list):
+                sorted_steps = sorted(steps, key=lambda s: s.get("step_no", 0) if isinstance(s, dict) else 0)
+
+                for i, step in enumerate(sorted_steps):
+                    if not isinstance(step, dict):
+                        continue
+                    t_ref = step.get("transition_ref")
+                    t = transition_map.get(t_ref, {})
+                    from_state = t.get("from_state", "?")
+                    to_state = t.get("to_state", "?")
+                    trigger_ref = t.get("trigger_ref", step.get("action", "?"))
+                    guard = t.get("guard")
+                    actor_id = step.get("actor_id", flow.get("actor_id", "?"))
+
+                    # First step: Given the precondition state
+                    if i == 0:
+                        from_state_obj = state_map.get(from_state, {})
+                        from_desc = from_state_obj.get("description", from_state)
+                        output_lines.append("    Given the system is in state %s" % from_state)
+
+                    # When: actor performs action
+                    trigger_obj = trigger_map.get(trigger_ref, {})
+                    trigger_desc = trigger_obj.get("description", trigger_ref)
+                    when_line = "    When %s performs %s" % (actor_id, trigger_ref)
+                    if guard:
+                        when_line += " [guard: %s]" % guard
+                    output_lines.append(when_line)
+
+                    # Then: state transitions
+                    output_lines.append("    Then the system transitions to %s" % to_state)
+
+            # Final outcome projections (Then clauses for observability)
+            outcome = flow.get("expected_outcome", {})
+            if isinstance(outcome, dict) and outcome:
+                ev_key = outcome.get("evidence_key", "")
+                medium = outcome.get("medium", "")
+                observer_id = outcome.get("observer_id", "")
+                desc = outcome.get("description", "")
+                if ev_key:
+                    output_lines.append("    Then %s observes via %s: %s" % (observer_id or "observer", medium or "?", ev_key))
+
+            # Observable projections on the terminal state
+            if isinstance(steps, list) and steps:
+                sorted_steps = sorted(steps, key=lambda s: s.get("step_no", 0) if isinstance(s, dict) else 0)
+                last_step = sorted_steps[-1]
+                if isinstance(last_step, dict):
+                    last_t = transition_map.get(last_step.get("transition_ref"), {})
+                    term_state_id = last_t.get("to_state")
+                    term_state = state_map.get(term_state_id, {})
+                    projs = term_state.get("observable_projections", [])
+                    if isinstance(projs, list):
+                        for proj in sorted(projs, key=lambda p: p.get("observer_id", "") if isinstance(p, dict) else ""):
+                            if not isinstance(proj, dict):
+                                continue
+                            obs_id = proj.get("observer_id", "?")
+                            disc = proj.get("discriminator", {})
+                            med = proj.get("medium", "?")
+                            output_lines.append("    And %s sees via %s: %s" % (obs_id, med, _format_discriminator(disc)))
+
+            output_lines.append("")
+
+    return "\n".join(_chain_repeated_keywords(output_lines)) + "\n"
+
+
+def emit_markdown(matrix: dict) -> str:
+    """Generate markdown acceptance rules from a matrix."""
+    feature_slug = matrix.get("feature_slug", "unknown")
+    flows = matrix.get("flows", [])
+    if not isinstance(flows, list) or not flows:
+        return "# No flows defined in matrix '%s'\n" % feature_slug
+
+    flow_groups = matrix.get("flow_groups", [])
+    transition_map = _build_transition_map(matrix)
+    state_map = _build_state_map(matrix)
+    trigger_map = _build_trigger_map(matrix)
+
+    groups_map: Dict[str, dict] = {}
+    if isinstance(flow_groups, list):
+        for g in flow_groups:
+            if isinstance(g, dict) and g.get("group_id"):
+                groups_map[g["group_id"]] = g
+
+    flows_by_group: Dict[str, List[dict]] = {}
+    for flow in sorted(flows, key=_flow_sort_key):
+        if not isinstance(flow, dict):
+            continue
+        gid = flow.get("group_id", "_ungrouped")
+        flows_by_group.setdefault(gid, []).append(flow)
+
+    output_lines: List[str] = ["# Acceptance Rules: %s" % feature_slug, ""]
+
+    sorted_group_ids = sorted(flows_by_group.keys())
+    for gid in sorted_group_ids:
+        group = groups_map.get(gid, {})
+        group_name = group.get("name", gid)
+        output_lines.append("## %s" % group_name)
+        output_lines.append("")
+
+        shared_preconds = group.get("shared_preconditions", [])
+        if shared_preconds:
+            output_lines.append("**Shared preconditions:** %s" % ", ".join(shared_preconds))
+            output_lines.append("")
+
+        group_flows = flows_by_group[gid]
+        for flow in group_flows:
+            fid = flow.get("flow_id", "unnamed")
+            fname = flow.get("name", fid)
+            output_lines.append("### %s" % fname)
+            output_lines.append("")
+
+            preconds = flow.get("preconditions", [])
+            if preconds:
+                output_lines.append("**Preconditions:** %s" % ", ".join(preconds))
+                output_lines.append("")
+
+            steps = flow.get("steps", [])
+            if isinstance(steps, list):
+                sorted_steps = sorted(steps, key=lambda s: s.get("step_no", 0) if isinstance(s, dict) else 0)
+                output_lines.append("| Step | Action | From | To | Guard |")
+                output_lines.append("|------|--------|------|----|-------|")
+                for step in sorted_steps:
+                    if not isinstance(step, dict):
+                        continue
+                    t_ref = step.get("transition_ref")
+                    t = transition_map.get(t_ref, {})
+                    action = step.get("action", t.get("trigger_ref", "?"))
+                    from_s = t.get("from_state", "?")
+                    to_s = t.get("to_state", "?")
+                    guard = t.get("guard", "—")
+                    if guard is None:
+                        guard = "—"
+                    output_lines.append("| %s | %s | %s | %s | %s |" % (
+                        step.get("step_no", "?"), action, from_s, to_s, guard))
+                output_lines.append("")
+
+            outcome = flow.get("expected_outcome", {})
+            if isinstance(outcome, dict) and outcome:
+                ev_key = outcome.get("evidence_key", "")
+                medium = outcome.get("medium", "")
+                observer_id = outcome.get("observer_id", "")
+                desc = outcome.get("description", "")
+                output_lines.append("**Expected outcome:** %s observes `%s` via `%s`" % (
+                    observer_id or "observer", ev_key, medium))
+                if desc:
+                    output_lines.append("  — %s" % desc)
+                output_lines.append("")
+
+            # Observable projections on the final state
+            if isinstance(steps, list) and steps:
+                sorted_steps = sorted(steps, key=lambda s: s.get("step_no", 0) if isinstance(s, dict) else 0)
+                last_step = sorted_steps[-1]
+                if isinstance(last_step, dict):
+                    last_t = transition_map.get(last_step.get("transition_ref"), {})
+                    term_id = last_t.get("to_state")
+                    term = state_map.get(term_id, {})
+                    projs = term.get("observable_projections", [])
+                    if isinstance(projs, list) and projs:
+                        output_lines.append("**Observable projections at `%s`:**" % term_id)
+                        output_lines.append("")
+                        for proj in sorted(projs, key=lambda p: p.get("observer_id", "") if isinstance(p, dict) else ""):
+                            if not isinstance(proj, dict):
+                                continue
+                            obs_id = proj.get("observer_id", "?")
+                            disc = proj.get("discriminator", {})
+                            med = proj.get("medium", "?")
+                            output_lines.append("- **%s** (%s): %s" % (obs_id, med, _format_discriminator(disc)))
+                        output_lines.append("")
+
+    return "\n".join(output_lines)
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Emit Given/When/Then acceptance rules from a flow-simulation matrix",
+        prog="emit-acceptance-rules",
+    )
+    parser.add_argument("matrix_path", help="Path to flow-simulation-matrix.json")
+    parser.add_argument("--out", required=True, help="Output directory")
+    parser.add_argument("--format", choices=["gherkin", "markdown"], default="gherkin",
+                        dest="output_format",
+                        help="Output format (default: gherkin)")
+    return parser
+
+
+def main() -> int:
+    parser = build_parser()
+    args = parser.parse_args()
+
+    matrix_path = Path(args.matrix_path)
+    if not matrix_path.is_file():
+        sys.stderr.write("Matrix file not found: %s\n" % matrix_path)
+        return 1
+
+    try:
+        matrix = json.loads(matrix_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as e:
+        sys.stderr.write("Error reading matrix: %s\n" % e)
+        return 1
+
+    flows = matrix.get("flows")
+    if not isinstance(flows, list) or not flows:
+        sys.stderr.write("Matrix has no flows[]; acceptance rules require flow definitions.\n")
+        print("NO_FLOWS")
+        return 1
+
+    out_dir = Path(args.out)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    if args.output_format == "gherkin":
+        content = emit_gherkin(matrix)
+        filename = "acceptance-rules.feature"
+    else:
+        content = emit_markdown(matrix)
+        filename = "acceptance-rules.md"
+
+    out_path = out_dir / filename
+    out_path.write_text(content, encoding="utf-8")
+
+    feature_slug = matrix.get("feature_slug", "unknown")
+    flow_count = len([f for f in flows if isinstance(f, dict)])
+    print("ACCEPTANCE_RULES_EMITTED: %d flow(s) for %s -> %s" % (flow_count, feature_slug, out_path))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
