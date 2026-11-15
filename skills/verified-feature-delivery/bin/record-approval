@@ -30,7 +30,9 @@ MILESTONES = {
     },
     "ENTITY_BOUNDARIES": {
         "awaiting_state": "AWAITING_ENTITY_BOUNDARIES_APPROVAL",
-        "artifact_path": "flow-simulation-matrix.json",
+        # The guarded entity boundaries, relationships and simulated dependencies are Stage 0
+        # declarations in the lexicon; the scenario matrix carries none of them.
+        "artifact_path": "domain-lexicon.json",
         "digest_scope": ["entity_boundaries", "entity_relationships", "simulated_dependencies"],
     },
     "UI_LAYOUT": {
@@ -76,6 +78,26 @@ def canonical_digest(artifact, scope_keys):
     scoped = {k: artifact[k] for k in scope_keys if k in artifact}
     blob = json.dumps(scoped, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+
+
+def _is_empty(value):
+    return value is None or (isinstance(value, (str, list, dict)) and not value)
+
+
+def scope_is_empty(artifact, scope_keys):
+    """True when none of the named subtrees carries content.
+
+    A digest over nothing (sha256('{}')) approves nothing: no later edit to the guarded data can
+    change it, so the approval could never go STALE. Such a scope is refused, not recorded.
+    """
+    return all(_is_empty(artifact.get(k)) for k in scope_keys)
+
+
+def slice_ui_layout(artifact, slice_id):
+    for sl in (artifact or {}).get("slices", []) or []:
+        if isinstance(sl, dict) and sl.get("slice_id") == slice_id:
+            return sl.get("ui_layout")
+    return None
 
 
 def slice_ui_layout_digest(artifact, slice_id):
@@ -176,7 +198,22 @@ def main():
                 "SLICE_NOT_FOUND: no slice %r in %s\n" % (args.slice_id, meta["artifact_path"])
             )
             return 1
+        if _is_empty(slice_ui_layout(artifact, args.slice_id)):
+            print("EMPTY_APPROVAL_SCOPE")
+            sys.stderr.write(
+                "EMPTY_APPROVAL_SCOPE: slice %r in %s declares no ui_layout, so there is nothing "
+                "to approve\n" % (args.slice_id, meta["artifact_path"])
+            )
+            return 1
     else:
+        if not isinstance(artifact, dict) or scope_is_empty(artifact, meta["digest_scope"]):
+            print("EMPTY_APPROVAL_SCOPE")
+            sys.stderr.write(
+                "EMPTY_APPROVAL_SCOPE: %s carries none of %s, so a digest over it would approve "
+                "nothing and could never go stale; declare the guarded content before approving\n"
+                % (meta["artifact_path"], ", ".join(meta["digest_scope"]))
+            )
+            return 1
         digest = canonical_digest(artifact, meta["digest_scope"])
 
     ledger_data = load_ledger(feature_dir, args.feature)

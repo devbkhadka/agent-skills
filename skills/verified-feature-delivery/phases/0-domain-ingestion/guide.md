@@ -64,6 +64,10 @@ python3 bin/render-glossary --artifact .verified-feature-delivery/<feature-slug>
 python3 bin/render-entity-map --artifact .verified-feature-delivery/<feature-slug>/domain-lexicon.json --out .verified-feature-delivery/<feature-slug>/docs
 ```
 
+`--out` takes the output directory or the document's own path (`docs/<doc name>`); an existing
+derived document is overwritten in place. A file path naming any other document, or an existing
+file given as the directory, is refused with `INVALID_OUTPUT_PATH`.
+
 ### Validate Gate
 ```bash
 python3 bin/validate-lexicon .verified-feature-delivery/<feature-slug>/domain-lexicon.json

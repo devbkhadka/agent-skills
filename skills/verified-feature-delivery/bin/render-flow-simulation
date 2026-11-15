@@ -19,7 +19,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from lib.render import RenderError, render_document
+from lib.render import RenderError, RenderOutputError, render_document
 
 RENDERER_NAME = "render-flow-simulation"
 TEMPLATE_NAME = "flow-simulation.md.tmpl"
@@ -124,7 +124,7 @@ def render_body(flow_groups, flows):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--artifact", required=True)
-    parser.add_argument("--out", required=True)
+    parser.add_argument("--out", required=True, help="Output directory, or the document's own path (<dir>/<doc name>); an existing document is overwritten")
     args = parser.parse_args()
 
     artifact_path = Path(args.artifact)
@@ -157,6 +157,9 @@ def main():
             artifact_path=artifact_path.name,
             renderer_name=RENDERER_NAME,
         )
+    except RenderOutputError as e:
+        sys.stderr.write("INVALID_OUTPUT_PATH: %s\n" % e)
+        refuse("INVALID_OUTPUT_PATH")
     except RenderError:
         refuse("RENDER_CONTEXT_MISMATCH")
 

@@ -27,6 +27,7 @@ Supported Error Codes:
 - MISSING_LAYOUT_COMPONENT
 - UI_LAYOUT_WITHOUT_TREE
 - TEMPLATE_CONTEXT_MISMATCH
+- INVALID_OUTPUT_PATH
 """
 
 import argparse
@@ -36,7 +37,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from lib.render import render_document, RenderError
+from lib.render import RenderError, RenderOutputError, render_document
 from lib.primitives import check_closed_key_set
 
 MOCKUP_TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "templates" / "mockups"
@@ -73,7 +74,7 @@ def build_parser():
     )
     parser.add_argument("--artifact", required=True, help="Path to execution-dag.json")
     parser.add_argument("--slice", required=True, dest="slice_id", help="slice_id to render")
-    parser.add_argument("--out", required=True, help="Output directory")
+    parser.add_argument("--out", required=True, help="Output directory, or the document's own path (<dir>/<doc name>); an existing document is overwritten")
     return parser
 
 
@@ -231,6 +232,10 @@ def main():
             renderer_name=RENDERER_NAME,
             template_dir=MOCKUP_TEMPLATE_DIR,
         )
+    except RenderOutputError as e:
+        sys.stderr.write("INVALID_OUTPUT_PATH: %s\n" % e)
+        print("INVALID_OUTPUT_PATH")
+        return 1
     except RenderError as e:
         sys.stderr.write("%s\n" % e)
         print("TEMPLATE_CONTEXT_MISMATCH")

@@ -19,6 +19,9 @@ states them:
             own boundary_identifier
     step 8  the four regression edges, routed through the transition table in bin/planner-state
 
+Before any step, records whose (evidence_key, observer_id) the current matrix no longer declares
+are set aside and reported as RETIRED; they are never graded and never deleted.
+
 Nothing here is read as a verdict. There is no key for a fingerprint, for coverage, for a
 degradation finding or for a rollback cause: the fingerprint is computed from the captured
 artifact, coverage by differencing the matrix against what was captured, degradation by checking
@@ -169,6 +172,32 @@ class RunBundle(object):
         self.contract_fixtures = self._load_contract_fixtures()
         self.declared_outcomes = matrix_declared_outcomes(self.matrix)
         self.milestone_claims = declared_milestone_claims(self.dag)
+        self.media_by_observer, _problems = observer_media(self.matrix)
+
+    def capture_medium(self, record: Dict[str, Any]) -> Optional[str]:
+        """The medium a record's capture is graded under: its observer's, from the register.
+
+        Falls back to the record's own verification_medium only when the record names no
+        observer the register resolves (a re-probe record attributed to a boundary, not a
+        projection). That medium is already checked against the closed set, and the capture must
+        still normalise under it, so naming a medium cannot by itself produce success.
+        """
+        observer_id = str(record.get("observer_id") or "").strip()
+        if observer_id and observer_id in self.media_by_observer:
+            return self.media_by_observer[observer_id]
+        medium = record.get("verification_medium")
+        return medium if medium in CANONICAL_MEDIA else None
+
+    def success(self, record: Dict[str, Any], per_medium: bool = False) -> Optional[bool]:
+        """success_signal for one record against the plan's expectation.
+
+        `per_medium` admits the medium_success rule for captures with no exit code or status.
+        Only the provisional-fixture discharge asks for it: the degradation check pairs success
+        with census warning text, and a codeless capture of an approved error state (an error
+        banner, a transcript reporting a failure) would read as success that hid its own loss.
+        """
+        medium = self.capture_medium(record) if per_medium else None
+        return success_signal(record, self.expected_outcome(record), medium)
 
     def expected_outcome(self, record: Dict[str, Any]) -> Optional[Tuple[str, int]]:
         """The outcome code the approved plan says this record's capture must show, if any.
@@ -284,9 +313,66 @@ def _code_field(evidence: Dict[str, Any], key: str) -> Tuple[bool, Optional[int]
     return True, value
 
 
+# The media whose capture carries no exit code or status. For these, success is computed from the
+# capture's own content under the medium's normaliser (see medium_success); there is no matrix
+# outcome atom for them (normalisation.OUTCOME_ATOMS), so nothing is ever read from the record.
+CODELESS_MEDIA = ("rendered_ui", "datastore_state", "device_actuation", "agent_transcript")
+SATISFIED_CONSTRAINT = "SATISFIED"
+
+
+def medium_success(medium: Optional[str], evidence: Any) -> Optional[bool]:
+    """Per-medium success for a capture with no exit code or status: True or None, never False.
+
+    The capture must first normalise under the medium (an unnormalisable one is not success),
+    and then show that the observed thing actually happened:
+
+        datastore_state   at least one changed table or constraint outcome recorded, and every
+                          recorded constraint outcome is SATISFIED
+        rendered_ui       the rendering holds at least one observable element or text run
+        device_actuation  at least one command opcode was issued
+        agent_transcript  the transcript ends in a non-empty final message
+
+    None, not False, when the rule does not hold: these media carry no failure signal of their
+    own, so a VIOLATED constraint or an empty page cannot by itself be routed as a regression
+    (an approved error state may look exactly like that). The rule is used only to discharge a
+    provisional fixture through its pinned re-probe (RunBundle.success(per_medium=True)); the
+    degradation check and regression routing stay on exit code and status alone.
+    """
+    if medium not in CODELESS_MEDIA:
+        return None
+    try:
+        normalised, _fingerprint = capture_projection(medium, evidence)
+    except NormalisationRefused:
+        return None
+    if medium == "rendered_ui":
+        return True if normalised != "[empty_dom]" else None
+    if medium == "device_actuation":
+        return True if normalised != "opcodes:[]" else None
+    if medium == "agent_transcript":
+        final = evidence.get("final_message") if isinstance(evidence, dict) else None
+        return True if isinstance(final, str) and final.strip() else None
+    # datastore_state
+    tables = [
+        mutation for mutation in evidence.get("mutations") or []
+        if isinstance(mutation, dict) and str(mutation.get("table") or "").strip()
+    ]
+    raw_constraints = evidence.get("constraints")
+    outcomes = [
+        str(constraint.get("outcome") or "").strip().upper()
+        for constraint in (raw_constraints if isinstance(raw_constraints, list) else [])
+        if isinstance(constraint, dict) and str(constraint.get("name") or "").strip()
+    ]
+    if not tables and not outcomes:
+        return None
+    if any(outcome != SATISFIED_CONSTRAINT for outcome in outcomes):
+        return None
+    return True
+
+
 def success_signal(
     record: Dict[str, Any],
     expected: Optional[Tuple[str, int]] = None,
+    medium: Optional[str] = None,
 ) -> Optional[bool]:
     """Whether the capture reports success, computed from the captured exit code or status.
 
@@ -300,8 +386,10 @@ def success_signal(
     (UNNORMALISABLE_ARTIFACT), which names the real defect, and None never counts as success.
     With nothing declared, success is a zero exit, or else a 2xx status.
 
-    None when nothing is declared and the medium carries neither, which is not the same as
-    success — there is no exit code or status for the degradation check to pair a warning with.
+    When nothing is declared and the capture carries neither field, `medium` (the observer
+    register's medium for the record — see RunBundle.capture_medium) decides through
+    medium_success: rendered_ui, datastore_state, device_actuation and agent_transcript have a
+    per-medium rule that yields True or None. Otherwise None, which is not the same as success.
     """
     evidence = record.get("captured_evidence")
     if expected is not None:
@@ -322,17 +410,19 @@ def success_signal(
         return code is not None and code == declared
 
     if not isinstance(evidence, dict):
-        return None
+        return medium_success(medium, evidence)
     present, exit_code = _code_field(evidence, "exit_code")
     if present:
         return exit_code == 0
     present, status = _code_field(evidence, "status_code")
     if present:
         return status is not None and 200 <= status < 300
-    _present, status = _code_field(evidence, "status")
+    present, status = _code_field(evidence, "status")
     if status is not None:
         return 200 <= status < 300
-    return None
+    if present:
+        return None
+    return medium_success(medium, evidence)
 
 
 # ---------------------------------------------------------------------------
@@ -553,8 +643,11 @@ def outstanding_provisional_fixtures(
     """
     reprobed_by_id: Dict[str, List[Dict[str, Any]]] = {}
     for record in records:
-        expected = bundle.expected_outcome(record) if bundle is not None else None
-        if success_signal(record, expected) is True:
+        if bundle is not None:
+            succeeded = bundle.success(record, per_medium=True)
+        else:
+            succeeded = success_signal(record, None, record.get("verification_medium"))
+        if succeeded is True:
             milestone_id = str(record.get("milestone_id") or "").strip()
             reprobed_by_id.setdefault(milestone_id, []).append(record)
 
@@ -643,7 +736,7 @@ def classify_regressions(
     fixtures_by_boundary = bundle.fixtures_by_boundary()
     for record in records:
         trace = record.get("failure_trace")
-        if success_signal(record, bundle.expected_outcome(record)) is not False:
+        if bundle.success(record) is not False:
             continue
         milestone_id = str(record.get("milestone_id") or "")
         if trace is None:
@@ -693,11 +786,74 @@ def route_and_execute(bundle: RunBundle, finding: Any, write: bool) -> Tuple[int
 
 
 # ---------------------------------------------------------------------------
+# Retired records: projections a Stage 2 amendment removed
+# ---------------------------------------------------------------------------
+
+def retire_undeclared_records(
+    records: Sequence[Dict[str, Any]],
+    matrix: Any,
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Split records into (active, retired) against the current approved matrix.
+
+    A record is retired when it names both an evidence_key and an observer_id and that pair is
+    no longer a projection target of the matrix — an approved Stage 2 amendment removed it. Its
+    capture is evidence about a state the plan no longer models, so grading it would only
+    collide with the states that replaced it. Retired records are reported, never deleted, and
+    never graded: they cannot verify a milestone, discharge a fixture or raise a regression.
+    A record naming no projection (a boundary re-probe) is always active, and nothing is
+    retired when the matrix is unreadable or declares no targets.
+    """
+    if not isinstance(matrix, dict):
+        return list(records), []
+    targets = matrix_projection_targets(matrix)
+    if not targets:
+        return list(records), []
+    active: List[Dict[str, Any]] = []
+    retired: List[Dict[str, Any]] = []
+    for record in records:
+        evidence_key = str(record.get("evidence_key") or "").strip()
+        observer_id = str(record.get("observer_id") or "").strip()
+        if evidence_key and observer_id and (evidence_key, observer_id) not in targets:
+            retired.append(record)
+        else:
+            active.append(record)
+    return active, retired
+
+
+def retired_projection_counts(retired: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Each retired (evidence_key, observer_id) with the number of records that targeted it."""
+    counts: Dict[Tuple[str, str], int] = {}
+    for record in retired:
+        key = (str(record.get("evidence_key") or "").strip(), str(record.get("observer_id") or "").strip())
+        counts[key] = counts.get(key, 0) + 1
+    return [
+        {"evidence_key": evidence_key, "observer_id": observer_id, "record_count": count}
+        for (evidence_key, observer_id), count in sorted(counts.items())
+    ]
+
+
+def retired_report(retired: Sequence[Dict[str, Any]]) -> List[str]:
+    if not retired:
+        return []
+    rows = retired_projection_counts(retired)
+    return (
+        ["RETIRED: %d execution record(s) across %d projection(s) the current matrix no longer "
+         "declares were not evaluated" % (len(retired), len(rows))]
+        + ["  %s@%s (%d record(s))" % (row["evidence_key"], row["observer_id"], row["record_count"])
+           for row in rows]
+    )
+
+
+# ---------------------------------------------------------------------------
 # The full Stage 4 grading run
 # ---------------------------------------------------------------------------
 
 def validate_milestone_execution(feature_dir: Path, write: bool = True) -> Tuple[int, str]:
-    """Grade one slice run in the order the spec's Stage 4 process states."""
+    """Grade one slice run in the order the spec's Stage 4 process states.
+
+    Records targeting a projection the current matrix no longer declares are set aside first and
+    reported as RETIRED alongside whatever verdict the remaining records earn.
+    """
     bundle = RunBundle(Path(feature_dir))
     if bundle.problems:
         return 1, "\n".join("MISSING_GATE_ARTIFACT: %s" % problem for problem in bundle.problems)
@@ -706,6 +862,19 @@ def validate_milestone_execution(feature_dir: Path, write: bool = True) -> Tuple
     if problems:
         return 1, "\n".join(problems)
 
+    records, retired = retire_undeclared_records(records, bundle.matrix)
+    code, message = _grade_records(bundle, records, retired, write)
+    notice = retired_report(retired)
+    return code, "\n".join([message] + notice) if notice else message
+
+
+def _grade_records(
+    bundle: RunBundle,
+    records: List[Dict[str, Any]],
+    retired: List[Dict[str, Any]],
+    write: bool,
+) -> Tuple[int, str]:
+    """Grade the active records; `retired` is only recorded in the evidence summary."""
     fixtures_by_boundary = bundle.fixtures_by_boundary()
     all_fixtures = list(bundle.contract_fixtures.values())
 
@@ -786,7 +955,7 @@ def validate_milestone_execution(feature_dir: Path, write: bool = True) -> Tuple
 
     # --- step 5: no silent boundary degradation ---------------------------------------
     for record in records:
-        if success_signal(record, bundle.expected_outcome(record)) is not True:
+        if bundle.success(record) is not True:
             continue
         warnings = warning_classes_in_capture(record, fixtures_by_boundary, all_fixtures)
         if warnings:
@@ -830,6 +999,8 @@ def validate_milestone_execution(feature_dir: Path, write: bool = True) -> Tuple
         "provisional_fixtures_outstanding": [],
         "variance_regions_exercised": sorted(region_paths),
     }
+    if retired:
+        summary["retired_records"] = retired_projection_counts(retired)
     projections_artifact = {
         "schema_version": "1.0.0",
         "feature_slug": bundle.feature_slug,
@@ -1045,6 +1216,9 @@ def main() -> int:
         if problems:
             print("\n".join(problems))
             return 1
+        records, retired = retire_undeclared_records(records, bundle.matrix)
+        for line in retired_report(retired):
+            sys.stderr.write(line + "\n")
         computed: List[Dict[str, Any]] = []
         if isinstance(bundle.matrix, dict):
             media_by_observer, _problems = observer_media(bundle.matrix)

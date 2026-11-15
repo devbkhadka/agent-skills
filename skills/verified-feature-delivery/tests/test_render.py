@@ -15,7 +15,7 @@ from pathlib import Path
 SKILL_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(SKILL_DIR))
 
-from lib.render import RenderError, render_document  # noqa: E402
+from lib.render import RenderError, RenderOutputError, render_document  # noqa: E402
 
 
 class RenderDocumentTests(unittest.TestCase):
@@ -133,6 +133,85 @@ class RenderDocumentTests(unittest.TestCase):
             render_document(
                 "probe.md.tmpl", dict(self.ctx), out_dir, "probe.md", **self.common,
             )
+
+
+class RenderOutputPathTests(unittest.TestCase):
+    """`--out` may be the output directory or the document's own path; never a traceback."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="afp-render-out-"))
+        self.template_dir = self.tmp / "templates"
+        self.template_dir.mkdir()
+        (self.template_dir / "probe.md.tmpl").write_text("# ${title}\n", encoding="utf-8")
+        self.common = dict(artifact_path="domain-lexicon.json", renderer_name="render-probe",
+                           template_dir=self.template_dir)
+
+    def tearDown(self):
+        for p in self.tmp.rglob("*"):
+            try:
+                p.chmod(stat.S_IWRITE | stat.S_IREAD | stat.S_IEXEC)
+            except OSError:
+                pass
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def render(self, out, title="Probe"):
+        return render_document("probe.md.tmpl", {"title": title}, out, "probe.md", **self.common)
+
+    def test_a_file_path_writes_that_file_not_a_directory_of_that_name(self):
+        target = self.tmp / "docs" / "probe.md"
+        path = self.render(target)
+        self.assertEqual(path, target)
+        self.assertTrue(target.is_file())
+        self.assertFalse((target / "probe.md").exists())
+
+    def test_a_file_path_overwrites_the_existing_derived_document(self):
+        target = self.tmp / "docs" / "probe.md"
+        self.render(target, title="First")
+        self.render(target, title="Second")
+        body = target.read_text(encoding="utf-8")
+        self.assertIn("Second", body)
+        self.assertNotIn("First", body)
+        self.assertEqual(stat.S_IMODE(os.stat(target).st_mode), 0o444)
+
+    def test_a_directory_still_works(self):
+        path = self.render(self.tmp / "docs")
+        self.assertEqual(path, self.tmp / "docs" / "probe.md")
+        self.assertTrue(path.is_file())
+
+    def test_a_file_path_naming_another_document_is_refused(self):
+        with self.assertRaises(RenderOutputError):
+            self.render(self.tmp / "docs" / "other.md")
+        self.assertFalse((self.tmp / "docs").exists())
+
+    def test_an_existing_file_given_as_the_directory_is_refused(self):
+        blocker = self.tmp / "notes"
+        blocker.write_text("not a directory", encoding="utf-8")
+        with self.assertRaises(RenderOutputError):
+            self.render(blocker)
+
+    def test_a_directory_at_the_document_path_is_refused(self):
+        (self.tmp / "docs" / "probe.md" / "probe.md").mkdir(parents=True)
+        with self.assertRaises(RenderOutputError):
+            self.render(self.tmp / "docs")
+
+    def test_the_renderer_cli_accepts_a_file_path_twice_without_a_traceback(self):
+        import json
+        import subprocess
+        dag = self.tmp / "execution-dag.json"
+        dag.write_text(json.dumps({"feature_slug": "probe", "slices": []}), encoding="utf-8")
+        target = self.tmp / "docs" / "vertical-slice-plan.md"
+        cmd = [sys.executable, str(SKILL_DIR / "bin" / "render-slice-plan"),
+               "--artifact", str(dag), "--out", str(target)]
+        for _ in range(2):
+            res = subprocess.run(cmd, capture_output=True, text=True)
+            self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+            self.assertNotIn("Traceback", res.stderr)
+        self.assertTrue(target.is_file())
+
+        res = subprocess.run(cmd[:-1] + [str(self.tmp / "docs" / "plan.md")], capture_output=True, text=True)
+        self.assertEqual(res.returncode, 1)
+        self.assertEqual(res.stdout.strip(), "INVALID_OUTPUT_PATH")
+        self.assertNotIn("Traceback", res.stderr)
 
 
 if __name__ == "__main__":
