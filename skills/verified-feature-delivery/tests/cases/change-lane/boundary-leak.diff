@@ -1,0 +1,8 @@
+diff --git a/src/billing/downgrade.py b/src/billing/downgrade.py
+index 1111111..2222222 100644
+--- a/src/billing/downgrade.py
++++ b/src/billing/downgrade.py
+@@ -1,2 +1,3 @@
+ from billing.domain import Subscription
++import requests
+ 

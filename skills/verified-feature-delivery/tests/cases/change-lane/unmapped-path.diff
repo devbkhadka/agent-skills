@@ -1,0 +1,7 @@
+diff --git a/deploy/terraform/main.tf b/deploy/terraform/main.tf
+index 1111111..2222222 100644
+--- a/deploy/terraform/main.tf
++++ b/deploy/terraform/main.tf
+@@ -1,1 +1,2 @@
+ resource "null_resource" "x" {}
++resource "null_resource" "y" {}

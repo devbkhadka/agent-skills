@@ -1,0 +1,43 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "triage-config.schema.json",
+  "title": "change-lane triage config (docs/domain/triage.json)",
+  "description": "Optional. Every key falls back to the default in lib/triage.py DEFAULT_CONFIG. List values replace the default, except ignore_tokens, which extends it. Globs: `**` spans directories, `*` and `?` stay within one path segment; paths are repo-relative.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "tweak_paths": {
+      "description": "Paths whose changes are TWEAK on their own and are not scanned for domain tokens or boundary imports. Default: styles (css/scss/sass/less), markdown, docs/**, i18n/locales, *.po, tests and *.test.* / *.spec.*.",
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "layer_paths": {
+      "description": "Layer name -> globs, e.g. {\"domain\": [\"src/domain/**\"], \"application\": [\"src/app/**\"]}. A path covered here is mapped (eligible for TWEAK) even if the verification-policy classifier would call it shared or unmapped. Default: {}.",
+      "type": "object",
+      "additionalProperties": { "type": "array", "items": { "type": "string" } }
+    },
+    "adapter_paths": {
+      "description": "Where boundary imports belong. A boundary import elsewhere is BOUNDARY_LEAK; inside, for a class not PRESENT in the baseline manifest, NEW_BOUNDARY. Default: **/adapters/**, **/adapter/**, **/infrastructure/**, **/infra/**.",
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "boundary_import_patterns": {
+      "description": "Regexes matched against added lines, each naming the boundary class it opens (Stage 1 class names, e.g. NETWORK_API, DATASTORE, MESSAGE_TRANSPORT). Default covers common python and JS HTTP, database, queue and AWS clients.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["pattern", "boundary_class"],
+        "additionalProperties": false,
+        "properties": {
+          "pattern": { "type": "string" },
+          "boundary_class": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$" }
+        }
+      }
+    },
+    "ignore_tokens": {
+      "description": "UPPER_SNAKE values that are never domain tokens (added to the defaults: HTTP methods, JSON, UUID, log levels, ...).",
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  }
+}

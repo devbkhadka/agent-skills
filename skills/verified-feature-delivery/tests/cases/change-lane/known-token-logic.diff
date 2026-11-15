@@ -1,0 +1,9 @@
+diff --git a/src/billing/downgrade.ts b/src/billing/downgrade.ts
+index 1111111..2222222 100644
+--- a/src/billing/downgrade.ts
++++ b/src/billing/downgrade.ts
+@@ -10,3 +10,4 @@ export function canDowngrade(sub: Subscription): boolean {
+   if (sub.status === "CANCELED") return false;
++  if (sub.status === "PAST_DUE") return false;
+   const MAX_RETRIES = 3;
+   return sub.tier !== SubscriptionTier.FREE;
