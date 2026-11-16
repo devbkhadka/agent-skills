@@ -22,6 +22,8 @@ PROJECT_PATH=""
 LEAD_AGENT="${HERDER_AGENT_NAME:-${AGENT_NAME:-}}"
 JSON_OUTPUT=0
 IGNORED_AGENTS=()
+# Seconds a 'working' agent may go without any pane change before it is declared stalled.
+MAX_IDLE_SECONDS="${AGENT_HERDER_MAX_IDLE_SECONDS:-600}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -61,8 +63,16 @@ while [[ $# -gt 0 ]]; do
       JSON_OUTPUT=1
       shift
       ;;
+    --max-idle-seconds|--budget)
+      MAX_IDLE_SECONDS="${2:-}"
+      shift 2 || { echo "Error: $1 requires a value" >&2; exit 2; }
+      ;;
+    --max-idle-seconds=*|--budget=*)
+      MAX_IDLE_SECONDS="${1#*=}"
+      shift
+      ;;
     -h|--help)
-      echo "Usage: auto_herd.sh --session <name> [--project <repo-path>] [--lead <agent-name>] [--ignore-agent <agent>] [--json]"
+      echo "Usage: auto_herd.sh --session <name> [--project <repo-path>] [--lead <agent-name>] [--ignore-agent <agent>] [--max-idle-seconds <n>] [--json]"
       echo ""
       echo "Automates the fleet lifecycle loop: watches, auto-approves, and completes agents."
       echo ""
@@ -71,6 +81,11 @@ while [[ $# -gt 0 ]]; do
       echo "  --project, -p <path>   Repository root containing .beads/ for closing beads"
       echo "  --lead, --exclude <ag> Name of lead orchestrator agent to exclude from worker loop"
       echo "  --ignore-agent <ag>    Name of worker/sidecar agent to ignore in completion sweep"
+      echo "  --max-idle-seconds <n> Execution budget: seconds a working agent's pane may stay"
+      echo "    (alias --budget)     unchanged before it is declared stalled (default 600, env"
+      echo "                         AGENT_HERDER_MAX_IDLE_SECONDS). Measured from the last pane"
+      echo "                         change, not poll count; a pane showing a running foreground"
+      echo "                         command (spinner, 'Running', task footer) never stalls."
       echo "  --json                 Emit structured JSON telemetry record upon wave completion"
       echo "  -h, --help             Show this help message"
       exit 0
@@ -84,6 +99,11 @@ done
 
 if [[ -z "$SESSION_NAME" ]]; then
   echo "Error: --session <unique_name> is required." >&2
+  exit 2
+fi
+
+if ! [[ "$MAX_IDLE_SECONDS" =~ ^[0-9]+$ ]] || [[ "$MAX_IDLE_SECONDS" -lt 1 ]]; then
+  echo "Error: --max-idle-seconds / AGENT_HERDER_MAX_IDLE_SECONDS must be a positive integer (got '$MAX_IDLE_SECONDS')." >&2
   exit 2
 fi
 
@@ -120,8 +140,12 @@ fi
 MAX_REPROMPTS=3
 # Maximum polls an agent may stay in 'settling' state before being declared stalled
 MAX_SETTLE_POLLS=5
-# Maximum polls an agent may stay continuously in 'working' state before being declared stalled (default 150 polls = 300s)
-MAX_WORKING_POLLS="${AGENT_HERDER_MAX_WORKING_POLLS:-150}"
+# The working-state budget is MAX_IDLE_SECONDS of pane inactivity (see --max-idle-seconds).
+# A poll count measured nothing useful: polls return early whenever any other agent is
+# actionable, so 150 polls could elapse in ~95 s while a worker was busy.
+if [[ -n "${AGENT_HERDER_MAX_WORKING_POLLS:-}" ]]; then
+  log_diag "AGENT_HERDER_MAX_WORKING_POLLS is no longer used; the budget is ${MAX_IDLE_SECONDS}s of pane inactivity."
+fi
 # Maximum retries for transient unparseable runner states (e.g. mid-write on fleet.py)
 MAX_RUNNER_RETRIES=10
 RUNNER_RETRY_DELAY=0.5
@@ -702,22 +726,41 @@ except (SystemExit, Exception) as err:
           echo "Agent $AGENT: idle but lacks completion evidence" >> "$STATE_SCRATCH/current_blocked_reasons.txt"
         fi
       fi
+    elif [[ "$STATE" == "handoff-blocked" ]]; then
+      # The worker handed off with status blocked (or listed blockers). Same outcome as
+      # the worker_blocked check below: keep its locks and pane for the herding agent.
+      rm -f "$SETTLE_FILE" "$PANE_FILE" "$WORKING_FILE"
+      log_diag "Agent $AGENT handed off as blocked: ${PENDING:-no blocker given}"
+      echo "Agent $AGENT: worker reported blocked handoff (requires herding agent guidance): ${PENDING:-no blocker given}" >> "$STATE_SCRATCH/current_blocked_reasons.txt"
     elif [[ "$STATE" == "working" ]]; then
-      # Agent is actively running a task.
+      # Agent is actively running a task. The budget is time since the pane last changed;
+      # a pane that shows a running foreground command is working however long it lasts.
       rm -f "$DECLINED_FILE"
       rm -f "$SETTLE_FILE"
       rm -f "$PANE_FILE"
-      WORKING_COUNT=0
+      FOREGROUND=$(echo "$agent_json" | jq -r '.foreground // false')
+      WORK_PANE=$(bash "$HERD" --session "$SESSION_NAME" read --agent "$AGENT" 2>/dev/null || true)
+      WORK_HASH=$(python3 -c "import hashlib, sys; print(hashlib.sha256(sys.stdin.read().encode('utf-8')).hexdigest())" <<< "$WORK_PANE" 2>/dev/null || echo "")
+      NOW_TS=$(date +%s)
+      LAST_WORK_HASH=""
+      LAST_ACTIVE_TS="$NOW_TS"
       if [[ -f "$WORKING_FILE" ]]; then
-        WORKING_COUNT=$(cat "$WORKING_FILE")
+        read -r LAST_WORK_HASH LAST_ACTIVE_TS < "$WORKING_FILE" || true
+        [[ "$LAST_ACTIVE_TS" =~ ^[0-9]+$ ]] || LAST_ACTIVE_TS="$NOW_TS"
       fi
-      WORKING_COUNT=$((WORKING_COUNT + 1))
-      printf '%s' "$WORKING_COUNT" > "$WORKING_FILE"
-      if [[ "$WORKING_COUNT" -le "$MAX_WORKING_POLLS" ]]; then
+      if [[ ! -f "$WORKING_FILE" || "$WORK_HASH" != "$LAST_WORK_HASH" ]]; then
+        LAST_ACTIVE_TS="$NOW_TS"
+      fi
+      printf '%s %s\n' "$WORK_HASH" "$LAST_ACTIVE_TS" > "$WORKING_FILE"
+      IDLE_FOR=$((NOW_TS - LAST_ACTIVE_TS))
+      if [[ "$IDLE_FOR" -le "$MAX_IDLE_SECONDS" ]]; then
+        CAN_PROGRESS=1
+      elif [[ "$FOREGROUND" == "true" ]]; then
+        log_diag "Agent $AGENT: pane unchanged for ${IDLE_FOR}s but a foreground command is running; still working."
         CAN_PROGRESS=1
       else
-        log_diag "Agent $AGENT: execution budget exceeded ($WORKING_COUNT polls); marking stalled."
-        echo "Agent $AGENT: execution budget exceeded (stalled in working state)" >> "$STATE_SCRATCH/current_blocked_reasons.txt"
+        log_diag "Agent $AGENT: execution budget exceeded (pane unchanged for ${IDLE_FOR}s > ${MAX_IDLE_SECONDS}s); marking stalled."
+        echo "Agent $AGENT: execution budget exceeded (stalled in working state, pane unchanged for ${IDLE_FOR}s; raise --max-idle-seconds if this work is legitimately quiet)" >> "$STATE_SCRATCH/current_blocked_reasons.txt"
       fi
     elif [[ "$STATE" == "settling" ]]; then
       # Agent state is transient / settling across samples

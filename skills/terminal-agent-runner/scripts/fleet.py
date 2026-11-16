@@ -469,12 +469,22 @@ SPINNER_CHARS = set("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏⣾⣽⣻⢿⡿⣟⣯⣷◐�
 
 FOREGROUND_PATTERNS = (
     r"^[ \t]*(?:Thinking|Analyzing|Running|Executing|Generating|Building|Compiling|Searching|Processing|Working|Testing)(?!(?:[-_]tree|\s+tree|\s+director|\s+cop))\b",
-    r"(?:^|\s)(?:Thinking|Analyzing|Running|Executing|Generating|Building|Compiling|Searching|Processing|Working|Testing)\.{3,}",
+    r"(?:^|\s)(?:Thinking|Analyzing|Running|Executing|Generating|Building|Compiling|Searching|Processing|Working|Testing)(?:\.{3,}|…)",
     r"^[ \t]*[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏\-\|/]\s*(?:Thinking|Analyzing|Running|Executing|Working|Generating|Building|Compiling|Searching|Processing|Testing|\w+ing\b)",
     r"^[ \t]*[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏⣾⣽⣻⢿⡿⣟⣯⣷◐◓◑◒◴◵◶◷◜◝◞◟]",
     r"\[running(?:\s+[^\]]+)?\]|\(running(?:\s+[^\)]+)?\)",
     r"\[in progress\]|\(in progress\)",
     r"(?:esc|ctrl\+c)\s+to\s+(?:interrupt|cancel|stop|abort)|press\s+(?:esc|ctrl\+c)\s+to\s+(?:cancel|interrupt|stop)|cancel with esc",
+    # AGY: a blocking tool call renders `○ Running (cmd)` and a footer
+    # `● [19:05:15] cmd running`, plus `· 1 task(s) · /tasks` while it lasts.
+    r"^[ \t]*○[ \t]+Running\b",
+    r"^[ \t]*●[ \t]*\[\d{2}:\d{2}:\d{2}\].*\brunning[ \t]*$",
+    r"(?:^|[ \t·])[1-9]\d*[ \t]+task\(s\)",
+    # Claude Code: `✶ Gallivanting… (57s · ↓ 114 tokens)`. Its glyphs (✶✻✽✢✳·*) are
+    # only matched in this verb+ellipsis+elapsed shape: the same glyphs open the
+    # welcome banner and the settled `✻ Worked for 1m 3s` line.
+    r"^[ \t]*[✶✻✽✢✳·*][ \t]*\w+(?:…|\.{3})[ \t]*\(\d",
+    r"Press up to edit queued messages",
 )
 
 
@@ -564,6 +574,15 @@ def _wait_dialog_cleared(name, session=None, retries: int = 50, reader=None) -> 
     return False
 
 
+def _unsettled_reason(text: str) -> str:
+    """Name the readiness predicate an unsettled frame failed, for the spawn error."""
+    if not isinstance(text, str) or not text.strip() or text.strip() == "(empty pane)":
+        return "is_settled_frame: pane frame empty"
+    if has_foreground_execution(text):
+        return "is_settled_frame: foreground execution indicator (spinner/running/esc-to-interrupt) never cleared"
+    return "is_settled_frame: frame not settled"
+
+
 def pre_submit_check(name: str, session: str | None, expected_cwd: str | Path | None,
                      policy: dict | None = None, task: str | None = None,
                      read_only: bool = False,
@@ -607,7 +626,7 @@ def pre_submit_check(name: str, session: str | None, expected_cwd: str | Path | 
                 continue
             raise RuntimeError(
                 f"agent {name} pane never became ready over {attempts} attempts "
-                f"(waiting for interactive prompt)"
+                f"(waiting for interactive prompt; failed predicate: {_unsettled_reason(txt)})"
             )
 
         health = health_of(txt)
@@ -655,7 +674,8 @@ def pre_submit_check(name: str, session: str | None, expected_cwd: str | Path | 
 
     raise RuntimeError(
         f"agent {name} pane never became ready over {attempts} attempts "
-        f"(waiting for interactive prompt)"
+        f"(waiting for interactive prompt; failed predicate: settled no-dialog frames "
+        f"{consecutive_no_dialog}/{settle_samples})"
     )
 
 
@@ -1850,7 +1870,7 @@ def set_task(agent: str, task: str, session: str | None = None,
              read_only: bool = False, approval_mode: str | None = None,
              workspace: str | None = None, model: str | None = None,
              cwd: str | None = None, bead_id: str | None = None,
-             profile: str | None = None):
+             profile: str | None = None, stale_handoff_digest: str | None = None):
     handoff_path(agent, session).unlink(missing_ok=True)
     p = state_path("tasks.json", session)
     now = time.time()
@@ -1878,6 +1898,11 @@ def set_task(agent: str, task: str, session: str | None = None,
             # Beads metadata is authoritative; this is a session-local recovery
             # cache allowing a lost short pane name to be traced without guessing.
             current["bead_id"] = bead_id
+        # The handoff on screen when this task was sent belongs to the previous turn.
+        if stale_handoff_digest:
+            current["stale_handoff_digest"] = stale_handoff_digest
+        else:
+            current.pop("stale_handoff_digest", None)
         d[agent] = current
         return d
     update_json(p, {}, update)
@@ -2164,6 +2189,12 @@ def _load_json_unlocked(p: Path, default):
     return data
 
 
+# `completed` and `dead` are terminal: nothing may prompt, park, or re-lease them; only a
+# fresh `spawn`/`reset` replaces them. Older tasks.json files simply never contain `completed`.
+LIFECYCLES = ("active", "parked", "dead", "completed")
+TERMINAL_LIFECYCLES = ("completed", "dead")
+
+
 def _validate_fleet_state(p: Path, data):
     if p.name == "tasks.json" and isinstance(data, dict):
         for agent, assignment in data.items():
@@ -2183,7 +2214,7 @@ def _validate_fleet_state(p: Path, data):
             if (assignment.get("approval_mode") is not None
                     and assignment.get("approval_mode") not in APPROVAL_MODES):
                 raise StateError(f"assignment {agent!r} has invalid approval_mode")
-            if assignment.get("lifecycle", "active") not in ("active", "parked", "dead"):
+            if assignment.get("lifecycle", "active") not in LIFECYCLES:
                 raise StateError(f"assignment {agent!r} has invalid lifecycle")
             if "lost_at" in assignment and not isinstance(assignment["lost_at"], (int, float)):
                 raise StateError(f"assignment {agent!r} has invalid lost_at")
@@ -2766,6 +2797,14 @@ def _validate_handoff_dict(handoff: dict, assignment: dict, expected_agent: str 
 
 def parse_handoff_file(path: Path | str, assignment: dict, expected_agent: str | None = None) -> tuple[dict, str]:
     """Read, parse, and validate a structured handoff directly from a worker's handoff file."""
+    data = _load_handoff_file(path, assignment, expected_agent)
+    _validate_handoff_dict(data, assignment, expected_agent)
+    canonical = "FLEET_HANDOFF: " + json.dumps(data, sort_keys=True)
+    return data, canonical
+
+
+def _load_handoff_file(path: Path | str, assignment: dict, expected_agent: str | None = None):
+    """Read and decode a handoff file for the current turn, without judging its content."""
     p = Path(path)
     if expected_agent is not None:
         expected_filename = f"handoff-{expected_agent}.json"
@@ -2798,20 +2837,43 @@ def parse_handoff_file(path: Path | str, assignment: dict, expected_agent: str |
         payload = stripped
 
     try:
-        data = json.loads(payload)
+        return json.loads(payload)
     except json.JSONDecodeError as e:
         raise SystemExit(f"completion refused: invalid FLEET_HANDOFF JSON ({e}); locks retained") from e
 
-    _validate_handoff_dict(data, assignment, expected_agent)
-    canonical = "FLEET_HANDOFF: " + json.dumps(data, sort_keys=True)
-    return data, canonical
+
+HANDOFF_LINE_RE = re.compile(rf"(?m)^[ \t]*(?:•[ \t]+)?{re.escape(HANDOFF_MARKER)}")
 
 
-def parse_handoff(text: str, assignment: dict) -> tuple[dict, str]:
-    """Parse and validate the final structured handoff before freeing ownership."""
-    markers = list(re.finditer(
-        rf"(?m)^[ \t]*(?:•[ \t]+)?{re.escape(HANDOFF_MARKER)}", text
-    ))
+def handoff_digest(decoded) -> str:
+    """Identity of a decoded handoff, used to recognise one already on screen at prompt time."""
+    return hashlib.sha256(json.dumps(decoded, sort_keys=True, default=str).encode("utf-8")).hexdigest()[:32]
+
+
+def handoff_blocker(decoded) -> str | None:
+    """The reason a worker gave for stopping short, when its handoff says it is blocked.
+
+    A handoff whose status is not completed, or that lists blockers, is a deliberate end of
+    turn rather than missing evidence; the first blocker is what the lead needs to read.
+    """
+    if not isinstance(decoded, dict):
+        return None
+    blockers = decoded.get("blockers")
+    if isinstance(blockers, list) and blockers:
+        first = blockers[0]
+        return first if isinstance(first, str) else json.dumps(first, sort_keys=True)
+    status = decoded.get("status")
+    if status is not None and status not in ("completed", "done"):
+        return f"handoff status {status!r}"
+    return None
+
+
+def _scrape_pane_handoff(text: str) -> tuple[object, str, str]:
+    """Decode the last line-level FLEET_HANDOFF in pane text, without validating it.
+
+    Returns (decoded, payload, trailing prose). Raises SystemExit when absent or not JSON.
+    """
+    markers = list(HANDOFF_LINE_RE.finditer(text))
     if not markers:
         raise SystemExit("completion refused: missing `FLEET_HANDOFF: {json}`; locks retained")
     # Pane history can contain failed/old attempts. Only the last line-level
@@ -2836,6 +2898,23 @@ def parse_handoff(text: str, assignment: dict) -> tuple[dict, str]:
         raise SystemExit(
             f"completion refused: invalid FLEET_HANDOFF JSON ({last_error}); locks retained"
         )
+    return decoded, payload, trailing
+
+
+def _refuse_stale_pane_handoff(decoded, assignment: dict):
+    """A handoff already on screen when the current task was submitted belongs to the prior turn."""
+    stale = (assignment or {}).get("stale_handoff_digest")
+    if stale and handoff_digest(decoded) == stale:
+        raise SystemExit(
+            "completion refused: pane FLEET_HANDOFF predates the current task (it was already "
+            "on screen when the task was submitted); locks retained"
+        )
+
+
+def parse_handoff(text: str, assignment: dict) -> tuple[dict, str]:
+    """Parse and validate the final structured handoff before freeing ownership."""
+    decoded, payload, trailing = _scrape_pane_handoff(text)
+    _refuse_stale_pane_handoff(decoded, assignment)
     handoff = decoded
     _validate_handoff_dict(handoff, assignment)
     if trailing:
@@ -2851,37 +2930,125 @@ def parse_handoff(text: str, assignment: dict) -> tuple[dict, str]:
     return handoff, canonical
 
 
-def has_completion_evidence(name: str, session: str | None = None, max_chars: int = DEFAULT_MAX_HANDOFF_CHARS) -> bool:
-    """Check if structured completion evidence exists for the agent and is within cap."""
+def _read_handoff_window(name: str, session: str | None, lines: int = 100) -> str:
+    """The pane tail in which completion evidence is looked for; empty when unreadable."""
+    try:
+        return read_text(name, session, lines=lines, source="recent-unwrapped")
+    except (SystemExit, Exception):
+        try:
+            return read_text(name, session, lines=lines, source="visible")
+        except (SystemExit, Exception):
+            return ""
+
+
+def visible_handoff_digest(name: str, session: str | None = None) -> str | None:
+    """Digest of the FLEET_HANDOFF on screen right now, recorded before a new task is sent.
+
+    Pane evidence carries no timestamp, so a handoff from the previous turn would still read
+    as completion of the next one. Remembering which handoff was already visible lets a
+    re-prompted pane be judged only on a handoff it printed afterwards.
+    """
+    txt = _read_handoff_window(name, session)
+    if not txt or HANDOFF_MARKER not in txt:
+        return None
+    try:
+        decoded, _, _ = _scrape_pane_handoff(txt)
+    except (SystemExit, Exception):
+        return None
+    return handoff_digest(decoded)
+
+
+def completion_evidence(name: str, session: str | None = None,
+                        max_chars: int = DEFAULT_MAX_HANDOFF_CHARS) -> dict:
+    """Judge the current turn's handoff: {"ok", "source": "file"|"pane"|None, "blocker"}.
+
+    `blocker` is set when the worker handed off on purpose as blocked (status other than
+    completed, or blockers listed); such a handoff is never accepted as completion.
+    """
     assignment = get_assignment(name, session)
+    blocker = None
     for hf in (handoff_path(name, session),
                repo_handoff_path(name, (assignment or {}).get("cwd"))):
         if hf is None or not hf.is_file():
             continue
         try:
-            data, canonical = parse_handoff_file(hf, assignment, expected_agent=name)
-            if data and len(canonical) <= max_chars:
-                return True
+            data = _load_handoff_file(hf, assignment, expected_agent=name)
         except (SystemExit, Exception):
-            pass
-    try:
-        txt = read_text(name, session, lines=100, source="recent-unwrapped")
-    except (SystemExit, Exception):
+            continue
+        if (why := handoff_blocker(data)):
+            blocker = blocker or why
+            continue
         try:
-            txt = read_text(name, session, lines=100, source="visible")
+            _validate_handoff_dict(data, assignment, expected_agent=name)
         except (SystemExit, Exception):
-            txt = ""
+            continue
+        if len("FLEET_HANDOFF: " + json.dumps(data, sort_keys=True)) <= max_chars:
+            return {"ok": True, "source": "file", "blocker": None}
+    txt = _read_handoff_window(name, session)
     if txt and HANDOFF_MARKER in txt:
         try:
-            data, canonical = parse_handoff(txt, assignment)
-            if data and len(canonical) <= max_chars:
-                return True
+            decoded, _, _ = _scrape_pane_handoff(txt)
+            _refuse_stale_pane_handoff(decoded, assignment)
         except (SystemExit, Exception):
-            pass
-    return False
+            decoded = None
+        if decoded is not None:
+            if (why := handoff_blocker(decoded)):
+                blocker = blocker or why
+            else:
+                try:
+                    data, canonical = parse_handoff(txt, assignment)
+                    if data and len(canonical) <= max_chars:
+                        return {"ok": True, "source": "pane", "blocker": None}
+                except (SystemExit, Exception):
+                    pass
+    return {"ok": False, "source": None, "blocker": blocker}
+
+
+def has_completion_evidence(name: str, session: str | None = None, max_chars: int = DEFAULT_MAX_HANDOFF_CHARS) -> bool:
+    """Check if structured completion evidence exists for the agent and is within cap."""
+    return completion_evidence(name, session, max_chars)["ok"]
 
 
 # ---------------- commands ----------------
+
+SPAWN_FAILURE_PANE_LINES = 40
+
+
+def _record_spawn_failure(name: str, session: str | None, pane_id: str, exc: BaseException):
+    """Keep the evidence a failed spawn is about to destroy.
+
+    The pane is closed right after this, so whatever it showed (a dialog the readiness
+    check misread, an auth banner, a hung CLI) is otherwise lost. Capture the visible
+    screen into stderr and an outbox event before the cleanup runs. Never raises.
+    """
+    pane_text = None
+    try:
+        pane_text = read_text(name, session, SPAWN_FAILURE_PANE_LINES, "visible")
+    except (Exception, SystemExit):
+        pane_text = None
+    if not pane_text:
+        # The agent may never have registered; the pane itself is still readable.
+        try:
+            d = herdr(["pane", "read", pane_id, "--source", "visible",
+                       "--lines", str(SPAWN_FAILURE_PANE_LINES)], session)
+            raw = d if isinstance(d, str) else (
+                d.get("result", {}).get("read", {}).get("text") if isinstance(d, dict) else None)
+            pane_text = sanitize_pane_text(raw) if isinstance(raw, str) else None
+        except (Exception, SystemExit):
+            pane_text = None
+    try:
+        event = emit_event(session, name, "spawn_failed", {
+            "error": str(exc) or type(exc).__name__,
+            "pane_id": pane_id,
+            "pane_text": pane_text,
+        })
+    except (Exception, SystemExit):
+        event = None
+    shown = pane_text if pane_text and pane_text.strip() else "(pane unreadable or empty)"
+    print(f"spawn of {name} failed: {exc}\n--- visible pane {pane_id} before close ---\n"
+          f"{shown}\n--- end pane ---" + (f"\nevent: {event}" if event else ""),
+          file=sys.stderr)
+
 
 def cmd_spawn(a):
     """Create a dedicated tab, start the CLI in it, drop the stray pane.
@@ -2925,6 +3092,7 @@ def cmd_spawn(a):
     tab_id = None
     pane_id = None
     workspace_id = None
+    task_confirmed = None
     try:
         existing_assignment = get_assignment(a.name, a.session)
         existing_ws = existing_assignment.get("workspace") if existing_assignment else None
@@ -2963,17 +3131,26 @@ def cmd_spawn(a):
                           a.session)
                 except (Exception, SystemExit):
                     pass
-                # _submit returning False means every path (agent prompt, then the pane
-                # fallback) failed. Spawning a pane that never receives its task leaves a
-                # worker holding leases with nothing to do, so fail the spawn instead.
-                if not _submit(a.name, a.session, initial, task=a.task):
-                    raise RuntimeError(f"agent {a.name} did not accept its initial task")
+                # _submit returning False means no path could *confirm* delivery by reading
+                # the task back from the pane. That is not proof it was dropped: a task whose
+                # first command blocks quietly (a long poll) shows no marker either. Killing
+                # the pane would destroy a worker that may be running, so keep it alive and
+                # report the task unconfirmed; `status` flags a pane that still shows only
+                # its startup banner as a delivery-error.
+                task_confirmed = _submit(a.name, a.session, initial, task=a.task)
+                if not task_confirmed:
+                    print(f"warning: agent {a.name} spawned but delivery of its initial task "
+                          f"could not be confirmed from the pane; the pane and its leases were "
+                          f"kept. Check `read`/`status` before re-prompting with "
+                          f"`prompt --related`.", file=sys.stderr)
         else:
             set_task(a.name, None, a.session, a.group, leased, a.read_only,
                      "plan" if a.read_only else a.approval_mode,
                      workspace=workspace_id, model=model, profile=profile, cwd=a.cwd,
                      bead_id=getattr(a, "bead_id", None))
-    except BaseException:
+    except BaseException as exc:
+        if pane_id:
+            _record_spawn_failure(a.name, a.session, pane_id, exc)
         if a.task:
             try:
                 remove_assignment(a.name, a.session)
@@ -3001,6 +3178,10 @@ def cmd_spawn(a):
     if model:
         result["model"] = model
     result["profile"] = profile
+    if task_confirmed is not None:
+        result["task_confirmed"] = task_confirmed
+        if not task_confirmed:
+            result["warning"] = "initial task delivery unconfirmed; pane and leases kept"
     if agy_allowlist is not None:
         result["agy_allowlist"] = agy_allowlist
     spawn_record = {"name": a.name, "agent": a.cli, "cli": a.cli, "model": model,
@@ -3013,6 +3194,23 @@ def cmd_spawn(a):
     if getattr(a, "json", False) or not getattr(a, "quiet", False):
         print(json.dumps(result))
     return result
+
+
+def _without_handoff_payload(text: str) -> str:
+    """Pane text with the last FLEET_HANDOFF line and its JSON body removed."""
+    if not isinstance(text, str) or HANDOFF_MARKER not in text:
+        return text
+    markers = list(HANDOFF_LINE_RE.finditer(text))
+    if not markers:
+        return text
+    start = text.rfind("\n", 0, markers[-1].start()) + 1
+    lines = text[start:].splitlines(keepends=True)
+    cut = 1
+    for i, line in enumerate(lines[:80]):
+        if line.rstrip().endswith("}"):
+            cut = i + 1
+            break
+    return text[:start] + "".join(lines[cut:])
 
 
 def fleet_rows(session=None, settle_samples: int | None = None) -> list[dict]:
@@ -3039,33 +3237,56 @@ def fleet_rows(session=None, settle_samples: int | None = None) -> list[dict]:
         raw_state = ag.get("agent_status")
         health = health_of(txt) or "ok"
         is_parked = assignment.get("lifecycle") == "parked"
+        # A completed assignment whose pane outlived `complete` (pane close failed) is
+        # terminal: its handoff is already recorded, so never report it done again.
+        is_completed = assignment.get("lifecycle") == "completed"
 
         has_handoff = False
-        if not is_parked and not pend and health == "ok":
-            has_handoff = has_completion_evidence(name, session)
+        handoff_blocked = None
+        file_handoff = False
+        if not is_parked and not is_completed and not pend and health == "ok":
+            evidence = completion_evidence(name, session)
+            has_handoff = evidence["ok"]
+            file_handoff = evidence["source"] == "file"
+            handoff_blocked = evidence["blocker"]
+        # A handoff JSON payload can itself contain words like "Running"; judge activity on
+        # the pane around it, never on the evidence the worker printed.
+        foreground = has_foreground_execution(_without_handoff_payload(txt))
 
-        if not is_parked and not pend and health == "ok" and task and not has_handoff and not has_foreground_execution(txt):
+        if not is_parked and not is_completed and not pend and health == "ok" and task and not has_handoff and not foreground:
             if _is_startup_banner_only(txt):
                 health = "delivery-error"
 
         # Determine agent state accurately:
-        # 1. A parked agent is reported as parked.
+        # 1. A parked agent is reported as parked; a completed one as completed.
         # 2. A pane waiting on a prompt or dialog is blocked, never idle or done.
         # 3. An agent with no assigned task is unassigned, never idle or working.
         # 4. An unhealthy agent is blocked.
-        # 5. A completed pane that produced structured handoff evidence is classified as done.
+        # 5. A handoff file for this turn (set aside at every prompt, mtime-checked against
+        #    task_time) is the worker's last act, so it is done whatever scrollback shows.
         # 6. Panes with active foreground execution indicators (spinners, running markers)
-        #    are classified as working, not done.
-        # 7. For done/idle candidate states, require stability across N consecutive samples.
-        # 8. Otherwise use the reported agent status.
+        #    are classified as working, even when a pane-printed handoff is on screen:
+        #    a re-prompted worker inside a long tool call is not done.
+        # 7. A pane that printed handoff evidence for this turn is done; one whose handoff
+        #    declares it blocked is handoff-blocked, with its first blocker as PENDING.
+        # 8. For done/idle candidate states, require stability across N consecutive samples.
+        # 9. Otherwise use the reported agent status.
         if is_parked:
             state = "parked"
-        elif has_handoff:
+        elif is_completed:
+            state = "completed"
+            pend = None
+            cls = None
+        elif file_handoff:
             state = "done"
-        elif has_foreground_execution(txt):
+        elif foreground:
             state = "working"
             pend = None
             cls = None
+        elif has_handoff:
+            state = "done"
+        elif handoff_blocked:
+            state = "handoff-blocked"
         elif pend or health == "trust-prompt":
             state = "blocked"
         elif not task:
@@ -3112,7 +3333,9 @@ def fleet_rows(session=None, settle_samples: int | None = None) -> list[dict]:
                         state = "done"
                         settled_ok = True
                         break
-                    if cur_raw == "working" or has_foreground_execution(cur_txt):
+                    cur_foreground = has_foreground_execution(_without_handoff_payload(cur_txt))
+                    if cur_raw == "working" or cur_foreground:
+                        foreground = cur_foreground
                         raw_state = "working"
                         state = "working"
                         settled_ok = False
@@ -3128,10 +3351,15 @@ def fleet_rows(session=None, settle_samples: int | None = None) -> list[dict]:
 
         revs = assignment.get("reviewed_approvals", [])
 
+        if state == "handoff-blocked" and not pend:
+            pending_text = handoff_blocked[:100]
+        else:
+            pending_text = pend["subject_display"][:100] if pend else None
+
         rows.append({
             "agent": name, "cli": ag.get("agent"), "state": state,
             "health": health,
-            "pending": (pend["subject_display"][:100] if pend else None),
+            "pending": pending_text,
             "pending_digest": (subject_digest(pend["subject"]) if pend and pend.get("subject") else None),
             "kind": (pend["kind"] if pend else None),
             "action": (cls["action"] if cls else None),
@@ -3139,8 +3367,10 @@ def fleet_rows(session=None, settle_samples: int | None = None) -> list[dict]:
             "resources": assignment.get("resources", []),
             "approval_mode": assignment.get("approval_mode"),
             "parked": is_parked,
+            "completed": is_completed,
             "reviewed_approvals": len(revs),
             "has_handoff": has_handoff,
+            "foreground": state == "working" and foreground,
         })
     return rows
 
@@ -3168,12 +3398,13 @@ def renew_fleet_leases(rows: list[dict], session=None) -> list[dict]:
 
 def fleet_actionable(rows: list[dict]) -> bool:
     return any(r["action"] or r["health"] != "ok"
-               or r["state"] in ("blocked", "done", "unassigned", "parked") for r in rows)
+               or r["state"] in ("blocked", "handoff-blocked", "done", "unassigned", "parked")
+               for r in rows)
 
 
 def fleet_terminal(rows: list[dict]) -> bool:
     return bool(rows) and all(
-        r["state"] in ("done", "idle") and r["health"] == "ok" and not r["action"]
+        r["state"] in ("done", "idle", "completed") and r["health"] == "ok" and not r["action"]
         for r in rows
     )
 
@@ -3431,6 +3662,74 @@ def _submit(name, session, text, tries=3, task: str | None = None):
 
 
 
+def _handoff_evidence_paths(agent: str, session: str | None, cwd: str | Path | None) -> list[Path]:
+    """Every file that may hold this agent's handoff evidence for its current turn."""
+    paths = [handoff_path(agent, session)]
+    if (repo_hf := repo_handoff_path(agent, cwd)):
+        paths.append(repo_hf)
+    paths.append(failed_handoff_raw_path(agent, cwd))
+    return paths
+
+
+def _stash_handoff_files(paths: list[Path]) -> list[tuple[Path, Path]]:
+    """Move existing handoff files aside before a new prompt is submitted.
+
+    They must not be visible while the new turn starts (a stale handoff would read as
+    completion of the new work), yet they must survive a failed submission: on failure
+    `_restore_handoff_files` puts them back, on success `_discard_handoff_files` drops them.
+    Moving rather than deleting also guarantees a handoff the worker writes for the new
+    turn is never the file that gets removed.
+    """
+    stashed = []
+    for path in paths:
+        if not path.is_file():
+            continue
+        stash = path.with_name(f"{path.name}.prev")
+        try:
+            os.replace(path, stash)
+        except OSError as e:
+            _restore_handoff_files(stashed)
+            raise StateError(f"cannot set aside handoff file {path}: {e}") from e
+        stashed.append((path, stash))
+    return stashed
+
+
+def _restore_handoff_files(stashed: list[tuple[Path, Path]]) -> list[str]:
+    """Put stashed handoff files back; a file the worker wrote since then wins."""
+    failed = []
+    for path, stash in stashed:
+        try:
+            if path.exists():
+                stash.unlink(missing_ok=True)
+            else:
+                os.replace(stash, path)
+        except OSError:
+            failed.append(str(stash))
+    return failed
+
+
+def _discard_handoff_files(stashed: list[tuple[Path, Path]]):
+    for _, stash in stashed:
+        try:
+            stash.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def _related_task(previous: dict | None, text: str) -> str:
+    """The recorded objective after a related follow-up; a None task means none yet."""
+    prior = ((previous or {}).get("task") or "").strip()
+    return f"{prior}\n\nRelated follow-up:\n{text}" if prior else text
+
+
+def _lifecycle_refusal(command: str, assignment: dict | None) -> str | None:
+    lifecycle = (assignment or {}).get("lifecycle", "active")
+    if lifecycle in TERMINAL_LIFECYCLES:
+        return (f"{command} refused: assignment is {lifecycle} (terminal); "
+                f"spawn a new worker for further work")
+    return None
+
+
 def cmd_prompt(a):
     """Assign work. The task text is recorded so later prompts from this agent
     are judged against its objective, not just the keystroke in front of us."""
@@ -3441,6 +3740,8 @@ def cmd_prompt(a):
                          indent=2))
         sys.exit(2)
     previous = get_assignment(a.agent, a.session)
+    if (refusal := _lifecycle_refusal("prompt", previous)):
+        raise SystemExit(refusal)
     if previous and previous.get("lifecycle", "active") != "active":
         raise SystemExit("prompt refused: assignment is not active; use reset after resolving it")
     if previous.get("task") and not a.related:
@@ -3472,24 +3773,36 @@ def cmd_prompt(a):
         leased = acquire_assignment(a.agent, group, resources, read_only, a.lock_timeout)
         acquired_by_this_call = list(leased)
 
+    stashed = []
     try:
-        handoff_path(a.agent, a.session).unlink(missing_ok=True)
-        if (stale_repo_hf := repo_handoff_path(a.agent, (previous or {}).get("cwd"))):
-            stale_repo_hf.unlink(missing_ok=True)
-        if (stale_raw := failed_handoff_raw_path(a.agent, (previous or {}).get("cwd"))):
-            stale_raw.unlink(missing_ok=True)
         contract = task_contract(a.text, leased, read_only, agent=a.agent, session=a.session,
                                  cwd=(previous or {}).get("cwd"))
+        stashed = _stash_handoff_files(
+            _handoff_evidence_paths(a.agent, a.session, (previous or {}).get("cwd")))
+        stale_digest = visible_handoff_digest(a.agent, a.session)
         ok = _submit(a.agent, a.session, contract, task=a.text)
         if not ok:
-            raise SystemExit("prompt submission could not be verified; assignment state was not changed")
-        recorded_task = (previous.get("task", "") + "\n\nRelated follow-up:\n" + a.text).strip() \
-            if previous else a.text
+            unrestored = _restore_handoff_files(stashed)
+            stashed = []
+            detail = (f"; could not restore {', '.join(unrestored)}" if unrestored
+                      else "; handoff files were restored")
+            raise SystemExit(
+                "prompt submission could not be verified: the recorded task was not changed"
+                + (", newly acquired leases were released" if acquired_by_this_call else "")
+                + detail
+                + ". The text may still be queued in the pane; read it before retrying."
+            )
+        _discard_handoff_files(stashed)
+        stashed = []
+        recorded_task = _related_task(previous, a.text) if previous else a.text
         set_task(a.agent, recorded_task, a.session, group, leased, read_only,
                  previous.get("approval_mode") if previous else None,
                  cwd=previous.get("cwd") if previous else None,
-                 workspace=previous.get("workspace") if previous else None)
+                 workspace=previous.get("workspace") if previous else None,
+                 stale_handoff_digest=stale_digest)
     except BaseException:
+        if stashed:
+            _restore_handoff_files(stashed)
         if group and acquired_by_this_call:
             release_resources(a.agent, group, acquired_by_this_call)
         raise
@@ -3655,30 +3968,87 @@ def cmd_approve(a):
     }, indent=2))
 
 
-def cmd_cancel(a):
+def _cross_session_hint(agent: str, session: str | None):
+    other = find_agent_other_session(agent, session)
+    if other:
+        raise SystemExit(
+            f"agent '{agent}' not found in session '{session or 'default'}', but found in session '{other}'; "
+            f"pass --session {other} --allow-cross-session"
+        )
+
+
+def _handoff_evidence_present(agent: str, session: str | None, text: str,
+                              assignment: dict | None) -> bool:
+    """A worker that has written or printed its handoff is finishing, not stuck."""
+    if text and HANDOFF_MARKER in text:
+        return True
+    for path in (handoff_path(agent, session),
+                 repo_handoff_path(agent, (assignment or {}).get("cwd"))):
+        if path is not None and path.is_file():
+            return True
+    return False
+
+
+def _escape_decision(agent: str, session: str | None) -> dict:
+    """Read the pane once and say whether an Esc would dismiss a dialog or interrupt a turn.
+
+    Esc on a pane with no dialog aborts whatever the agent is doing -- often the turn that
+    was about to emit FLEET_HANDOFF -- so callers send it only when `dialog` is set, unless
+    the lead explicitly asked to interrupt.
+    """
     try:
-        herdr(["agent", "send-keys", a.agent, "esc"], a.session, check=True)
+        text = read_text(agent, session, 45)
+        readable = True
     except (Exception, SystemExit):
-        other = find_agent_other_session(a.agent, a.session)
-        if other:
-            raise SystemExit(
-                f"agent '{a.agent}' not found in session '{a.session or 'default'}', but found in session '{other}'; "
-                f"pass --session {other} --allow-cross-session"
-            )
-    print(json.dumps({"agent": a.agent, "cancelled": True}))
+        text, readable = "", False
+    pend = pending_prompt(text) if text else None
+    return {"text": text, "pending": pend, "dialog": pend is not None, "readable": readable}
+
+
+def _require_live_agent(agent: str, session: str | None, decision: dict):
+    if decision["text"] or find_agent(agent, session):
+        return
+    _cross_session_hint(agent, session)
+    raise SystemExit(f"agent '{agent}' not found in session '{session or 'default'}'")
+
+
+def _send_esc(agent: str, session: str | None):
+    try:
+        herdr(["agent", "send-keys", agent, "esc"], session, check=True)
+    except (Exception, SystemExit):
+        _cross_session_hint(agent, session)
+        raise
+
+
+def _refuse_interrupt(agent: str, command: str, decision: dict):
+    why = ("pane could not be read" if not decision["readable"]
+           else "no pending dialog; the agent is mid-turn")
+    print(json.dumps({
+        "agent": agent, command: False, "esc_sent": False,
+        "refused": f"{why}; Esc would interrupt its current work",
+        "hint": "redirect with `prompt --related`, or pass --interrupt to abort the turn deliberately",
+    }, indent=2))
+    sys.exit(2)
+
+
+def cmd_cancel(a):
+    """Dismiss a pending dialog with Esc. A working pane is never interrupted implicitly."""
+    decision = _escape_decision(a.agent, a.session)
+    _require_live_agent(a.agent, a.session, decision)
+    if not decision["dialog"] and not getattr(a, "interrupt", False):
+        _refuse_interrupt(a.agent, "cancelled", decision)
+    _send_esc(a.agent, a.session)
+    print(json.dumps({"agent": a.agent, "cancelled": True, "esc_sent": True,
+                      "interrupted": not decision["dialog"]}))
 
 
 def cmd_reject(a):
     """Reject a pending dialog/permission and either send instructions on how to continue or halt/park the agent."""
-    try:
-        herdr(["agent", "send-keys", a.agent, "esc"], a.session, check=True)
-    except (Exception, SystemExit):
-        other = find_agent_other_session(a.agent, a.session)
-        if other:
-            raise SystemExit(
-                f"agent '{a.agent}' not found in session '{a.session or 'default'}', but found in session '{other}'; "
-                f"pass --session {other} --allow-cross-session"
-            )
+    decision = _escape_decision(a.agent, a.session)
+    _require_live_agent(a.agent, a.session, decision)
+    if not decision["dialog"] and not getattr(a, "interrupt", False):
+        _refuse_interrupt(a.agent, "rejected", decision)
+    _send_esc(a.agent, a.session)
 
     time.sleep(0.5)
 
@@ -3695,19 +4065,159 @@ def cmd_reject(a):
         )
         return cmd_park(park_args)
 
-    prompt_text = getattr(a, "prompt", None) or (
+    custom_prompt = getattr(a, "prompt", None)
+    prompt_text = custom_prompt or (
         f"The requested operation or permission was rejected ({reason}). "
         "Please continue your assigned work using an alternative approach that does not require this action, "
         "or emit your final structured FLEET_HANDOFF if no alternative is available."
     )
 
+    previous = get_assignment(a.agent, a.session)
+    record = bool(custom_prompt) and bool(previous) and previous.get("lifecycle", "active") == "active"
+    stashed = (_stash_handoff_files(_handoff_evidence_paths(a.agent, a.session, previous.get("cwd")))
+               if record else [])
+    stale_digest = visible_handoff_digest(a.agent, a.session)
     submitted = _submit(a.agent, a.session, prompt_text, tries=2)
+    task_recorded = False
+    if submitted and record:
+        _discard_handoff_files(stashed)
+        set_task(a.agent, _related_task(previous, custom_prompt), a.session,
+                 previous.get("group"), previous.get("resources", []),
+                 previous.get("read_only", False), previous.get("approval_mode"),
+                 workspace=previous.get("workspace"), cwd=previous.get("cwd"),
+                 stale_handoff_digest=stale_digest)
+        task_recorded = True
+    elif stashed:
+        _restore_handoff_files(stashed)
+    if submitted and not record and stale_digest and previous \
+            and previous.get("lifecycle", "active") == "active":
+        # The continuation turn must also print a fresh handoff to count as done.
+        try:
+            annotate_assignment(a.agent, a.session, stale_handoff_digest=stale_digest)
+        except (StateError, OSError):
+            pass
     print(json.dumps({
         "agent": a.agent,
         "rejected": True,
         "reason": reason,
+        "esc_sent": True,
         "prompt_submitted": submitted,
+        "task_recorded": task_recorded,
     }, indent=2))
+    if not submitted:
+        print(f"error: continuation prompt for {a.agent} could not be verified; the dialog was "
+              f"dismissed but the agent may be idle at an 'interrupted' prompt. Read the pane, "
+              f"then use `prompt --related` or `park`.", file=sys.stderr)
+        sys.exit(1)
+
+
+def _enforce_handoff_cap(handoff: str, max_chars: int, source: str):
+    if len(handoff) > max_chars:
+        raise SystemExit(
+            f"completion refused: structured handoff exceeds {max_chars} characters "
+            f"({len(handoff)} measured from {source}); raise --max-chars or shrink it; locks retained"
+        )
+
+
+def pane_child_processes(pane_id: str, session: str | None = None) -> list[dict] | None:
+    """Live processes that closing this pane would take down, other than the agent CLI itself.
+
+    Closing a pane hangs up its terminal, so a server a worker started in the background
+    from that pane dies with it. Herdr reports the pane's shell pid and the foreground
+    process group (the agent CLI and the helpers it owns); everything else descending from
+    the shell, or still attached to its terminal, is a process the worker left behind.
+
+    Returns None when this cannot be determined (Herdr gives no shell pid, or `ps` fails).
+    """
+    try:
+        d = herdr(["pane", "process-info", "--pane", pane_id], session)
+    except (Exception, SystemExit):
+        return None
+    result = d.get("result") if isinstance(d, dict) else None
+    info = result.get("process_info") if isinstance(result, dict) else None
+    if not isinstance(info, dict):
+        return None
+    shell_pid = info.get("shell_pid")
+    if type(shell_pid) is not int or shell_pid <= 1:
+        return None
+    fg_pgid = info.get("foreground_process_group_id")
+    try:
+        out = subprocess.run(["ps", "-A", "-o", "pid=,ppid=,pgid=,tty=,command="],
+                             capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if out.returncode != 0:
+        return None
+    rows = {}
+    for line in out.stdout.splitlines():
+        parts = line.split(None, 4)
+        if len(parts) < 4:
+            continue
+        try:
+            pid, ppid, pgid = int(parts[0]), int(parts[1]), int(parts[2])
+        except ValueError:
+            continue
+        rows[pid] = (ppid, pgid, parts[3], parts[4] if len(parts) > 4 else "")
+    if shell_pid not in rows:
+        return None
+    children: dict[int, list[int]] = {}
+    for pid, row in rows.items():
+        children.setdefault(row[0], []).append(pid)
+    found: set[int] = set()
+    stack = [shell_pid]
+    while stack:
+        for child in children.get(stack.pop(), []):
+            if child not in found:
+                found.add(child)
+                stack.append(child)
+    shell_tty = rows[shell_pid][2]
+    if shell_tty not in ("", "?", "??", "-"):
+        # A background job whose parent exited is reparented away from the shell but
+        # keeps the pane's terminal, and so still receives its hangup.
+        found |= {pid for pid, row in rows.items() if row[2] == shell_tty}
+    # The runner itself (and the shell command that launched it) may live in this pane.
+    own = set()
+    cursor = os.getpid()
+    while cursor in rows and cursor not in own and cursor > 1:
+        own.add(cursor)
+        cursor = rows[cursor][0]
+    me = os.getpid()
+    live = []
+    for pid in sorted(found):
+        ppid, pgid, _, command = rows[pid]
+        if pid == shell_pid or pid in own or ppid == me:
+            continue
+        if type(fg_pgid) is int and pgid == fg_pgid:
+            continue
+        live.append({"pid": pid, "command": command[:200]})
+    return live
+
+
+def _refuse_if_pane_has_children(command: str, agent: str, session: str | None,
+                                 allow: bool) -> None:
+    """Exit 2 before a pane close would silently kill processes the worker left running."""
+    if allow:
+        return
+    ag = find_agent(agent, session)
+    pane_id = (ag or {}).get("pane_id")
+    if not pane_id:
+        return
+    live = pane_child_processes(pane_id, session)
+    if live is None:
+        print(f"note: {command}: could not list processes started from pane {pane_id}; "
+              f"closing it without the background-process check", file=sys.stderr)
+        return
+    if not live:
+        return
+    print(json.dumps({"agent": agent, command: False,
+                      "refused": "pane has live background processes that closing it would kill",
+                      "processes": live}, indent=2))
+    listing = "\n".join(f"  {p['pid']} {p['command']}" for p in live)
+    print(f"{command} refused: closing {agent}'s pane would kill these processes it started:\n"
+          f"{listing}\nStop them, or restart long-lived services detached (nohup/setsid) or "
+          f"from the lead, then retry; pass --allow-kill-children to close the pane anyway. "
+          f"Locks and state retained.", file=sys.stderr)
+    sys.exit(2)
 
 
 def cmd_complete(a):
@@ -3717,19 +4227,21 @@ def cmd_complete(a):
         raise SystemExit(f"completion refused: no recorded assignment for {a.agent}")
     if assignment.get("lifecycle", "active") != "active":
         raise SystemExit("completion refused: assignment is not active; locks/state retained")
-    try:
-        visible = read_text(a.agent, a.session, min(a.lines, 45), "visible")
-    except SystemExit:
-        visible = None
-    if visible:
-        health = health_of(visible)
-        if health:
-            raise SystemExit(
-                f"completion refused: agent health is {health}; resolve the prompt/error first; locks retained"
-            )
-
     accepted_repo_handoff = None
     handoff_override = getattr(a, "handoff", None)
+    # With a lead-supplied handoff the pane is not evidence: a stale, oversized or
+    # error-bannered pane must not veto the override, so it is not scraped at all.
+    if not handoff_override:
+        try:
+            visible = read_text(a.agent, a.session, min(a.lines, 45), "visible")
+        except SystemExit:
+            visible = None
+        if visible:
+            health = health_of(visible)
+            if health:
+                raise SystemExit(
+                    f"completion refused: agent health is {health}; resolve the prompt/error first; locks retained"
+                )
 
     if handoff_override:
         raw_override = handoff_override.strip()
@@ -3762,10 +4274,16 @@ def cmd_complete(a):
 
         _validate_handoff_dict(handoff_data, assignment, expected_agent=a.agent)
         handoff = "FLEET_HANDOFF: " + json.dumps(handoff_data, sort_keys=True)
+        handoff_source = ("--handoff override file " + raw_override[1:]
+                          if raw_override.startswith("@") else "--handoff override (inline)")
+        # The cap applies to the override as supplied; reviewed approvals appended below are
+        # runner records, not part of what the lead asked to be measured.
+        _enforce_handoff_cap(handoff, a.max_chars, handoff_source)
     else:
         hf = handoff_path(a.agent, a.session)
         repo_hf = repo_handoff_path(a.agent, assignment.get("cwd"))
         if hf.is_file():
+            handoff_source = f"handoff file {hf}"
             try:
                 handoff_data, handoff = parse_handoff_file(hf, assignment, expected_agent=a.agent)
             except SystemExit:
@@ -3779,6 +4297,7 @@ def cmd_complete(a):
                 _persist_failed_handoff_raw(a.agent, raw_pane, assignment.get("cwd"))
                 raise
         elif repo_hf is not None and repo_hf.is_file():
+            handoff_source = f"in-repo handoff file {repo_hf}"
             try:
                 handoff_data, handoff = parse_handoff_file(repo_hf, assignment, expected_agent=a.agent)
                 accepted_repo_handoff = repo_hf
@@ -3793,6 +4312,7 @@ def cmd_complete(a):
                 _persist_failed_handoff_raw(a.agent, raw_pane, assignment.get("cwd"))
                 raise
         else:
+            handoff_source = f"pane FLEET_HANDOFF (last {a.lines} lines)"
             try:
                 text = read_text(a.agent, a.session, a.lines, "recent-unwrapped")
             except SystemExit:
@@ -3813,8 +4333,11 @@ def cmd_complete(a):
         handoff_data["reviewed_approvals"] = combined
         handoff = "FLEET_HANDOFF: " + json.dumps(handoff_data, sort_keys=True)
 
-    if len(handoff) > a.max_chars:
-        raise SystemExit(f"completion refused: structured handoff exceeds {a.max_chars} characters")
+    if not handoff_override:
+        _enforce_handoff_cap(handoff, a.max_chars, handoff_source)
+
+    _refuse_if_pane_has_children("completed", a.agent, a.session,
+                                 getattr(a, "allow_kill_children", False))
 
     handoff_records_path = state_path("handoffs.json", a.session)
     def record_handoff(data):
@@ -3901,6 +4424,8 @@ def cmd_reset(a):
     cls = check_task_text(a.task, load_policy())
     if cls["risk"] == "high":
         raise SystemExit(f"reset refused: new task matches deny rule {cls['rule']}")
+    _refuse_if_pane_has_children("reset", a.agent, a.session,
+                                 getattr(a, "allow_kill_children", False))
     handoff_path(a.agent, a.session).unlink(missing_ok=True)
     stale_repo_handoff = repo_handoff_path(
         a.agent, getattr(a, "cwd", None) or (old.get("cwd") if old else None))
@@ -3984,42 +4509,60 @@ def cmd_park(a):
     Releasing the parked agent's locks is the whole point: a parked agent that
     keeps its leases deadlocks every task queued behind it.
     """
-    if a.reason:
-        txt = ""
-        pend = None
-    else:
+    assignment = get_assignment(a.agent, a.session)
+    lifecycle = assignment.get("lifecycle", "active") if assignment else None
+    if not assignment or lifecycle in TERMINAL_LIFECYCLES:
+        why = ("no recorded assignment" if not assignment
+               else f"assignment is {lifecycle} (terminal)")
+        print(json.dumps({"agent": a.agent, "parked": False,
+                          "refused": f"nothing to park: {why}"}, indent=2))
+        sys.exit(2)
+
+    # The pane is read when the escalation needs its dialog, and whenever Esc is on the
+    # table, because Esc is only safe against a dialog.
+    txt, pend = "", None
+    if not a.reason or a.cancel:
         try:
             txt = read_text(a.agent, a.session, 45)
-            pend = pending_prompt(txt)
-        except SystemExit:
-            txt = ""
-            pend = None
+            pend = pending_prompt(txt) if txt else None
+        except (Exception, SystemExit):
+            txt, pend = "", None
 
-    pend = pend or {
-        "subject": a.reason or "(no prompt captured)",
-        "subject_display": a.reason or "(no prompt captured)", "options": []}
-    assignment = get_assignment(a.agent, a.session)
-    if not assignment:
-        assignment = {"task": None, "resources": [], "group": a.group, "cwd": None, "read_only": False}
     task = assignment.get("task")
     read_only = assignment.get("read_only", False)
     group = a.group or assignment.get("group")
+    esc_sent = False
+    esc_skipped = None
     if a.cancel:
-        try:
-            herdr(["agent", "send-keys", a.agent, "esc"], a.session, check=True)
-        except (Exception, SystemExit):
-            pass
+        if _handoff_evidence_present(a.agent, a.session, txt, assignment):
+            esc_skipped = "handoff evidence present; the worker is finishing, not stuck"
+        elif pend is None and not getattr(a, "interrupt", False):
+            esc_skipped = ("no pending dialog; Esc would interrupt the agent's current turn "
+                           "(pass --interrupt to abort it deliberately)")
+        else:
+            try:
+                herdr(["agent", "send-keys", a.agent, "esc"], a.session, check=True)
+                esc_sent = True
+            except (Exception, SystemExit) as e:
+                esc_skipped = f"Esc failed: {e}"
+
+    if a.reason:
+        reason = a.reason
+    elif pend is None:
+        reason = "parked by lead (no pending dialog)"
+    elif pend.get("kind") == "trust":
+        reason = decide_trust_dialog(txt, assignment.get("cwd"))["why"]
+    else:
+        reason = classify_text(pend["subject"], load_policy(), task, read_only=read_only,
+                               kind=pend.get("kind"))["why"]
+    subject = pend["subject_display"] if pend else (a.reason or "(no pending dialog)")
 
     entry = {
         "agent": a.agent, "group": group,
-        "subject": pend["subject_display"][:500],
+        "subject": subject[:500],
         "task": task,
-        "options": pend.get("options", []),
-        "reason": a.reason or (
-            decide_trust_dialog(txt, assignment.get("cwd"))["why"]
-            if pend and pend.get("kind") == "trust"
-            else classify_text(pend["subject"], load_policy(), task, read_only=read_only, kind=pend.get("kind"))["why"]
-        ),
+        "options": (pend or {}).get("options", []),
+        "reason": reason,
         "freed_locks": [],
         "at": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
@@ -4031,9 +4574,8 @@ def cmd_park(a):
         old_tasks = copy.deepcopy(tasks)
         old_items = copy.deepcopy(items)
         current = tasks.get(a.agent)
-        if not isinstance(current, dict):
-            current = {"task": None, "resources": [], "group": group, "read_only": False, "cwd": None}
-            tasks[a.agent] = current
+        if not isinstance(current, dict) or current.get("lifecycle", "active") in TERMINAL_LIFECYCLES:
+            raise SystemExit(f"nothing to park: assignment for {a.agent} changed concurrently")
         current["lifecycle"] = "parked"
         current["parked_resources"] = list(current.get("resources", []))
         current["resources"] = []
@@ -4053,8 +4595,13 @@ def cmd_park(a):
             _save_json_unlocked(tasks_file, old_tasks)
             _save_json_unlocked(esc_file, old_items)
             raise
-    print(json.dumps({"parked": a.agent, "freed_locks": freed.get("freed", []),
-                      "escalations": len(items), "file": str(esc_file)}, indent=2))
+    out = {"parked": a.agent, "freed_locks": freed.get("freed", []),
+           "escalations": len(items), "file": str(esc_file)}
+    if a.cancel:
+        out["esc_sent"] = esc_sent
+        if esc_skipped:
+            out["esc_skipped"] = esc_skipped
+    print(json.dumps(out, indent=2))
 
 
 def cmd_notify(a):
@@ -4407,6 +4954,8 @@ def main():
 
     p = sub.add_parser("cancel", help="Send Esc to cancel a pending prompt")
     p.add_argument("--agent", required=True, type=agent_id)
+    p.add_argument("--interrupt", action="store_true",
+                   help="send Esc even with no pending dialog, aborting the agent's current turn")
     p.set_defaults(fn=cmd_cancel)
 
     p = sub.add_parser("reject", help="Reject a pending prompt with Esc and instruct worker on continuation or halt")
@@ -4417,6 +4966,9 @@ def main():
                    help="Halt/park the worker after rejection instead of submitting a continuation prompt")
     p.add_argument("--group", type=lambda x: scoped_id(x, "resource group"), default=None,
                    help="Resource group to use if halting/parking")
+    p.add_argument("--interrupt", action="store_true",
+                   help="send Esc even with no pending dialog, aborting the agent's current turn; "
+                        "prefer `prompt --related` to redirect a working agent")
     p.set_defaults(fn=cmd_reject)
 
     p = sub.add_parser("complete", help="Verify structured handoff/evidence, then close and release")
@@ -4427,6 +4979,9 @@ def main():
     p.add_argument("--max-chars", type=positive_int, default=DEFAULT_MAX_HANDOFF_CHARS)
     p.add_argument("--handoff", default=None,
                     help="lead-supplied handoff override as raw JSON or @<file>")
+    p.add_argument("--allow-kill-children", action="store_true",
+                    help="close the pane even though processes the worker started from it "
+                         "are still running (they die with it)")
     p.set_defaults(fn=cmd_complete)
 
     p = sub.add_parser("reset", help="Start a fresh agent context for a new task")
@@ -4450,6 +5005,9 @@ def main():
     p.add_argument("--approval-mode", choices=APPROVAL_MODES,
                     default="auto")
     p.add_argument("--workspace-id", help="explicit workspace ID for cross-session spawning")
+    p.add_argument("--allow-kill-children", action="store_true",
+                    help="close the old pane even though processes the worker started from "
+                         "it are still running (they die with it)")
     p.set_defaults(fn=cmd_reset)
 
     p = sub.add_parser("park", help="Escalate to human, free locks, keep fleet moving")
@@ -4457,7 +5015,10 @@ def main():
     p.add_argument("--group", type=lambda x: scoped_id(x, "resource group"),
                     help="override the agent's recorded resource group")
     p.add_argument("--reason", default=None)
-    p.add_argument("--cancel", action="store_true", help="also Esc the pending prompt")
+    p.add_argument("--cancel", action="store_true",
+                   help="also Esc the pending dialog (skipped when no dialog is pending or a handoff exists)")
+    p.add_argument("--interrupt", action="store_true",
+                   help="with --cancel, send Esc even with no pending dialog (never when a handoff exists)")
     p.set_defaults(fn=cmd_park)
 
     p = sub.add_parser("escalations", help="List/clear pending human decisions")

@@ -273,7 +273,7 @@
         },
         {
             "id": "cloud-mutate",
-            "pattern": "\\baws\\s+(?:--?[a-z0-9-]+(?:[ =]\\S+)?\\s+)*[a-z0-9-]+\\s+(?:rm|mv|cp|sync|mb|rb|(?:create|delete|put|update|modify|terminate|run|start|stop|remove|attach|detach|associate|disassociate|register|deregister|invoke|publish|send|set|tag|untag|reboot|restore|revoke|authorize|import|deploy|cancel|enable|disable|reset|replace)(?:-[a-z0-9-]+)?)\\b|\\bgcloud\\s+(?:[a-z0-9-]+\\s+){1,4}?(?:create|delete|deploy|update|patch|set|reset|start|stop|resize|import|cp|mv|rm|rsync|add-[a-z0-9-]+|remove-[a-z0-9-]+)\\b",
+            "pattern": "\\baws\\s+(?:--?[a-z0-9-]+(?:[ =]\\S+)?\\s+)*(?!(?:cli|console|sdk|docs?|team)\\b)[a-z0-9-]+\\s+(?:rm|mv|cp|sync|mb|rb|(?:create|delete|put|update|modify|terminate|run|start|stop|remove|attach|detach|associate|disassociate|register|deregister|invoke|publish|send|set|tag|untag|reboot|restore|revoke|authorize|import|deploy|cancel|enable|disable|reset|replace)(?:-[a-z0-9-]+)?)\\b|\\bgcloud\\s+(?:[a-z0-9-]+\\s+){1,4}?(?:create|delete|deploy|update|patch|set|reset|start|stop|resize|import|cp|mv|rm|rsync|add-[a-z0-9-]+|remove-[a-z0-9-]+)\\b",
             "why": "cloud mutation"
         },
         {
