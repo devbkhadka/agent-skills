@@ -47,7 +47,7 @@ class ApiCases:
         options = ctx.options
         request = flow.request
         if not options.case_host or (
-            request.host != options.case_host
+            request.pretty_host != options.case_host
             or request.method != options.case_method.upper()
             or request.path.split("?", 1)[0] != options.case_path
         ):
