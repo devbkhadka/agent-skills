@@ -28,6 +28,22 @@ def load_module(name, path):
 fleet = load_module("terminal_agent_runner_fleet", ROOT / "scripts" / "fleet.py")
 pool_mod = load_module("terminal_agent_runner_pool", ROOT / "scripts" / "resource_pool.py")
 
+# Tests that do not patch STATE_DIR themselves must never write tasks.json or outbox events
+# into the real herder state, where a live fleet's watcher would read them.
+_STATE_ISOLATION = {}
+
+
+def setUpModule():
+    _STATE_ISOLATION["dir"] = tempfile.TemporaryDirectory(prefix="tar-safety-state-")
+    _STATE_ISOLATION["patch"] = mock.patch.object(
+        fleet, "STATE_DIR", Path(_STATE_ISOLATION["dir"].name))
+    _STATE_ISOLATION["patch"].start()
+
+
+def tearDownModule():
+    _STATE_ISOLATION["patch"].stop()
+    _STATE_ISOLATION["dir"].cleanup()
+
 
 class CliSafetyTests(unittest.TestCase):
     def test_agent_lookup_never_falls_back_to_ambiguous_cli_label(self):
@@ -850,7 +866,8 @@ class TransactionAndStateTests(unittest.TestCase):
             self.assertEqual(assignment["resources"], ["file:a"])
             self.assertEqual(fleet.load_json(fleet.state_path("escalations.json"), []), [])
 
-    def test_park_unassigned_agent_without_recorded_assignment(self):
+    def test_park_unassigned_agent_without_recorded_assignment_is_refused(self):
+        """Parking an agent with no assignment must not fabricate a stub record or escalation."""
         args = argparse.Namespace(
             agent="sidecar-unassigned", session=None, reason="sidecar stalled", cancel=True,
             group="repo:test",
@@ -860,17 +877,17 @@ class TransactionAndStateTests(unittest.TestCase):
             def fake_herdr(argv, session=None, check=True):
                 herdr_calls.append(argv)
                 return {"result": "ok"}
+            out = io.StringIO()
             with mock.patch.object(fleet, "herdr", side_effect=fake_herdr), \
-                 mock.patch.object(fleet, "release_agent_strict", return_value={"freed": []}):
-                fleet.cmd_park(args)
-            assignment = fleet.get_assignment("sidecar-unassigned")
-            self.assertEqual(assignment["lifecycle"], "parked")
-            self.assertIsNone(assignment["task"])
-            esc = fleet.load_json(fleet.state_path("escalations.json"), [])
-            self.assertEqual(len(esc), 1)
-            self.assertEqual(esc[0]["agent"], "sidecar-unassigned")
-            self.assertEqual(esc[0]["reason"], "sidecar stalled")
-            self.assertIn(["agent", "send-keys", "sidecar-unassigned", "esc"], herdr_calls)
+                 mock.patch.object(fleet, "release_agent_strict", return_value={"freed": []}), \
+                 contextlib.redirect_stdout(out):
+                with self.assertRaises(SystemExit) as ctx:
+                    fleet.cmd_park(args)
+            self.assertEqual(ctx.exception.code, 2)
+            self.assertIn("nothing to park", out.getvalue())
+            self.assertEqual(fleet.get_assignment("sidecar-unassigned"), {})
+            self.assertEqual(fleet.load_json(fleet.state_path("escalations.json"), []), [])
+            self.assertNotIn(["agent", "send-keys", "sidecar-unassigned", "esc"], herdr_calls)
 
     def test_fleet_state_corruption_fails_closed(self):
         with tempfile.TemporaryDirectory() as td:
@@ -1293,7 +1310,14 @@ class WorkspaceAndSpawnSimulationTests(unittest.TestCase):
                 agent="agent-parked", session="session-1", reason="escalated destructive action",
                 cancel=True, group=None,
             )
-            with mock.patch.object(fleet, "herdr", return_value={"result": "ok"}) as herdr_mock, \
+            dialog_pane = "Bash command\n\n  rm -rf build\n\nDo you want to proceed?\n\u276f 1. Yes\n  2. No\n"
+
+            def fake_herdr(argv, session=None, check=False, timeout=None):
+                if argv[:2] == ["agent", "read"]:
+                    return {"result": {"read": {"text": dialog_pane}}}
+                return {"result": "ok"}
+
+            with mock.patch.object(fleet, "herdr", side_effect=fake_herdr) as herdr_mock, \
                  mock.patch.object(fleet, "release_agent_strict", return_value={"freed": ["file:config.ts"]}) as release_mock, \
                  contextlib.redirect_stdout(io.StringIO()):
                 fleet.cmd_park(park_args)
@@ -1372,6 +1396,8 @@ class TaskTextSafetyTests(unittest.TestCase):
             ("prose-aws-profile", "Use the AWS profile dev for the read-only check."),
             ("read-only-aws-call", "Confirm with aws ec2 describe-instances --region us-east-1."),
             ("prose-gcloud", "No gcloud or AWS access is needed for this bead."),
+            ("prose-aws-cli-then-verb", "Follow the AWS CLI start guide in the docs folder."),
+            ("prose-aws-console-then-verb", "The AWS console update flow is documented in README."),
         ]
         for case_id, text in cases:
             with self.subTest(case_id=case_id, text=text):
@@ -1393,6 +1419,8 @@ class TaskTextSafetyTests(unittest.TestCase):
             ("aws-flagged-mutation", "Run aws --profile prod ec2 terminate-instances --instance-ids i-1", "cloud-mutate"),
             ("gcloud-delete", "Then gcloud compute instances delete vm-1 --quiet", "cloud-mutate"),
             ("gcloud-deploy", "Ship it with gcloud run deploy api --source .", "cloud-mutate"),
+            ("aws-lambda-invoke", "Trigger it with aws lambda invoke --function-name f out.json", "cloud-mutate"),
+            ("aws-ec2-run", "Then aws ec2 run-instances --image-id ami-1", "cloud-mutate"),
         ]
         for case_id, text, expected_rule in cases:
             with self.subTest(case_id=case_id, text=text):
@@ -2149,7 +2177,7 @@ class SpawnRefusalAndLeaseCleanupTests(unittest.TestCase):
             self.assertEqual(len(close_calls), 1)
             self.assertEqual(close_calls[0][2], "tab-new")
 
-    def test_spawn_releases_leases_and_closes_tab_when_submit_fails(self):
+    def test_spawn_keeps_pane_and_leases_when_submit_is_unconfirmed(self):
         startup_pane = "AGY v1.1.14\nWelcome to AGY\n>\n"
         herdr_calls = []
 
@@ -2185,16 +2213,19 @@ class SpawnRefusalAndLeaseCleanupTests(unittest.TestCase):
              mock.patch.object(fleet, "acquire_assignment", return_value=["file:a.py"]), \
              mock.patch.object(fleet, "release_resources") as release_res, \
              mock.patch.object(fleet, "remove_assignment") as remove_asgn, \
-             mock.patch.object(fleet, "_submit", return_value=False):
-            with self.assertRaisesRegex(RuntimeError, "did not accept its initial task"):
-                fleet.cmd_spawn(args)
-            release_res.assert_called_once_with("agent-banner", "grp-1", ["file:a.py"])
-            remove_asgn.assert_called_once_with("agent-banner", None)
-            close_calls = [c for c in herdr_calls if c[:2] == ["tab", "close"]]
-            self.assertEqual(len(close_calls), 1)
-            self.assertEqual(close_calls[0][2], "tab-new")
+             mock.patch.object(fleet, "_submit", return_value=False), \
+             contextlib.redirect_stdout(io.StringIO()), \
+             contextlib.redirect_stderr(io.StringIO()) as err:
+            result = fleet.cmd_spawn(args)
+            # An unconfirmed delivery is a warning: the worker may be running a task whose
+            # first command shows no marker, so its pane and leases are kept.
+            self.assertFalse(result["task_confirmed"])
+            self.assertIn("could not be confirmed", err.getvalue())
+            release_res.assert_not_called()
+            remove_asgn.assert_not_called()
+            self.assertEqual([c for c in herdr_calls if c[:2] in (["tab", "close"], ["pane", "close"])], [])
 
-    def test_spawn_releases_leases_and_closes_tab_when_working_agent_has_only_startup_banner(self):
+    def test_spawn_keeps_pane_when_working_agent_shows_only_startup_banner(self):
         startup_pane = "AGY v1.1.14\nWelcome to AGY\n>\n"
         herdr_calls = []
 
@@ -2237,14 +2268,17 @@ class SpawnRefusalAndLeaseCleanupTests(unittest.TestCase):
              mock.patch.object(fleet, "acquire_assignment", return_value=["file:a.py"]), \
              mock.patch.object(fleet, "release_resources") as release_res, \
              mock.patch.object(fleet, "remove_assignment") as remove_asgn, \
-             mock.patch.object(fleet.time, "sleep"):
-            with self.assertRaisesRegex(RuntimeError, "did not accept its initial task"):
-                fleet.cmd_spawn(args)
-            release_res.assert_called_once_with("agent-working-banner", "grp-1", ["file:a.py"])
-            remove_asgn.assert_called_once_with("agent-working-banner", None)
-            close_calls = [c for c in herdr_calls if c[:2] == ["tab", "close"]]
-            self.assertEqual(len(close_calls), 1)
-            self.assertEqual(close_calls[0][2], "tab-new")
+             mock.patch.object(fleet.time, "sleep"), \
+             contextlib.redirect_stdout(io.StringIO()), \
+             contextlib.redirect_stderr(io.StringIO()) as err:
+            result = fleet.cmd_spawn(args)
+            # Unconfirmed delivery keeps the pane; `status` reports the banner-only pane as a
+            # delivery-error instead of the spawn destroying it.
+            self.assertFalse(result["task_confirmed"])
+            self.assertIn("could not be confirmed", err.getvalue())
+            release_res.assert_not_called()
+            remove_asgn.assert_not_called()
+            self.assertEqual([c for c in herdr_calls if c[:2] in (["tab", "close"], ["pane", "close"])], [])
 
 
 class FleetStatusStateTests(unittest.TestCase):
@@ -6620,7 +6654,10 @@ class OutputClampingTests(unittest.TestCase):
             halt=False,
             park=False,
         )
-        with mock.patch.object(fleet, "herdr") as mock_herdr, \
+        dialog_pane = "Bash command\n\n  rm -rf build\n\nDo you want to proceed?\n\u276f 1. Yes\n  2. No\n"
+        with tempfile.TemporaryDirectory() as td, mock.patch.object(fleet, "STATE_DIR", Path(td)), \
+             mock.patch.object(fleet, "herdr") as mock_herdr, \
+             mock.patch.object(fleet, "read_text", return_value=dialog_pane), \
              mock.patch.object(fleet, "_submit", return_value=True) as mock_submit, \
              mock.patch.object(fleet.time, "sleep"):
             fleet.cmd_reject(args)
@@ -6637,7 +6674,9 @@ class OutputClampingTests(unittest.TestCase):
             park=False,
             group="repo:main",
         )
+        dialog_pane = "Bash command\n\n  rm -rf build\n\nDo you want to proceed?\n\u276f 1. Yes\n  2. No\n"
         with mock.patch.object(fleet, "herdr") as mock_herdr, \
+             mock.patch.object(fleet, "read_text", return_value=dialog_pane), \
              mock.patch.object(fleet, "cmd_park") as mock_park, \
              mock.patch.object(fleet.time, "sleep"):
             fleet.cmd_reject(args)
