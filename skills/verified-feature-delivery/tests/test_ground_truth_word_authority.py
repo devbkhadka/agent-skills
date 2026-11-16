@@ -155,6 +155,18 @@ class TestGroundTruthWordAuthority(unittest.TestCase):
         problems = self._verify('<span data-testid="session_count">N/A</span>')
         self.assertTrue(any("carries no parseable numeric value" in p for p in problems))
 
+    def test_an_attribute_typed_by_its_state_enum_reconciles_as_a_word(self):
+        """`"type": "SessionState"` names the enum itself; the word is matched exactly, not parsed as a number."""
+        attribute = self.lexicon["entities"][0]["attributes"][0]
+        attribute["type"] = "SessionState"
+        del attribute["enum_ref"]
+        problems = self._verify('<span class="badge state-working" data-testid="session-state">working</span>')
+        self.assertEqual(problems, [])
+
+        problems = self._verify('<span data-testid="session-state">Working</span>')
+        self.assertTrue(any("GROUND_TRUTH_CONTRADICTED" in p for p in problems))
+        self.assertFalse(any("numeric" in p for p in problems))
+
 
 if __name__ == "__main__":
     unittest.main()

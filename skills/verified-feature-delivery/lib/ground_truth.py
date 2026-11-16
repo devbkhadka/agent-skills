@@ -17,6 +17,10 @@ compares the rendered figure against the evidence the pipeline already recorded 
     traceable authority. A locally consistent sum over untraceable parts is not evidence of
     anything; it is refused rather than accepted as if it were.
 
+A word-valued (string-enum) authority is reconciled by exact string match instead: the rendered
+text must be one of the declared value set (the attribute's state enum tokens or its
+`allowed_values`), and must equal a recorded authoritative value when one is recorded.
+
 Every branch that cannot finish the reconciliation — a rendered value that resolves to no
 declared entity attribute, a local computation whose inputs carry no authority of their own, a
 named boundary no `entity_boundaries` entry declares, a contract fixture file that is absent or
@@ -80,13 +84,21 @@ def _find_attribute(entity: Dict[str, Any], name: str) -> Optional[Dict[str, Any
 def _find_allowed_word_values(
     lexicon: Dict[str, Any], attribute: Optional[Dict[str, Any]]
 ) -> Optional[List[str]]:
-    """Allowed word tokens declared in the domain lexicon for this attribute."""
+    """Allowed word tokens declared in the domain lexicon for this attribute.
+
+    The declared value set comes from the state enum the attribute names — through `enum_ref`,
+    or through a `type` that is itself a declared state enum's name (`"type": "SessionState"`)
+    — or from the attribute's own `allowed_values`. A rendered word is reconciled against that
+    set by exact string match; nothing here parses it as a number.
+    """
     if not attribute:
         return None
-    enum_ref = attribute.get("enum_ref")
-    if enum_ref:
-        for se in lexicon.get("state_enums") or []:
-            if isinstance(se, dict) and se.get("name") == enum_ref:
+    state_enums = [se for se in (lexicon.get("state_enums") or []) if isinstance(se, dict)]
+    for enum_name in (attribute.get("enum_ref"), attribute.get("type")):
+        if not enum_name:
+            continue
+        for se in state_enums:
+            if se.get("name") == enum_name:
                 return [str(t) for t in (se.get("tokens") or [])]
     if isinstance(attribute.get("allowed_values"), list):
         return [str(v) for v in attribute["allowed_values"]]

@@ -70,14 +70,42 @@ those is **computed**:
 
 | Property | Computed from |
 | :--- | :--- |
-| whether the milestone succeeded | the captured exit code or status, held against the approved plan: when the matrix projection for the record's `(evidence_key, observer_id)` declares an `exit_code` (`process_exit`) or `status_code` (`api_response`) **and** the DAG milestone claims `evidence_key@observer_id`, success is the observed code equalling the declared one (an approved `exit 1` or `409` passes; `0` or `2` fails); only the declared medium's field is graded (a malformed one fails; an absent one is refused by the normaliser as `UNNORMALISABLE_ARTIFACT`); a target whose projections lack a parseable code (`pending`, `4xx`, `1-4`) or disagree declares nothing; otherwise a zero exit, or a 2xx |
+| whether the milestone succeeded | the captured exit code or status, held against the approved plan: when the matrix projection for the record's `(evidence_key, observer_id)` declares an `exit_code` (`process_exit`) or `status_code` (`api_response`) **and** the DAG milestone claims `evidence_key@observer_id`, success is the observed code equalling the declared one (an approved `exit 1` or `409` passes; `0` or `2` fails); only the declared medium's field is graded (a malformed one fails; an absent one is refused by the normaliser as `UNNORMALISABLE_ARTIFACT`); a target whose projections lack a parseable code (`pending`, `4xx`, `1-4`) or disagree declares nothing; otherwise a zero exit, or a 2xx. A capture with neither field (`rendered_ui`, `datastore_state`, `device_actuation`, `agent_transcript`) uses the per-medium rule below, for fixture discharge only |
 | the projection fingerprint | the captured artifact, normalised for its observer's medium |
 | projection coverage | the matrix's `(evidence_key, observer)` targets differenced against the captured ones |
 | silent degradation | a success signal held against the warning classes the census recorded |
 | variance shapes recorded | the type signatures of the fixture's own success samples at each `UNBOUNDED` region |
 | variance shapes exercised | the same signatures computed from what the suites asserted against |
-| provisional fixtures outstanding | each provisional fixture's pinned re-probe milestone, differenced against the milestones that ran and succeeded |
+| provisional fixtures outstanding | each provisional fixture's pinned re-probe milestone, differenced against the milestones that ran and succeeded (code, or per-medium success) |
+| retired records | each record's `(evidence_key, observer_id)` differenced against the current matrix's projection targets |
 | the rollback cause | the recorded failure differenced against the artifact that would have had to name it |
+
+**Per-medium success (codeless media).** A capture carrying no `exit_code`, `status_code` or
+`status` is graded by its observer's medium (from the matrix register; the record's own
+`verification_medium` only when it names no registered observer). The capture must normalise under
+that medium, and then:
+
+| Medium | Success when |
+| :--- | :--- |
+| `datastore_state` | at least one changed table or constraint outcome is recorded, and every constraint outcome is `SATISFIED` |
+| `rendered_ui` | the rendering holds at least one observable element or text run |
+| `device_actuation` | at least one command opcode was issued |
+| `agent_transcript` | the transcript ends in a non-empty `final_message` |
+
+The rule yields success or nothing, never failure: a `VIOLATED` constraint or an empty page withholds
+success (the pinned fixture stays `PROVISIONAL_FIXTURE_OUTSTANDING`) but is not routed as a regression,
+because an approved error state can look exactly like that. It feeds only the provisional-fixture
+discharge; the degradation check and regression routing stay on exit code and status, since an
+approved error banner or failure transcript would otherwise read as success that hid its own loss.
+No `exit_code` needs to be added to such a capture.
+
+**Retired records.** A record whose `(evidence_key, observer_id)` the current matrix no longer
+declares — an approved Stage 2 amendment removed that projection — is set aside before grading and
+reported as `RETIRED: <n> execution record(s) across <m> projection(s) …` with each `key@observer` and
+its record count. It is not deleted from `milestones/executions.json`, and it cannot verify a
+milestone, discharge a fixture, collide or raise a regression. The evidence summary lists it under
+the optional `retired_records` key. A record naming no projection (a boundary re-probe) is never
+retired.
 
 **Limit:** claims bind a declared code to a *milestone*, not to the command a record ran. In a milestone that claims several states, a failing run could be relabelled with a sibling state's `evidence_key` and pass. Coverage still needs one distinct record per claimed `(evidence_key, observer)` target, so the relabel shows up as a gap unless a record is also fabricated for the state it vacated.
 
@@ -146,7 +174,7 @@ exits 0, so the runner declares success and ships silent media.
 
 `PROVISIONAL_FROM_SCHEMA` passed Gate 1 **only** on the promise of a pinned Stage 4 re-probe. A
 fixture is discharged when the milestone it pinned ran and reported success against the live
-boundary. A fixture whose pinned milestone did not run, or that pins no milestone at all, is
+boundary — a computed exit code or status, or for a codeless medium the per-medium rule in §2. A fixture whose pinned milestone did not run, or that pins no milestone at all, is
 outstanding, and Gate 4 refuses to close the feature.
 
 *Caught:* an adapter verified only against an OpenAPI document because the container network was

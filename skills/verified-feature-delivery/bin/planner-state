@@ -26,7 +26,9 @@ MILESTONES = {
     },
     "ENTITY_BOUNDARIES": {
         "awaiting_state": "AWAITING_ENTITY_BOUNDARIES_APPROVAL",
-        "artifact_path": "flow-simulation-matrix.json",
+        # The guarded entity boundaries, relationships and simulated dependencies are Stage 0
+        # declarations in the lexicon; the scenario matrix carries none of them.
+        "artifact_path": "domain-lexicon.json",
         "digest_scope": ["entity_boundaries", "entity_relationships", "simulated_dependencies"],
         "derived_docs": ["domain-entity-map.md"],
     },
@@ -113,22 +115,42 @@ def mark_approval_stale(feature_dir, ledger_data, milestone_id):
     save_ledger(feature_dir, ledger_data)
 
 
-def delete_derived_docs(feature_dir, doc_names):
-    docs_dir = feature_dir / "docs"
-    for name in doc_names:
-        p = docs_dir / name
-        if not p.exists():
-            continue
+def _remove_derived_file(p):
+    """Delete one derived document; report, never raise, when it cannot be removed.
+
+    Called only after the state transition and the ledger are saved, so a document that cannot
+    be removed (a directory left at its path, a permission the process lacks) leaves the feature
+    recoverable at its awaiting gate rather than half-invalidated. Returns False on failure.
+    """
+    if not p.exists() and not p.is_symlink():
+        return True
+    if p.is_dir() and not p.is_symlink():
+        sys.stderr.write(
+            "DERIVED_DOCUMENT_NOT_DELETED: %s is a directory, not a rendered document; remove it "
+            "by hand before re-rendering\n" % p
+        )
+        return False
+    try:
         try:
             p.unlink()
         except PermissionError:
             p.chmod(0o644)
             p.unlink()
+    except OSError as error:
+        sys.stderr.write("DERIVED_DOCUMENT_NOT_DELETED: %s (%s)\n" % (p, error))
+        return False
+    return True
+
+
+def delete_derived_docs(feature_dir, doc_names):
+    docs_dir = feature_dir / "docs"
+    for name in doc_names:
+        _remove_derived_file(docs_dir / name)
 
 
 def find_stale_milestone(feature_dir, state_data):
-    """Return the milestone_id of the earliest-gated APPROVED record whose
-    recomputed digest no longer matches its artifact, considering only
+    """Return the milestone_id of the earliest-gated record that is already STALE, or
+    APPROVED with a recomputed digest that no longer matches its artifact, considering only
     milestones the pipeline has already advanced past. A mismatch on the
     milestone the pipeline is currently sitting at is not staleness -- it is
     handled by the leaving-the-gate check in cmd_advance instead.
@@ -150,7 +172,14 @@ def find_stale_milestone(feature_dir, state_data):
         if awaiting_ord < 0 or awaiting_ord >= current_ord:
             continue
         rec = find_approval(ledger_data, milestone_id)
-        if not rec or rec.get("status") != "APPROVED":
+        if not rec:
+            continue
+        # A STALE record past its own gate is an invalidation that was interrupted before the
+        # state transition landed; it still requires the awaiting state, so re-advance recovers.
+        if rec.get("status") == "STALE":
+            candidates.append((awaiting_ord, milestone_id))
+            continue
+        if rec.get("status") != "APPROVED":
             continue
         artifact = load_artifact(feature_dir, meta["artifact_path"])
         if artifact is None:
@@ -203,19 +232,12 @@ def mark_ui_layout_stale(ledger_data, slice_id):
 
 
 def delete_ui_mockup(feature_dir, slice_id):
-    p = feature_dir / "docs" / ("ui-mockup-%s.html" % slice_id)
-    if not p.exists():
-        return
-    try:
-        p.unlink()
-    except PermissionError:
-        p.chmod(0o644)
-        p.unlink()
+    _remove_derived_file(feature_dir / "docs" / ("ui-mockup-%s.html" % slice_id))
 
 
 def find_stale_ui_layout_slices(feature_dir, state_data):
-    """Return the slice_ids whose APPROVED UI_LAYOUT record no longer matches that slice's
-    current ui_layout content. Only meaningful once the pipeline has already left
+    """Return the slice_ids whose UI_LAYOUT record is already STALE, or APPROVED but no longer
+    matching that slice's current ui_layout content. Only meaningful once the pipeline has already left
     AWAITING_UI_LAYOUT_APPROVAL -- a mismatch while still sitting at that gate is handled by the
     leaving-the-gate check in cmd_advance instead."""
     current_ord = state_ordinal(state_data.get("current_state"))
@@ -231,7 +253,12 @@ def find_stale_ui_layout_slices(feature_dir, state_data):
     stale = []
     for slice_id in ui_slices_with_layout(artifact):
         rec = find_ui_layout_approval(ledger_data, slice_id)
-        if not rec or rec.get("status") != "APPROVED":
+        if not rec:
+            continue
+        if rec.get("status") == "STALE":
+            stale.append(slice_id)
+            continue
+        if rec.get("status") != "APPROVED":
             continue
         if slice_ui_layout_digest(artifact, slice_id) != rec.get("approved_digest"):
             stale.append(slice_id)
@@ -486,13 +513,14 @@ def cmd_advance(args):
     # invalidates loudly: the record goes STALE, its rendered documents are
     # deleted, and the feature is pulled back to that milestone's gate --
     # regardless of what target was requested.
+    #
+    # Order is load-bearing for crash recovery: the state transition is saved first, then the
+    # ledger, then the derived documents are removed best-effort. A crash between any two steps
+    # leaves the feature at the awaiting gate (where record-approval works) or leaves a STALE
+    # record that find_stale_milestone still routes back to that gate on the next advance.
     stale_id = find_stale_milestone(feature_dir, state_data)
     if stale_id:
         meta = MILESTONES[stale_id]
-        ledger_data = load_ledger(feature_dir)
-        if not args.dry_run:
-            mark_approval_stale(feature_dir, ledger_data, stale_id)
-            delete_derived_docs(feature_dir, meta["derived_docs"])
         prev_state = state_data["current_state"]
         if prev_state != meta["awaiting_state"]:
             state_data["current_state"] = meta["awaiting_state"]
@@ -509,6 +537,11 @@ def cmd_advance(args):
             )
             if not args.dry_run:
                 save_state(feature_dir, state_data)
+        if not args.dry_run:
+            ledger_data = load_ledger(feature_dir)
+            if ledger_data:
+                mark_approval_stale(feature_dir, ledger_data, stale_id)
+            delete_derived_docs(feature_dir, meta["derived_docs"])
         print("STALE_APPROVAL_INVALIDATED")
         sys.stderr.write(
             "STALE_APPROVAL_INVALIDATED: %s approval no longer matches the current content of "
@@ -522,15 +555,9 @@ def cmd_advance(args):
     # slice's ui_layout edited after its own approval invalidates only that slice's record and
     # deletes only that slice's mockup, regardless of what other UI slices in the same feature
     # are still approved.
+    # Same save order as above: state, then ledger, then the derived mockups.
     stale_ui_slices = find_stale_ui_layout_slices(feature_dir, state_data)
     if stale_ui_slices:
-        ledger_data = load_ledger(feature_dir)
-        if not args.dry_run:
-            for slice_id in stale_ui_slices:
-                mark_ui_layout_stale(ledger_data, slice_id)
-            save_ledger(feature_dir, ledger_data)
-            for slice_id in stale_ui_slices:
-                delete_ui_mockup(feature_dir, slice_id)
         prev_state = state_data["current_state"]
         awaiting = "AWAITING_UI_LAYOUT_APPROVAL"
         if prev_state != awaiting:
@@ -548,6 +575,14 @@ def cmd_advance(args):
             )
             if not args.dry_run:
                 save_state(feature_dir, state_data)
+        if not args.dry_run:
+            ledger_data = load_ledger(feature_dir)
+            if ledger_data:
+                for slice_id in stale_ui_slices:
+                    mark_ui_layout_stale(ledger_data, slice_id)
+                save_ledger(feature_dir, ledger_data)
+            for slice_id in stale_ui_slices:
+                delete_ui_mockup(feature_dir, slice_id)
         print("STALE_APPROVAL_INVALIDATED")
         sys.stderr.write(
             "STALE_APPROVAL_INVALIDATED: UI_LAYOUT approval for slice(s) %s no longer matches "
