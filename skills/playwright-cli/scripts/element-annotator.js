@@ -273,11 +273,16 @@ async page => {
       schedule();
     };
 
-    // ---------- Event handling (capture phase; ignores events from the overlay itself) ----------
+    // ---------- Event handling (capture phase; isolates overlay from page focus traps & click-away listeners) ----------
     const onMove = (e) => {
       if (!selecting || draft || fromOverlay(e)) return;
       const el = e.target instanceof Element ? e.target : null;
       if (el !== hovered) { hovered = el; schedule(); }
+    };
+    const isolate = (e) => {
+      if (fromOverlay(e) || ((e.type === 'focusout' || e.type === 'blur') && e.relatedTarget === host)) {
+        e.stopImmediatePropagation();
+      }
     };
     const swallow = (e) => {
       if (!selecting || fromOverlay(e)) return;
@@ -301,13 +306,25 @@ async page => {
         e.preventDefault();
         e.stopImmediatePropagation();
         setSelecting(!selecting);
+        return;
+      }
+      if (fromOverlay(e)) {
+        if (e.composedPath().includes(boxEl)) {
+          if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); saveBox(); }
+          else if (e.key === 'Escape') { e.preventDefault(); closeBox(); }
+        }
+        e.stopImmediatePropagation();
       }
     };
+    const isolatedEvents = ['pointerdown', 'pointerup', 'mousedown', 'mouseup', 'touchstart', 'touchend', 'focusin', 'focusout', 'focus', 'blur', 'keyup', 'keypress'];
     const blockedEvents = ['pointerdown', 'pointerup', 'mousedown', 'mouseup', 'dblclick', 'auxclick', 'contextmenu'];
+    const bubbleStoppedEvents = ['click', 'dblclick', 'auxclick', 'contextmenu'];
+    isolatedEvents.forEach((t) => window.addEventListener(t, isolate, true));
     window.addEventListener('mousemove', onMove, true);
     window.addEventListener('click', onClick, true);
     window.addEventListener('keydown', onKey, true);
     blockedEvents.forEach((t) => window.addEventListener(t, swallow, true));
+    bubbleStoppedEvents.forEach((t) => root.addEventListener(t, (e) => e.stopPropagation()));
     window.addEventListener('scroll', schedule, { capture: true, passive: true });
     window.addEventListener('resize', schedule);
 
@@ -322,11 +339,6 @@ async page => {
       const current = draft;
       closeBox();
       if (current && current.id) setComments(await call({ type: 'delete', id: current.id }));
-    });
-    textarea.addEventListener('keydown', (e) => {
-      e.stopPropagation();
-      if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); saveBox(); }
-      if (e.key === 'Escape') { e.preventDefault(); closeBox(); }
     });
     pinsEl.addEventListener('click', (e) => {
       const pin = e.target.closest('.pin');
@@ -354,6 +366,7 @@ async page => {
     else mount();
 
     window[`${bridge}_teardown`] = (message) => {
+      isolatedEvents.forEach((t) => window.removeEventListener(t, isolate, true));
       window.removeEventListener('mousemove', onMove, true);
       window.removeEventListener('click', onClick, true);
       window.removeEventListener('keydown', onKey, true);
