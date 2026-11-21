@@ -94,6 +94,13 @@ has 'earlier Sessions' || fail "start: does not mention earlier Sessions"
 grep -i 'inbox' <<<"$SKILL" | grep -q 'Workstream' || fail "inbox: does not say it covers the Workstream"
 grep -A1 -F 'agent-desk withdraw --all` withdraws' <<<"$SKILL" | tr -s ' \n' ' ' | grep -qi 'only when the user asks' || fail "withdraw --all: not limited to when the user asks"
 
+# --- Progress updates, one-click choices, proactive withdraw -----------------------------------
+has '[k/n]' || fail "update: '[k/n]' step progress prefix not documented"
+grep -A6 -F '## 2. Post an Update' <<<"$SKILL" | grep -qi 'step progress' || fail "update: step progress guidance missing"
+grep -A6 -F '## 3. Raise an Ask' <<<"$SKILL" | grep -qi 'one click' || fail "ask: one-click guidance with --choices missing"
+grep -A6 -F '## 5. Withdraw Asks you no longer need' <<<"$SKILL" | grep -qF 'agent-desk withdraw <ask-id>' || fail "withdraw: proactive withdraw <ask-id> not documented"
+grep -A6 -F '## 5. Withdraw Asks you no longer need' <<<"$SKILL" | grep -qi 'no longer needed\|obsolete\|clutter' || fail "withdraw: proactive cleanup when no longer needed missing"
+
 # --- Exact vocabulary ----------------------------------------------------------------------------
 for term in Workstream Session Update Ask Reply Detail; do
   grep -qE "\\b${term}\\b" <<<"$SKILL" || fail "vocabulary: '$term' never used"
