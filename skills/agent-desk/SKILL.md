@@ -14,6 +14,13 @@ Words have one meaning here: a **Workstream** is the unit of work (usually `<rep
 the user (kind `question` or `risk`), a **Reply** is the user's response (`answer` or `clarify`), and a
 **Detail** is text you add to the same Ask after a `clarify`.
 
+Artifact review uses its own words, never Reply or Detail. An **Artifact** is a markdown file you
+submit for review, identified by `art_<n>`. A **Revision** is one immutable snapshot of it, taken
+each time you submit. A **Thread** is a conversation anchored to a line range of one Revision (or to
+the whole Artifact), `thr_<n>`. A **Comment** is one message in a Thread, from `user` or `agent`. A
+**Review** is the user's submission of their Comments on an Artifact, with a verdict: `approve` or
+`changes`.
+
 ## Commands
 
 ```bash
@@ -25,6 +32,10 @@ agent-desk wait <ask-id>
 agent-desk inbox
 agent-desk withdraw <ask-id...>
 agent-desk withdraw --all
+agent-desk withdraw art_<n...>
+agent-desk submit <path> [--title T] [--kind K] [--no-wait]
+agent-desk reviews [art_<n>] [--wait]
+agent-desk comment <thr_id> "text" [--resolve] [--wait]
 agent-desk end [--summary TEXT]
 ```
 
@@ -39,7 +50,8 @@ Workstream is `<repo>:<branch>`.
 `start` prints the Session id (`ses_<n>`), then the Workstream line, then any **open Asks left by
 earlier Sessions** of this Workstream (`ask_<n> (kind): text`). Any Session of the Workstream may
 pick one up: run `agent-desk wait <ask-id>` when its answer matters to your task, or
-`agent-desk withdraw <ask-id>` when it is no longer needed.
+`agent-desk withdraw <ask-id>` when it is no longer needed. It also lists Artifacts with unreceived Reviews
+(`art_<n> rN status: title (path)`); `agent-desk reviews` fetches them (section 7).
 
 **Which Session a call speaks for:** `--session ID` > `$AGENT_DESK_SESSION` > the agent's own session
 id variable (`CLAUDE_CODE_SESSION_ID`, `CODEX_THREAD_ID`, `ANTIGRAVITY_CONVERSATION_ID`), which
@@ -80,7 +92,7 @@ The call waits for the Reply (up to 9 minutes) and then exits. Act on its exit c
 
 ## 4. Long-running commands, per agent
 
-`ask`, `wait` and `detail` block for up to 9 minutes (540 s), below every agent's shell limit.
+`ask`, `wait`, `detail`, `submit` (without `--no-wait`), `reviews --wait` and `comment --wait` block for up to 9 minutes (540 s), below every agent's shell limit.
 
 - **Claude Code:** run them with the Bash tool parameter `timeout: 600000`. Without it the Bash tool
   moves the command to the background after 120 s; you are then notified when it completes, and you
@@ -115,6 +127,56 @@ answered, received or withdrawn, and exits 0. Any call still waiting on a withdr
 `agent-desk end --summary "Migrated orders; 2 follow-ups in PR"` when your task is done. Open Asks
 stay open on the desk for a later Session to `wait` on or `withdraw`. Later calls for an ended
 Session exit 1; `agent-desk start` makes a new one.
+
+## 7. Submit an Artifact for review
+
+Submit a markdown file the user should read and judge before you go on: a plan, a code-review
+report, or a test flow written as markdown. Use an Update for progress and an Ask for a decision;
+an Artifact is for a document the user reviews in full. Submit the file's path and the CLI uploads
+its content.
+
+```bash
+agent-desk submit dev-plans/foo/PLAN.md --title "Rollout plan" --kind plan
+```
+
+The first line is `art_<n> r<N> to_review`, with ` (new)` for a new Artifact or ` (unchanged)` when
+the content is identical (no new Revision). Then the call waits for a Review. It exits:
+
+| Exit | Meaning | Next step |
+| :-- | :-- | :-- |
+| 0 | approved | stdout is `approved art_<n> rev <N>` plus any non-blocking Comments. Carry on. |
+| 3 | changes requested | stdout is the Comment block (below). Act on it, then submit again. |
+| 2 | timed out, still waiting | The Artifact stays open. Run `agent-desk reviews art_<n> --wait` right away (the id is in the message). Never re-submit to keep waiting. |
+| 4 | withdrawn or closed | The user withdrew the Artifact, or closed its Workstream. No Review is coming. Continue without it. |
+| 1 | error | Read the one-line reason. Not `.md` or `.markdown`, over 1 MB, not UTF-8, or unknown Session (run `agent-desk start`). `a newer agent-desk reviews ... took over` means another call holds the wait; do not re-run this one. |
+
+The Comment block names each Thread with its id, line range and state, then the quoted lines it is
+about, then the user's text:
+
+```
+Review rev_2 of art_3 (/abs/PLAN.md): changes
+thr_7 L12-18 open outdated (quote from r1)
+  > ## Rollout
+  > Ship behind a flag …
+  user: Why a flag? …
+thr_8 (whole artifact) open
+  user: Add a rollback section.
+```
+
+Act on each Thread in one of three ways:
+
+- **Change the plan.** Edit the file, then run `agent-desk submit <path>` again on the same path. It
+  adds the next Revision and the user sees one Artifact with history.
+- **Answer and close.** `agent-desk comment thr_7 "Switched to branch deploy in §3" --resolve`.
+- **Ask back.** `agent-desk comment thr_7 "Does staging have a slot?" --wait` keeps the Thread open
+  and waits for the user's answer. Exit 0 prints their text; exit 4 means they resolved the Thread;
+  exit 2 means run `agent-desk comment thr_7 --wait` again.
+
+Resolving every Thread does not approve the Artifact. Only the user approves. Review traffic is never a **Reply** or a **Detail**; those belong to Asks only.
+
+To fetch Reviews without a listener, run `agent-desk reviews` (every unreceived Review in your
+Workstream, marked received) or `agent-desk reviews art_<n>`. Add `--wait` to block as `submit` does.
+Withdraw an obsolete Artifact with `agent-desk withdraw art_<n>`.
 
 ## Setup (once per machine)
 
