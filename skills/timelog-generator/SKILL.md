@@ -16,6 +16,7 @@ Extracts Git history across project repositories and worktrees, deduplicates com
 /timelog <path> --since <date>                                # scan commits since YYYY-MM-DD
 /timelog <path> --since <date> --until <date>                # inclusive author-date range
 /timelog <path> --author <name-or-email>                     # repeat for multiple Git identities
+/timelog <path> --exclude-co-author <name-or-email>          # exclude commits co-authored by pattern
 /timelog <path> --weekend-target <friday|monday>             # shift Saturday/Sunday logs
 /timelog <path> --dry-run                                     # show what would be processed without writing
 /timelog --jira-monthly                                       # export the current month's Jira worklogs as CSV
@@ -183,6 +184,7 @@ When running the skill:
 1. **Scope and authors**:
    - Scan the requested workspace root so nested repositories and worktrees are included. Do not scan only the current repository unless that is the requested scope.
    - Inspect date-range commit authors before generating the report. If the same person uses multiple Git identities, pass each via a repeated `--author` argument. Prefer a shared author name when it reliably covers the identities.
+   - Commits with a `Co-authored-by:` / `Co-Authored-By:` trailer matching any pattern in `TIMELOG_EXCLUDE_CO_AUTHORS` (comma-separated names/emails, set in `.env`) or `--exclude-co-author` are excluded during extraction. Never hardcode identities in the skill.
    - Date boundaries are inclusive and use the commit author date—the same date used by the report.
 2. **Weekend Check & Prompt**:
    - Detect weekend commits using author dates. If any exist, ask the user whether to shift them to Previous Friday or Following Monday before generating output.

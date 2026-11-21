@@ -45,6 +45,11 @@ def _load_env() -> None:
 
 _load_env()
 DEFAULT_AUTHOR_PATTERN = os.environ.get("TARGET_AUTHOR_EMAIL", "")
+DEFAULT_EXCLUDED_CO_AUTHORS = [
+    p.strip()
+    for p in os.environ.get("TIMELOG_EXCLUDE_CO_AUTHORS", "").split(",")
+    if p.strip()
+]
 
 logging.basicConfig(
     level=logging.INFO,
@@ -92,6 +97,22 @@ def extract_ticket_from_text(text: str) -> Optional[str]:
     return match.group(1) if match else None
 
 
+def is_excluded_co_authored(message: str, excluded_co_authors: List[str]) -> bool:
+    """Return True if the commit message contains a Co-authored-by trailer matching any excluded pattern."""
+    if not message or not excluded_co_authors:
+        return False
+    lowered_patterns = [p.lower() for p in excluded_co_authors if p.strip()]
+    if not lowered_patterns:
+        return False
+    for raw_line in message.splitlines():
+        match = re.match(r"^\s*\**\s*co-authored-by\s*:\s*(.+)$", raw_line, flags=re.IGNORECASE)
+        if match:
+            trailer_value = match.group(1).lower()
+            if any(pat in trailer_value for pat in lowered_patterns):
+                return True
+    return False
+
+
 def estimate_hours(files_changed: int, lines_added: int, lines_removed: int, message_length: int, is_merge: bool) -> float:
     """Deterministic heuristic for commit weight estimation."""
     base = 0.5
@@ -117,10 +138,13 @@ def get_commits_for_repo(
     seen_shas: Set[str],
     author_patterns: List[str],
     since_date: Optional[str] = None,
-    until_date: Optional[str] = None
+    until_date: Optional[str] = None,
+    excluded_co_authors: Optional[List[str]] = None
 ) -> List[Dict[str, Any]]:
     """Extract unique commits for repository."""
     commits = []
+    if excluded_co_authors is None:
+        excluded_co_authors = DEFAULT_EXCLUDED_CO_AUTHORS
     
     cmd = [
         "git", "-C", str(repo_path),
@@ -131,9 +155,11 @@ def get_commits_for_repo(
         cmd.append(f"--author={author_pattern}")
     
     if since_date:
-        cmd.extend(["--since", since_date])
+        since_arg = f"{since_date} 00:00:00" if re.match(r"^\d{4}-\d{2}-\d{2}$", since_date.strip()) else since_date
+        cmd.extend(["--since", since_arg])
     if until_date:
-        cmd.extend(["--until", until_date])
+        until_arg = f"{until_date} 23:59:59" if re.match(r"^\d{4}-\d{2}-\d{2}$", until_date.strip()) else until_date
+        cmd.extend(["--until", until_arg])
     
     try:
         output = subprocess.check_output(cmd, stderr=subprocess.DEVNULL, text=True)
@@ -168,6 +194,9 @@ def get_commits_for_repo(
         
         # Mark SHA as seen across all worktrees
         seen_shas.add(sha)
+
+        if is_excluded_co_authored(message, excluded_co_authors):
+            continue
         
         # Determine if merge commit
         is_merge = False
@@ -267,6 +296,12 @@ def main():
         dest="author_patterns",
         help="Git author name or email pattern; may be supplied more than once"
     )
+    parser.add_argument(
+        "--exclude-co-author",
+        action="append",
+        dest="exclude_co_authors",
+        help="Co-author name or email pattern to exclude; may be supplied more than once"
+    )
     
     args = parser.parse_args()
     
@@ -288,6 +323,13 @@ def main():
         log_to_file(log_file, f"Filtering commits by author: {', '.join(author_patterns)}")
     else:
         log_to_file(log_file, "No author filter specified; extracting commits for all authors.")
+    excluded_co_authors = list(DEFAULT_EXCLUDED_CO_AUTHORS)
+    if args.exclude_co_authors:
+        for pat in args.exclude_co_authors:
+            if pat not in excluded_co_authors:
+                excluded_co_authors.append(pat)
+    if excluded_co_authors:
+        log_to_file(log_file, f"Excluding commits co-authored by: {', '.join(excluded_co_authors)}")
     
     def find_git_repos(search_target: Path) -> List[Path]:
         found = []
@@ -320,7 +362,13 @@ def main():
         log_to_file(log_file, f"Scanning {repo_path.name} (canonical: {canonical_repo})")
         
         commits = get_commits_for_repo(
-            repo_path, canonical_repo, seen_shas, author_patterns, args.since, args.until
+            repo_path,
+            canonical_repo,
+            seen_shas,
+            author_patterns,
+            args.since,
+            args.until,
+            excluded_co_authors,
         )
         all_commits.extend(commits)
         

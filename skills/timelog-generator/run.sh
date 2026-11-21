@@ -13,6 +13,7 @@ UNTIL_DATE="${UNTIL_DATE:=}"
 WEEKEND_TARGET="${WEEKEND_TARGET:=friday}"
 DRY_RUN="${DRY_RUN:=0}"
 AUTHOR_PATTERNS=()
+EXCLUDE_CO_AUTHORS=()
 CLI_TARGETS=()
 
 # Parse CLI arguments
@@ -24,6 +25,7 @@ while [[ $# -gt 0 ]]; do
     --until) UNTIL_DATE="$2"; shift 2 ;;
     --weekend-target) WEEKEND_TARGET="$2"; shift 2 ;;
     --author) AUTHOR_PATTERNS+=("$2"); shift 2 ;;
+    --exclude-co-author) EXCLUDE_CO_AUTHORS+=("$2"); shift 2 ;;
     --dry-run) DRY_RUN=1; shift ;;
     *) echo "Unknown option: $1" >&2; exit 1 ;;
   esac
@@ -88,6 +90,9 @@ if [[ -n "$UNTIL_DATE" ]]; then
 fi
 for author_pattern in "${AUTHOR_PATTERNS[@]}"; do
   extract_args+=(--author "$author_pattern")
+done
+for exclude_co_author in "${EXCLUDE_CO_AUTHORS[@]}"; do
+  extract_args+=(--exclude-co-author "$exclude_co_author")
 done
 python3 "$SKILL_DIR/timelog_extract.py" "${extract_args[@]}" || {
   log_msg "ERROR: Extraction failed"
