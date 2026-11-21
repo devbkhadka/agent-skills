@@ -65,8 +65,10 @@ Each composed skill states its own rules; these are the ones that only exist at 
 4. Leases are acquired by the runner's `spawn`, not by hand. Use `resource_pool.py` directly
    only to define capacities up front and to inspect or reap afterwards (note: `resource_pool.py status`
    prints JSON by default; it does not take a `--json` flag).
-5. A blocked worker is parked, not left holding locks: `park --agent <name> --cancel` frees its leases, then
-   record the blocker on the bead. Continue the independent part of the wave.
+5. A blocked worker is parked, not left holding locks: `park --agent <name>` frees its leases, then
+   record the blocker on the bead. Continue the independent part of the wave. A worker that emitted a
+   completed handoff is not blocked: `complete` it, never park it. Add `--cancel` only when a pending
+   dialog must be dismissed; `--interrupt` only to abort a pane actively running a disallowed action.
 6. One wave at a time. `dispatch` is deliberately not a daemon; re-enter the loop after
    completions rather than topping up panes continuously.
 7. Never authorize checkout/switch/reset/clean/stash, worktree mutation, or destructive
@@ -258,16 +260,19 @@ Recovery, by failure mode:
 | What happened | Do this |
 |---|---|
 | `auto_herd.sh` exited 4 | Check the session with `herd.sh --session "$SESSION" status`; if its server was lost, use guarded `herd.sh --session "$SESSION" attach --recover-session` only after reviewing the loss |
-| `auto_herd.sh` exited 1 (blocked/escalated) | Inspect `herd.sh --session "$SESSION" status`, resolve prompt via `herd.sh --session "$SESSION" approve` or `herd.sh --session "$SESSION" park --agent bead-<bead-id> --cancel` |
+| `auto_herd.sh` exited 1 (blocked/escalated) | Inspect `herd.sh --session "$SESSION" status`, resolve a pending dialog via `herd.sh --session "$SESSION" approve` or `herd.sh --session "$SESSION" park --agent bead-<bead-id> --cancel` (Esc goes only to the dialog) |
+| done/idle with a completed handoff (`FLEET_HANDOFF` or handoff file) | `herd.sh --session "$SESSION" complete --agent bead-<bead-id>`, then `scheduler.py close`; never park — `complete` already closes the pane, and `park` refuses a `completed` agent |
+| idle with a blocked handoff | read its blockers; answer via `herd.sh --session "$SESSION" prompt --agent bead-<bead-id> --related --text "<answer>"`, or `herd.sh --session "$SESSION" park --agent bead-<bead-id>` without `--cancel` |
 | `spawn` failed after `claim` | `scheduler.py rollback <bead-id> --actor <pane-id> --project "$REPO"` |
 | worker crashed or pane vanished | `herd.sh --session "$SESSION" reconcile --group <group>`, recover the full ID from session `tasks.json` (or inspect `known_dead_agents`), verify it with `scheduler.py resolve-pane --pane-id <pane-id> --project "$REPO"`, then `scheduler.py rollback <bead-id> --actor <pane-id> --project "$REPO"` |
 | `complete` refused the evidence | leave the claim, re-prompt the worker; do not `close` |
-| human decision needed | `herd.sh --session "$SESSION" park --agent bead-<bead-id> --cancel`, note the blocker on the bead; once resolved, revive via `herd.sh --session "$SESSION" reset --agent bead-<bead-id> --cli agy --task "<task>" --handoff "<handoff>" --group <group> --resource <resource> --approval-mode auto` |
-| worker interrupted/cancelled | Inspect pane, formulate alternate path, and prompt (`herd.sh --session "$SESSION" prompt --agent <name> --text "<guidance>"`) or reject/halt (`herd.sh --session "$SESSION" reject --agent <name> --halt`) |
-| provider quota exhausted | `herd.sh --session "$SESSION" park --agent <name> --cancel` for all active panes, `scheduler.py rollback` unclaimed beads, record reset time on the bead, and re-dispatch on alternate model/lease |
+| human decision needed | `herd.sh --session "$SESSION" park --agent bead-<bead-id>` (add `--cancel` only if a dialog is pending), note the blocker on the bead; once resolved, revive via `herd.sh --session "$SESSION" reset --agent bead-<bead-id> --cli agy --task "<task>" --handoff "<handoff>" --group <group> --resource <resource> --approval-mode auto` |
+| worker interrupted/cancelled | Usually the lead's own `reject`/`park` with `--interrupt` (or a `--cancel` that hit a dialog). Inspect pane, formulate alternate path, and prompt (`herd.sh --session "$SESSION" prompt --agent <name> --related --text "<guidance>"`) or halt (`herd.sh --session "$SESSION" reject --agent <name> --halt` on a pending dialog; on a working pane it refuses without `--interrupt` — prefer `herd.sh --session "$SESSION" park --agent <name>`) |
+| pane actively running a disallowed action | `herd.sh --session "$SESSION" reject --agent <name> --halt --interrupt --reason "<why>"`; this is the only case for `--interrupt` |
+| provider quota exhausted | `herd.sh --session "$SESSION" park --agent <name>` for all active panes (`complete` any with a completed handoff first), `scheduler.py rollback` unclaimed beads, record reset time on the bead, and re-dispatch on alternate model/lease |
 | wave finished | re-run `ready`; stop when it returns nothing |
 
-> **Parked worker recovery note:** Parking an agent (`herd.sh --session "$SESSION" park --agent <name> --cancel`) releases its resource leases and records `lifecycle: "parked"`, preventing fleet deadlocks while awaiting human resolution. To resume a parked worker once the human decision or blocker is resolved, use `herd.sh --session "$SESSION" reset` with the same lease and task flags as spawn (`--group`, `--resource`, `--approval-mode`, `--task`, `--handoff`) to launch a fresh context with newly acquired leases. Direct `prompt` into a parked agent is refused because its prior leases were freed. Note: If calling `fleet.py` directly, `--session <name>` must precede the subcommand and requires `--allow-cross-session`.
+> **Parked worker recovery note:** Parking an agent (`herd.sh --session "$SESSION" park --agent <name>`) releases its resource leases and records `lifecycle: "parked"`, preventing fleet deadlocks while awaiting human resolution. Parked panes stay open by design until `reset` or `cleanup_fleet.sh`; an open parked pane is not a leak. To resume a parked worker once the human decision or blocker is resolved, use `herd.sh --session "$SESSION" reset` with the same lease and task flags as spawn (`--group`, `--resource`, `--approval-mode`, `--task`, `--handoff`) to launch a fresh context with newly acquired leases. Direct `prompt` into a parked agent is refused because its prior leases were freed. Note: If calling `fleet.py` directly, `--session <name>` must precede the subcommand and requires `--allow-cross-session`.
 
 > **Crash recovery note:** `herd.sh --session "$SESSION" reconcile --group <group>` reclaims resources held by dead workers. By default convention the group is `repo:$REPO`. If unknown or across multiple repos, obtain it by inspecting `tasks.json` in the session state directory (`~/.config/.agents/herder/<session>/tasks.json`) or listing active groups via `python3 "$POOL" list-groups` / `python3 "$POOL" status` (note: `resource_pool.py status` prints JSON by default and has no `--json` flag).
 
@@ -315,7 +320,7 @@ Orchestrating multi-wave agent fleets across long sessions requires active conte
 2. **Discover & Claim:** Rank unblocked candidates with `python3 "$SCHED" ready --project "$REPO" --limit 4 --json`, then claim each with `python3 "$SCHED" claim <id> --actor bead-<id> --project "$REPO"`.
 3. **Spawn & Supervise:** Spawn workers with `bash "$HERD" --session "$SESSION" spawn ...`, then launch `bash "$AUTO" --session "$SESSION" --project "$REPO"` as a background command and yield.
 4. **Advance Waves:** Once the wave completes, re-run `ready` for the next wave; repeat until `ready` returns no candidates.
-5. **Recovery & Blockers:** If human attention is needed, approve eligible prompts or `park --cancel` blockers. If a spawn fails, `rollback`. Reconcile leases on crash (`herd.sh reconcile`).
+5. **Recovery & Blockers:** If human attention is needed, approve eligible prompts, `complete` workers with a completed handoff, and `park` blocked ones (`--cancel` only for a pending dialog). If a spawn fails, `rollback`. Reconcile leases on crash (`herd.sh reconcile`).
 6. **Report:** Derive final report from durable state (`br list --status closed --json`) and record all closed, parked, and error entries. If `dev-plans/$slug/memory/MEMORY.md` exists and the fleet's work changed its Status (phase, blockers) or moved a concept to a new file, update those lines — one edit, not a per-wave log. Beads stays the durable graph; MEMORY.md stays the human-readable orientation pointer to it.
 
 ## Load detail only when needed

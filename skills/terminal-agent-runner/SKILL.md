@@ -147,15 +147,45 @@ Exit codes: `0` fleet empty and all work completed, `1` every remaining agent ne
 review, `2` usage or operational error, `4` empty fleet on the first poll (failed spawn or wrong
 session). A `1` is where you read the reported blockers and act; it is not a crash.
 
+A `working` agent is declared stalled only after its pane has not changed for
+`--max-idle-seconds` (alias `--budget`, env `AGENT_HERDER_MAX_IDLE_SECONDS`, default 600) — time
+since the last pane change, not a poll count. A pane showing a running foreground command
+(spinner, AGY `○ Running (...)`/`N task(s)`, Claude `✶ Verb… (Ns`) is never stalled; raise the
+budget for work that is legitimately quiet. `AGENT_HERDER_MAX_WORKING_POLLS` is no longer used.
+
 `status` will not report an agent `done` or `idle` from a single sample — a state must hold
 across `--settle-samples` consecutive polls (default 2), and empty or partially-rendered pane
 frames never count as settled. Do not treat a single status row as a completion signal.
+A pane showing foreground execution is `working` even when Herdr reports done/idle or an
+earlier `FLEET_HANDOFF` is still on screen; a handoff the pane already showed when `prompt`/`reject`
+sent the current task is from the previous turn and never counts as completion (a handoff file
+written for this turn still does). A worker whose handoff says `status` other than `completed`,
+or lists `blockers`, shows as `handoff-blocked` with its first blocker under PENDING — read it and
+decide; `auto_herd.sh` sets it aside the same way.
 
-Completion (`complete`) ends the agent: it requires structured evidence, records the handoff, releases all resource leases, and closes the agent's pane. Because completion terminates the agent, follow-up work needs a new `spawn` rather than re-prompting the completed worker (prompting an agent that no longer exists is refused). Re-prompting a still-live agent remains supported for related follow-up work.
+Completion (`complete`) ends the agent: it requires structured evidence, records the handoff, releases all resource leases, and closes the agent's pane. The assignment is kept with `lifecycle: "completed"` (task, cwd and `bead_id` intact); `completed` and `dead` are terminal, so `prompt` and `park` refuse them and `status` reports a pane that outlived `complete` as `completed`. Follow-up work needs a new `spawn` rather than re-prompting the completed worker. Re-prompting a still-live agent remains supported for related follow-up work; a failed `prompt` leaves the recorded task and the worker's handoff files untouched.
 
-The handoff must be valid JSON within `--max-chars` (default 4000) or `complete` is refused and
-the agent keeps its leases. `--lines` does not shrink it — the cap applies to the agent's own
-emitted handoff block, not the pane scrape. Tell workers the character budget in their task text;
+Closing a pane (`complete`, `reset`) hangs up its terminal and kills every process the worker
+started from it, including background servers. Both therefore refuse (exit 2, listing pid and
+command, locks and state retained) while the pane's shell still has live processes outside the
+agent CLI's own process group; stop them, or pass `--allow-kill-children` to close anyway. When
+Herdr gives no shell pid the check is skipped with a stderr note. Long-lived services a later gate
+needs (fixtures, dev servers) must be started detached (`nohup setsid <cmd> &`, or `nohup <cmd> &
+disown` where `setsid` is missing) or by the lead — never left owned by a worker pane.
+
+`spawn` fails, and closes the new pane, only when the CLI never becomes ready or opens a dialog
+policy will not clear. Before closing, it prints the visible pane to stderr and writes a
+`spawn_failed` event (with `pane_text`); the error names the readiness predicate that failed. When
+the initial task was submitted but its delivery could not be confirmed from the pane (a first
+command that blocks quietly shows no marker), spawn succeeds with `"task_confirmed": false` and a
+stderr warning, keeping the pane and leases: check `read`/`status` before re-prompting with
+`prompt --related`.
+
+The handoff must be valid JSON within `--max-chars` (default 16000) or `complete` is refused and
+the agent keeps its leases; the refusal names what was measured (handoff file, pane, or override).
+`--lines` does not shrink it — the cap applies to the agent's own
+emitted handoff block, not the pane scrape. A lead-supplied `--handoff <json|@file>` skips the pane
+entirely and only the override is measured. Tell workers the character budget in their task text;
 in practice a worker reporting real verification output will exceed 4000 unless told not to. When
 a re-prompt fails to shrink it, raising `--max-chars` preserves the evidence, whereas
 `park --cancel` frees the leases but discards it.
@@ -176,7 +206,7 @@ Because the grant is one-shot and digest-bound, unprompted replaying of an alrea
 bash "$S/herd.sh" --session "$MY_FLEET" approve --agent c1 --reviewed-by dev --reviewed-subject <digest> --regrant
 ```
 
-If a pending operation or permission should be denied, use `reject` to dismiss the dialog with `Esc` and either instruct the worker on what alternative path to take, or halt/park it:
+If a pending operation or permission should be denied, use `reject` to dismiss the dialog with `Esc` and either instruct the worker on what alternative path to take, or halt/park it. `reject` and `cancel` send `Esc` only when the pane shows a pending dialog: on a working pane they refuse (exit 2), because `Esc` would abort the turn — redirect a working agent with `prompt --related` instead, or pass `--interrupt` to abort it deliberately. `reject` exits 1 when its continuation prompt cannot be verified; `reject --prompt` records the prompt as a related follow-up on the task, like `prompt`.
 
 ```bash
 # Reject permission and instruct the worker on how to continue without the action:
@@ -186,7 +216,14 @@ bash "$S/herd.sh" --session "$MY_FLEET" reject --agent c1 --prompt "Do not delet
 bash "$S/herd.sh" --session "$MY_FLEET" reject --agent c1 --halt --reason "Disallowed deletion command"
 ```
 
-If an agent becomes hopelessly blocked, you can escalate and free its locks manually:
+If an agent becomes hopelessly blocked, you can escalate and free its locks manually. `park`
+refuses (exit 2, `nothing to park`) an agent with no assignment or a `completed`/`dead` one.
+`park --cancel` sends `Esc` only to a pending dialog, never when the worker has written a handoff
+file or printed `FLEET_HANDOFF`; on a working pane without a dialog it parks without `Esc` unless
+`--interrupt` is also given (the output reports `esc_sent`/`esc_skipped`). Parking with no dialog
+and no `--reason` records `parked by lead (no pending dialog)`. A parked pane may show
+`Interrupted`: that is the CLI's rendering of the `Esc` sent to dismiss a dialog (or of
+`--interrupt`), not a sign the worker was killed:
 
 ```bash
 bash "$S/herd.sh" --session "$MY_FLEET" park --agent c1 --cancel             # escalate blocked worker & free locks

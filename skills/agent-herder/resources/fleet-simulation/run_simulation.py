@@ -18,7 +18,9 @@ into a workspace that holds unrelated work.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import importlib.util
+import io
 import json
 import os
 import re
@@ -1255,7 +1257,24 @@ def check_rejection_and_interrupted_flow(env: dict[str, str], session: str) -> N
     """
     fleet_mod = load_module(FLEET, "sim_fleet_rejection")
 
-    # 1. Assert fleet reject --prompt sends Esc and submits continuation prompt
+    # 1. Assert fleet reject --prompt sends Esc and submits continuation prompt.
+    # Reject dismisses a pending permission dialog, so the worker's pane shows one;
+    # with no dialog the runner refuses to send Esc (it would abort a working turn).
+    fleet_mod.STATE_DIR = Path(env.get("AGENT_HERDER_STATE_DIR",
+                                        str(Path.home() / ".config" / ".agents" / "herder")))
+    dialog_pane = ("Bash command\n\n  rm -rf build/cache\n\nDo you want to proceed?\n"
+                   "\u276f 1. Yes\n  2. No\n")
+    herdr_calls: list[list[str]] = []
+
+    def fake_herdr(cmd_args, session=None, check=False, timeout=None):
+        herdr_calls.append(list(cmd_args))
+        if cmd_args[:2] == ["agent", "read"]:
+            return {"result": {"read": {"text": dialog_pane}}}
+        if cmd_args[:2] == ["agent", "list"]:
+            return {"result": {"agents": [{"name": "sim-worker-reject", "pane_id": "p-sim",
+                                           "agent": "agy", "agent_status": "blocked"}]}}
+        return {"result": "ok"}
+
     args_prompt = argparse.Namespace(
         agent="sim-worker-reject",
         session=session,
@@ -1264,13 +1283,12 @@ def check_rejection_and_interrupted_flow(env: dict[str, str], session: str) -> N
         halt=False,
         park=False,
     )
-    with mock.patch.object(fleet_mod, "herdr") as mock_herdr, \
+    with mock.patch.object(fleet_mod, "herdr", side_effect=fake_herdr), \
          mock.patch.object(fleet_mod, "_submit", return_value=True) as mock_submit, \
          mock.patch.object(fleet_mod.time, "sleep"):
         fleet_mod.cmd_reject(args_prompt)
-        expect(mock_herdr.call_args_list and mock_herdr.call_args_list[0].args[0] == [
-            "agent", "send-keys", "sim-worker-reject", "esc"
-        ], "fleet reject did not send escape sequence to unblock worker")
+        expect(["agent", "send-keys", "sim-worker-reject", "esc"] in herdr_calls,
+               "fleet reject did not send escape sequence to unblock worker")
         expect(mock_submit.called and mock_submit.call_args[0][:3] == (
             "sim-worker-reject", session, "Avoid destructive rm; archive files instead"
         ), "fleet reject did not submit alternative prompt")
@@ -1283,14 +1301,32 @@ def check_rejection_and_interrupted_flow(env: dict[str, str], session: str) -> N
     expect(bool(held_by(env, halt_group, halt_agent)),
            "pre-condition failed: lease was not acquired for halt test")
 
-    res_halt = fleet(env, "reject", "--agent", halt_agent, "--group", halt_group,
-                     "--halt", "--reason", "Supervisor halted rejected worker")
-    expect(res_halt.returncode == 0, f"fleet reject --halt failed: {res_halt.stderr}")
-    expect("parked" in res_halt.stdout, f"fleet reject --halt output missing 'parked': {res_halt.stdout}")
+    # The halted worker is live, shows the dialog being rejected, and owns the lease
+    # through its recorded assignment -- the state a real `reject --halt` acts on.
+    with mock.patch.dict(os.environ, env):
+        fleet_mod.set_task(halt_agent, "sim task needing staging", session, halt_group,
+                           ["api:staging"], False, "auto")
+
+        def fake_halt_herdr(cmd_args, session=None, check=False, timeout=None):
+            if cmd_args[:2] == ["agent", "read"]:
+                return {"result": {"read": {"text": dialog_pane}}}
+            if cmd_args[:2] == ["agent", "list"]:
+                return {"result": {"agents": [{"name": halt_agent, "pane_id": "p-halt",
+                                               "agent": "agy", "agent_status": "blocked"}]}}
+            return {"result": "ok"}
+
+        halt_args = argparse.Namespace(agent=halt_agent, session=session, group=halt_group,
+                                       halt=True, park=False, prompt=None,
+                                       reason="Supervisor halted rejected worker")
+        halt_out = io.StringIO()
+        with mock.patch.object(fleet_mod, "herdr", side_effect=fake_halt_herdr), \
+             mock.patch.object(fleet_mod.time, "sleep"), \
+             contextlib.redirect_stdout(halt_out):
+            fleet_mod.cmd_reject(halt_args)
+    expect("parked" in halt_out.getvalue(),
+           f"fleet reject --halt output missing 'parked': {halt_out.getvalue()}")
     expect(not held_by(env, halt_group, halt_agent),
            "fleet reject --halt did not release resource leases from resource_pool.py")
-    fleet_mod.STATE_DIR = Path(env.get("AGENT_HERDER_STATE_DIR",
-                                        str(Path.home() / ".config" / ".agents" / "herder")))
     parked_events = [e for e in fleet_mod.drain_events(session) if e.get("agent") == halt_agent]
     expect(len(parked_events) == 1 and parked_events[0].get("kind") == "parked",
            f"expected parked event for {halt_agent} in outbox: {parked_events}")
