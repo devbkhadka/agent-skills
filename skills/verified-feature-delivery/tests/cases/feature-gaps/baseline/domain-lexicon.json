@@ -1,0 +1,15 @@
+{
+  "entities": [{"name": "SearchConsole"}],
+  "actions": [{"name": "submit_query"}],
+  "state_enums": [
+    {
+      "name": "SearchConsoleStatus",
+      "tokens": ["IDLE", "SEARCHING_FROM_IDLE", "SEARCHING_OVER_STALE", "RESULTS_POPULATED", "ERROR_SHOWN", "TERMINAL_UNMOUNTED"],
+      "terminal_tokens": ["TERMINAL_UNMOUNTED"]
+    }
+  ],
+  "actors_and_observers": {
+    "actors": [{"id": "operator"}],
+    "observers": [{"id": "operator"}, {"id": "system_telemetry"}]
+  }
+}

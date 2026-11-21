@@ -43,7 +43,18 @@
         },
         "decided_by": { "type": "string" },
         "decided_at": { "type": "string" },
-        "notes": { "type": "string" }
+        "notes": { "type": "string" },
+        "slice_id": { "type": "string" },
+        "element_digests": {
+          "type": "object",
+          "description": "Per-element sha256 digests ('<kind>:<id>' -> digest) of the approved scope; absent on legacy records.",
+          "additionalProperties": { "type": "string" }
+        },
+        "stale_elements": {
+          "type": "array",
+          "description": "Element ids whose content changed since approval, written when the record goes STALE.",
+          "items": { "type": "string" }
+        }
       }
     }
   }

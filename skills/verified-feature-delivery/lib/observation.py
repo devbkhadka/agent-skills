@@ -17,7 +17,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import AbstractSet, Any, Dict, List, Optional, Sequence, Tuple
 
 from .normalisation import capture_projection, compute_fingerprint, normalise_rendered_ui
 from .primitives import check_closed_key_set, is_vacuous_container
@@ -296,15 +296,20 @@ def verify_rendered_ui_observation(
     planned: Dict[str, Any],
     verified: Sequence[Any],
     base_dir: Optional[Path] = None,
+    observe_milestones: Optional[AbstractSet[str]] = None,
 ) -> List[str]:
     """Verify that every rendered_ui milestone capture matches live browser observation.
 
     Refuses unobserved claims, unreachable targets, empty renderings, and disagreements.
+    observe_milestones, when given, limits live observation to those milestones (the slices new
+    or invalidated in this delivery); None observes every rendered_ui milestone.
     """
     problems: List[str] = []
 
     for evidence in verified:
         if evidence.planned.verification_medium != "rendered_ui":
+            continue
+        if observe_milestones is not None and evidence.planned.milestone_id not in observe_milestones:
             continue
 
         milestone_id = evidence.planned.milestone_id

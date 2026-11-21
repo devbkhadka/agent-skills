@@ -1,11 +1,30 @@
 ---
 name: verified-feature-delivery
-description: Phased, contract-driven planning and verification pipeline resolving the five fundamental failure modes in agentic development across six verifiable stages.
+description: Phased, contract-driven planning and verification pipeline resolving the five fundamental failure modes in agentic development across six verifiable stages. Also the shared engine and router for four standalone skills — change-lane (triage a change first), domain-baseline, feature-gaps, architecture-rules — so small changes skip the full pipeline.
 ---
 
 # Verified Feature Delivery
 
 A stateful, contract-driven, six-stage pipeline that eliminates agentic software engineering failure modes: incomplete requirements, mock-to-reality verification gaps, conversational abstraction mismatch, horizontal layer lock-in, and regressive loops.
+
+## Start here: pick the entry point
+
+The full six-stage pipeline is for a new capability. Most changes need less, so route first:
+
+| You want to… | Use | Needs |
+| :--- | :--- | :--- |
+| Ship a change and verify only what its risk needs | [`change-lane`](../change-lane/SKILL.md) — `bin/triage-change` returns TWEAK / EXTENSION / NEW_CAPABILITY and escalates on its own | a baseline (else it says NEW_CAPABILITY) |
+| Record the project's entities, boundaries and contracts once, for every later change | [`domain-baseline`](../domain-baseline/SKILL.md) — committed `docs/domain/` | nothing |
+| Find missing states, branches and terms in one feature; emit Given/When/Then rules | [`feature-gaps`](../feature-gaps/SKILL.md) | a scenario matrix; baseline optional |
+| Draw layer boundaries and slices; emit CI architecture fitness checks | [`architecture-rules`](../architecture-rules/SKILL.md) | an execution DAG |
+| Deliver a NEW_CAPABILITY end to end | this skill, from the state dispatcher below, with `planner-state init --lane <lane> --baseline-dir docs/domain` | — |
+
+The four entry skills run the validators and renderers in this skill's `bin/` and `lib/` without
+`planner-state`. The full pipeline chains them: Stages 0–1 produce the lexicon and fixtures that
+domain-baseline promotes (or reuse it through `--baseline-dir`), Stage 2's matrix is what
+feature-gaps checks, Stage 3's DAG is what architecture-rules turns into fitness checks, and `--lane`
+sizes the Stage 5 exit. With no baseline
+and the default lane (`NEW_CAPABILITY`), the pipeline behaves exactly as it always has.
 
 Before writing or amending any gate in this pipeline, read [`SURROGATE-VERIFICATION.md`](SURROGATE-VERIFICATION.md) — the three ways a check passes broken work, written from the eleven real defects found while building this skill's own gates.
 
@@ -51,8 +70,9 @@ To keep cognitive token context minimal, agents must **progressively load** inst
 All state mutations and evaluations must be performed using `bin/planner-state`:
 
 ```bash
-# Initialize state for a new feature
-python3 bin/planner-state init --feature <slug>
+# Initialize state for a new feature (lane from bin/triage-change; default NEW_CAPABILITY;
+# --baseline-dir seeds the lexicon and the contract fixtures Stage 1 may reuse)
+python3 bin/planner-state init --feature <slug> [--lane TWEAK|EXTENSION|NEW_CAPABILITY] [--baseline-dir docs/domain]
 
 # Show current lifecycle state and registered artifacts
 python3 bin/planner-state show --feature <slug>
@@ -110,10 +130,10 @@ Executable BDD scenarios bridge Stage 2 flow simulation and Stage 4 milestone ex
 
 The pipeline is explicitly long-running (spanning six stages and many milestone waves). The driving agent is the singular context that must survive the entire delivery as an independent, neutral judge:
 
-1. **Driver Produces No Evidence & Reads No Source**: The driver never runs test suites, gate validators, compilers, repository diffs, raw file reads, migrations, or log inspection directly.
+1. **Driver Produces No Evidence & Reads No Source**: The driver never runs test suites, compilers, repository diffs, raw file reads, migrations, or log inspection directly. **Exception — deterministic checks:** the driver may run a check whose verdict is its exit code and whose output is a reason code (`bin/planner-state`, the `bin/validate-*` gates, `bin/triage-change`, `bin/find-gaps`, an emitted `check_architecture.py`). Their verdict is not the driver's judgement, so it is not tainted.
 2. **Structured Worker Dispatch**: Every exploratory or evidence-generating command is dispatched to a worker subagent or Herdr pane and returns as a structured claim object. The driver's tool use is strictly restricted to dispatching tasks, evaluating structured handoffs, and recording state decisions via `bin/planner-state`.
 3. **Independent Cross-Verification**: When the driver questions or rejects an evidence claim, it must spawn an independent cross-verification agent. Re-running the command directly converts the judge into a producer and destroys the independence of the verdict.
-4. **Self-Verification Penalty**: Any evidence generated directly by the driving agent is tainted as `SELF_VERIFIED` and cannot satisfy independent gate criteria.
+4. **Self-Verification Penalty**: Any *judged* claim the driving agent produces itself — a reading of a log, a diff, a rendering or prose — is tainted as `SELF_VERIFIED` and cannot satisfy independent gate criteria. Exit-code verdicts of deterministic checks (rule 1) are not judged claims.
 
 
 

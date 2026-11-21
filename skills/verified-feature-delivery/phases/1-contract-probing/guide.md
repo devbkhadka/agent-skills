@@ -17,6 +17,7 @@
    - Partitioned payload variance census
 4. Stamp every fixture with `fixture_status` (`PROBED_LIVE`, `REPLAYED_FROM_RECORDING`, `PROVISIONAL_FROM_SCHEMA`).
 5. For provisional fixtures, pin a named Stage 4 live re-probe milestone.
+6. **Reuse from the project baseline.** A feature initialised with `planner-state init --baseline-dir docs/domain` starts with `contract-fixtures/manifest.json` already holding the rows Stage 1 may reuse — boundary classes the baseline records as `PRESENT`, every property `PROBED` (or `NOT_PRESENT`), each fixture `PROBED_LIVE` or `REPLAYED_FROM_RECORDING` — with their fixtures copied (`state.json` `baseline.reused_boundary_classes`). Do not re-probe those. Every other class still needs its row: a baseline `NOT_PRESENT` row reading "Baseline initialized unprobed." means never probed, not absent, so it is never seeded and must be probed here.
 
 ---
 

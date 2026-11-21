@@ -1001,6 +1001,139 @@ class TestDeclaredOutcomeSuccess(unittest.TestCase):
         self.assertEqual(declared[("state:SESSION_UNRESOLVED_EXIT_1", "client")], ("api_response", 409))
 
 
+class TestRetiredRecords(unittest.TestCase):
+    """Records whose projection a Stage 2 amendment removed are reported, never graded or deleted."""
+
+    MATRIX = TestDeclaredOutcomeSuccess.MATRIX
+    DAG = TestDeclaredOutcomeSuccess.DAG
+    exit_record = TestDeclaredOutcomeSuccess.exit_record
+    api_record = TestDeclaredOutcomeSuccess.api_record
+    records = TestDeclaredOutcomeSuccess.records
+    grade = TestDeclaredOutcomeSuccess.grade
+
+    def removed_record(self):
+        # Fingerprints exactly like state:SESSION_STARTED@agent, so grading it would collide.
+        return self.exit_record("state:WORKSTREAM_REOPENED", 0)
+
+    def test_a_record_for_a_removed_projection_is_retired_not_collided(self):
+        code, message = self.grade(self.records() + [self.removed_record(), self.removed_record()])
+        self.assertEqual(code, 0, message)
+        self.assertNotIn("FINGERPRINT_COLLISION", message)
+        self.assertIn("RETIRED: 2 execution record(s) across 1 projection(s)", message)
+        self.assertIn("state:WORKSTREAM_REOPENED@agent (2 record(s))", message)
+
+    def test_the_same_record_still_collides_while_the_matrix_declares_it(self):
+        matrix = json.loads(json.dumps(self.MATRIX))
+        matrix["states"].append({
+            "state_id": "WORKSTREAM_REOPENED", "evidence_key": "state:WORKSTREAM_REOPENED",
+            "observable_projections": [{"observer_id": "agent", "medium": "process_exit",
+                                        "discriminator": {"exit_code": "0"}}]})
+        code, message = self.grade(self.records() + [self.removed_record()], matrix=matrix)
+        self.assertEqual(code, 1)
+        self.assertIn("FINGERPRINT_COLLISION", message)
+        self.assertNotIn("RETIRED", message)
+
+    def test_retired_records_stay_in_the_ledger_and_are_summarised(self):
+        with tempfile.TemporaryDirectory() as workspace:
+            feature_dir = Path(workspace) / "declared-outcome"
+            (feature_dir / "milestones").mkdir(parents=True)
+            (feature_dir / "flow-simulation-matrix.json").write_text(json.dumps(self.MATRIX), encoding="utf-8")
+            (feature_dir / "execution-dag.json").write_text(json.dumps(self.DAG), encoding="utf-8")
+            executions = {
+                "schema_version": "1.0.0", "feature_slug": "declared-outcome",
+                "generated_at": "2026-11-08T10:00:00Z",
+                "milestones": self.records() + [self.removed_record()],
+            }
+            executions_path = feature_dir / "milestones" / "executions.json"
+            executions_path.write_text(json.dumps(executions), encoding="utf-8")
+            code, message = milestone_harness.validate_milestone_execution(feature_dir, write=True)
+            self.assertEqual(code, 0, message)
+            self.assertEqual(json.loads(executions_path.read_text(encoding="utf-8")), executions)
+            summary = json.loads((feature_dir / "milestones" / "evidence-summary.json").read_text(encoding="utf-8"))
+            self.assertEqual(summary["retired_records"], [
+                {"evidence_key": "state:WORKSTREAM_REOPENED", "observer_id": "agent", "record_count": 1}])
+            self.assertEqual(len(summary["milestones_verified"]), 4)
+
+    def test_a_retired_failure_is_not_routed_as_a_regression(self):
+        failing = self.exit_record("state:WORKSTREAM_REOPENED", 3)
+        code, message = self.grade(self.records() + [failing])
+        self.assertEqual(code, 0, message)
+        self.assertNotIn("UNTRACED_FAILURE", message)
+
+
+class TestCodelessMediumDischarge(unittest.TestCase):
+    """A provisional fixture pinned to a medium with no exit code or status can be discharged.
+
+    Success for those media is computed from the capture itself (see milestone_harness
+    medium_success); the record still has no field that can declare it.
+    """
+
+    DATASTORE_OK = {
+        "mutations": [{"table": "seats", "changed_columns": [{"name": "org_id", "value": "o-1"}]}],
+        "constraints": [{"name": "fk_org_id", "outcome": "SATISFIED"},
+                        {"name": "chk_seat_limit", "outcome": "SATISFIED"}],
+    }
+
+    def grade(self, medium, captured):
+        matrix = {
+            "schema_version": "1.0.0", "feature_slug": "codeless",
+            "observers": [{"observer_id": "obs", "medium": medium}],
+            "states": [{"state_id": "SEAT_ADDED", "evidence_key": "state:SEAT_ADDED",
+                        "observable_projections": [{"observer_id": "obs", "medium": medium,
+                                                    "discriminator": {"label": "seat added"}}]}],
+        }
+        dag = {"slices": [{"slice_id": "s01", "milestones": [
+            {"milestone_id": "M_REPROBE", "verification_medium": medium,
+             "claims": ["state:SEAT_ADDED@obs"]}]}]}
+        record = {
+            "milestone_id": "M_REPROBE", "slice_id": "s01", "verification_medium": medium,
+            "executed_command": "vitest run reprobe", "evidence_key": "state:SEAT_ADDED",
+            "observer_id": "obs", "boundary_identifier": "pg_main", "captured_evidence": captured,
+        }
+        fixture = {"boundary_class": "DATASTORE", "boundary_identifier": "pg_main",
+                   "fixture_status": "PROVISIONAL_FROM_SCHEMA", "pinned_reprobe_milestone": "M_REPROBE"}
+        with tempfile.TemporaryDirectory() as workspace:
+            feature_dir = Path(workspace) / "codeless"
+            (feature_dir / "milestones").mkdir(parents=True)
+            (feature_dir / "contract-fixtures").mkdir()
+            (feature_dir / "contract-fixtures" / "manifest.json").write_text("{}", encoding="utf-8")
+            (feature_dir / "contract-fixtures" / "pg_main.json").write_text(json.dumps(fixture), encoding="utf-8")
+            (feature_dir / "flow-simulation-matrix.json").write_text(json.dumps(matrix), encoding="utf-8")
+            (feature_dir / "execution-dag.json").write_text(json.dumps(dag), encoding="utf-8")
+            (feature_dir / "milestones" / "executions.json").write_text(json.dumps({
+                "schema_version": "1.0.0", "feature_slug": "codeless",
+                "generated_at": "2026-11-08T10:00:00Z", "milestones": [record],
+            }), encoding="utf-8")
+            return milestone_harness.validate_milestone_execution(feature_dir, write=False)
+
+    def test_satisfied_constraints_discharge_a_datastore_reprobe(self):
+        code, message = self.grade("datastore_state", self.DATASTORE_OK)
+        self.assertEqual(code, 0, message)
+
+    def test_a_violated_constraint_does_not_discharge_and_is_not_a_regression(self):
+        violated = json.loads(json.dumps(self.DATASTORE_OK))
+        violated["constraints"][1]["outcome"] = "VIOLATED"
+        code, message = self.grade("datastore_state", violated)
+        self.assertEqual(code, 1)
+        self.assertIn("PROVISIONAL_FIXTURE_OUTSTANDING", message)
+        self.assertNotIn("UNTRACED_FAILURE", message)
+
+    def test_a_rendered_page_discharges_and_an_empty_one_does_not(self):
+        code, message = self.grade("rendered_ui", '<main><p role="status">Seat added</p></main>')
+        self.assertEqual(code, 0, message)
+        code, message = self.grade("rendered_ui", '<div class="x"></div>')
+        self.assertIn("PROVISIONAL_FIXTURE_OUTSTANDING", message)
+
+    def test_a_transcript_needs_a_final_message_to_discharge(self):
+        code, message = self.grade("agent_transcript", {
+            "tool_calls": [{"name": "seats.add", "arguments": {"org": "o-1"}}],
+            "final_message": "Added 1 seat."})
+        self.assertEqual(code, 0, message)
+        code, message = self.grade("agent_transcript", {
+            "tool_calls": [{"name": "seats.add", "arguments": {"org": "o-1"}}], "final_message": ""})
+        self.assertIn("PROVISIONAL_FIXTURE_OUTSTANDING", message)
+
+
 class TestVarianceCensusExercise(unittest.TestCase):
     FIXTURE = {
         "success_samples": [

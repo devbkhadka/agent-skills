@@ -1,0 +1,186 @@
+#!/usr/bin/env python3
+"""Triage a code change into TWEAK / EXTENSION / NEW_CAPABILITY against the project baseline.
+
+Owner: change-lane
+Purpose: Route every change to the cheapest verification lane that is still safe. Gathers the
+inputs (the unified diff, old/new baseline lexicon, contract manifest, triage.json) and hands them
+to the pure lib/triage.py.
+
+Usage:
+  triage-change [--baseline-dir docs/domain] [--repo .] [--base HEAD] [--diff-file <diff>]
+                [--declare <change.json>] [--json]
+
+Without --diff-file the diff is `git diff <base>` in --repo plus untracked files.
+
+Exit 0 when triaged (the lane is the product). Exit 1 with LANE_UNDERDECLARED when --declare names
+a lane below the computed one. Exit 2 on unreadable input (INVALID_TRIAGE_INPUT).
+"""
+
+import argparse
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+import sys
+from typing import List, Optional
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from lib.triage import (  # noqa: E402
+    FileDiff,
+    Hunk,
+    LANES,
+    parse_unified_diff,
+    reverse_apply,
+    triage,
+)
+
+
+class TriageInputError(Exception):
+    pass
+
+
+def _git(repo: Path, *args: str) -> str:
+    result = subprocess.run(["git", "-C", str(repo)] + list(args), capture_output=True,
+                            text=True, timeout=120)
+    if result.returncode != 0:
+        raise TriageInputError("git %s failed: %s" % (" ".join(args), result.stderr.strip()))
+    return result.stdout
+
+
+def _untracked_as_new_files(repo: Path) -> List[FileDiff]:
+    files = []
+    for rel in _git(repo, "ls-files", "--others", "--exclude-standard", "-z").split("\0"):
+        if not rel:
+            continue
+        try:
+            lines = (repo / rel).read_text(encoding="utf-8").splitlines()
+        except (OSError, UnicodeDecodeError):
+            lines = []  # binary or unreadable: the path still counts, its content cannot
+        hunk = Hunk(old_start=0, old_len=0, new_start=1, new_len=len(lines),
+                    lines=["+" + l for l in lines])
+        files.append(FileDiff(path=rel, is_new=True, hunks=[hunk] if lines else []))
+    return files
+
+
+def _load_json(path: Path, what: str):
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise TriageInputError("cannot read %s %s: %s" % (what, path, exc))
+
+
+def gather(args) -> dict:
+    repo = Path(args.repo).resolve()
+    baseline_dir = Path(args.baseline_dir)
+    if not baseline_dir.is_absolute():
+        baseline_dir = repo / baseline_dir
+    baseline_dir = baseline_dir.resolve()
+
+    if args.diff_file:
+        try:
+            diff_text = Path(args.diff_file).read_text(encoding="utf-8")
+        except OSError as exc:
+            raise TriageInputError("cannot read diff file: %s" % exc)
+        files = parse_unified_diff(diff_text)
+    else:
+        files = parse_unified_diff(_git(repo, "diff", args.base)) + _untracked_as_new_files(repo)
+
+    declared = None
+    if args.declare:
+        declared = _load_json(Path(args.declare), "change declaration").get("lane")
+        if declared not in LANES:
+            raise TriageInputError("--declare lane must be one of %s, got %r" % (list(LANES), declared))
+
+    if not (baseline_dir / "baseline.json").is_file():
+        return {"files": files, "baseline_rel": None, "declared_lane": declared}
+
+    baseline_rel = Path(os.path.relpath(baseline_dir, repo)).as_posix()
+    lexicon_file = baseline_dir / "domain-lexicon.json"
+    new_text = lexicon_file.read_text(encoding="utf-8") if lexicon_file.is_file() else ""
+    old_text = new_text
+    lexicon_rel = baseline_rel + "/domain-lexicon.json"
+    for f in files:
+        if f.path == lexicon_rel:
+            if f.is_deleted:
+                old_text = "\n".join(f.removed_lines())
+            else:
+                try:
+                    old_text = reverse_apply(new_text, f)
+                except ValueError as exc:
+                    raise TriageInputError("the diff does not match the current lexicon: %s" % exc)
+    try:
+        new_lexicon = json.loads(new_text) if new_text.strip() else {}
+        old_lexicon = json.loads(old_text) if old_text.strip() else {}
+    except json.JSONDecodeError as exc:
+        raise TriageInputError("baseline lexicon is not valid JSON: %s" % exc)
+
+    manifest_file = baseline_dir / "contract-fixtures" / "manifest.json"
+    config_file = baseline_dir / "triage.json"
+    return {
+        "files": files,
+        "baseline_rel": baseline_rel,
+        "old_lexicon": old_lexicon,
+        "new_lexicon": new_lexicon,
+        "manifest": _load_json(manifest_file, "contract manifest") if manifest_file.is_file() else None,
+        "config": _load_json(config_file, "triage config") if config_file.is_file() else None,
+        "declared_lane": declared,
+    }
+
+
+def render_text(result: dict) -> str:
+    lines = ["LANE: %s (%s)" % (result["lane"], result["verification_tier"])]
+    if result["underdeclared"]:
+        lines.insert(0, "LANE_UNDERDECLARED: declared %s, computed %s"
+                     % (result["declared_lane"], result["computed_lane"]))
+    for reason in result["reasons"]:
+        lines.append("  [%s] %s: %s" % (reason["lane"], reason["code"], reason["detail"]))
+        for path in reason["paths"]:
+            lines.append("      %s" % path)
+    if not result["reasons"]:
+        lines.append("  no escalation signal: no new domain token, boundary, contract or "
+                     "unmapped path")
+    lines.append("Next steps:")
+    lines.extend("  - %s" % step for step in result["next_steps"])
+    return "\n".join(lines)
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Triage a change into TWEAK / EXTENSION / NEW_CAPABILITY",
+        prog="triage-change",
+    )
+    parser.add_argument("--baseline-dir", default="docs/domain",
+                        help="Baseline directory, relative to --repo (default: docs/domain)")
+    parser.add_argument("--repo", default=".", help="Repository root (default: .)")
+    parser.add_argument("--base", default="HEAD", help="Git base to diff against (default: HEAD)")
+    parser.add_argument("--diff-file", help="Read a unified diff instead of running git")
+    parser.add_argument("--declare", help='change.json declaring {"lane": "..."}')
+    parser.add_argument("--json", action="store_true", help="Print the result as JSON")
+    return parser
+
+
+def main() -> int:
+    args = build_parser().parse_args()
+    try:
+        inputs = gather(args)
+    except TriageInputError as exc:
+        print("INVALID_TRIAGE_INPUT")
+        sys.stderr.write("INVALID_TRIAGE_INPUT: %s\n" % exc)
+        return 2
+    try:
+        result = triage(**inputs)
+    except (ValueError, KeyError, TypeError, re.error) as exc:
+        print("INVALID_TRIAGE_INPUT")
+        sys.stderr.write("INVALID_TRIAGE_INPUT: invalid triage.json: %s\n" % exc)
+        return 2
+    if args.json:
+        print(json.dumps(result, indent=2))
+    else:
+        print(render_text(result))
+    return 1 if result["underdeclared"] else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

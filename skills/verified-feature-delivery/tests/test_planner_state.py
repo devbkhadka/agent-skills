@@ -332,5 +332,146 @@ class TestPlannerState(unittest.TestCase):
             self.assertIn("MISSING_GATE_ARTIFACT", combined)
 
 
+RECORD_APPROVAL_PATH = str(BIN_DIR / "record-approval")
+EMPTY_SCOPE_DIGEST = __import__("hashlib").sha256(b"{}").hexdigest()
+
+
+class TestEntityBoundariesApproval(unittest.TestCase):
+    """ENTITY_BOUNDARIES guards the lexicon's boundaries, and an interrupted invalidation recovers."""
+
+    LEXICON = {
+        "schema_version": "1.0.0",
+        "feature_slug": "test-feature",
+        "entity_boundaries": [{"boundary_id": "b_desk", "name": "Desk", "entities": ["Session"]}],
+        "entity_relationships": [{"from_entity": "Session", "to_entity": "Desk", "kind": "belongs_to"}],
+        "simulated_dependencies": [],
+    }
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.feature_dir = Path(self.tmpdir.name) / "test-feature"
+        self.feature_dir.mkdir(parents=True)
+        self.parser = planner_state.build_parser()
+
+    def tearDown(self):
+        self.tmpdir.cleanup()
+
+    def set_state(self, current_state):
+        planner_state.save_state(self.feature_dir, {
+            "schema_version": "1.0.0",
+            "feature_slug": "test-feature",
+            "current_state": current_state,
+            "updated_at": planner_state.now_iso_utc(),
+            "artifacts": dict(planner_state.DEFAULT_ARTIFACT_MAP),
+            "history": [],
+        })
+
+    def write_lexicon(self, lexicon):
+        (self.feature_dir / "domain-lexicon.json").write_text(json.dumps(lexicon), encoding="utf-8")
+
+    def approve(self):
+        import subprocess
+        return subprocess.run(
+            [sys.executable, RECORD_APPROVAL_PATH, "--feature", "test-feature",
+             "--dir", str(self.feature_dir), "--milestone", "ENTITY_BOUNDARIES",
+             "--decided-by", "reviewer@example.com"],
+            capture_output=True, text=True,
+        )
+
+    def advance(self, to_state):
+        args = self.parser.parse_args([
+            "advance", "--feature", "test-feature", "--dir", str(self.feature_dir), "--to", to_state,
+        ])
+        with patch("sys.stdout", new_callable=io.StringIO) as out, \
+             patch("sys.stderr", new_callable=io.StringIO) as err:
+            ret = planner_state.cmd_advance(args)
+        return ret, out.getvalue() + err.getvalue()
+
+    def ledger_record(self):
+        ledger = json.loads((self.feature_dir / "approvals.json").read_text(encoding="utf-8"))
+        return planner_state.find_approval(ledger, "ENTITY_BOUNDARIES")
+
+    def current_state(self):
+        return planner_state.load_state(self.feature_dir)["current_state"]
+
+    def test_approval_digests_the_lexicon_boundaries(self):
+        self.set_state("AWAITING_ENTITY_BOUNDARIES_APPROVAL")
+        self.write_lexicon(self.LEXICON)
+        res = self.approve()
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        record = self.ledger_record()
+        self.assertEqual(record["artifact_path"], "domain-lexicon.json")
+        self.assertEqual(record["status"], "APPROVED")
+        self.assertNotEqual(record["approved_digest"], EMPTY_SCOPE_DIGEST)
+
+    def test_an_empty_scope_is_refused_and_records_nothing(self):
+        self.set_state("AWAITING_ENTITY_BOUNDARIES_APPROVAL")
+        # The guarded keys live in the lexicon; a matrix carrying them does not count.
+        self.write_lexicon({"schema_version": "1.0.0", "feature_slug": "test-feature",
+                            "entity_boundaries": [], "entity_relationships": []})
+        (self.feature_dir / "flow-simulation-matrix.json").write_text(
+            json.dumps({"entity_boundaries": self.LEXICON["entity_boundaries"]}), encoding="utf-8")
+        res = self.approve()
+        self.assertEqual(res.returncode, 1)
+        self.assertIn("EMPTY_APPROVAL_SCOPE", res.stdout)
+        self.assertFalse((self.feature_dir / "approvals.json").exists())
+
+    def test_a_lexicon_boundary_edit_after_approval_goes_stale(self):
+        self.set_state("AWAITING_ENTITY_BOUNDARIES_APPROVAL")
+        self.write_lexicon(self.LEXICON)
+        self.assertEqual(self.approve().returncode, 0)
+        ret, output = self.advance("STAGE_3_VERTICAL_SLICING")
+        self.assertEqual(ret, 0, output)
+
+        edited = json.loads(json.dumps(self.LEXICON))
+        edited["entity_boundaries"][0]["entities"].append("Workstream")
+        self.write_lexicon(edited)
+        ret, output = self.advance("AWAITING_UI_LAYOUT_APPROVAL")
+        self.assertEqual(ret, 1)
+        self.assertIn("STALE_APPROVAL_INVALIDATED", output)
+        self.assertEqual(self.current_state(), "AWAITING_ENTITY_BOUNDARIES_APPROVAL")
+        self.assertEqual(self.ledger_record()["status"], "STALE")
+
+    def test_a_stale_record_left_past_its_gate_is_recovered_by_re_advancing(self):
+        # The state a crash between "ledger saved STALE" and "state saved" used to leave behind.
+        self.set_state("AWAITING_ENTITY_BOUNDARIES_APPROVAL")
+        self.write_lexicon(self.LEXICON)
+        self.assertEqual(self.approve().returncode, 0)
+        ledger = json.loads((self.feature_dir / "approvals.json").read_text(encoding="utf-8"))
+        ledger["approvals"][0]["status"] = "STALE"
+        (self.feature_dir / "approvals.json").write_text(json.dumps(ledger), encoding="utf-8")
+        self.set_state("STAGE_3_VERTICAL_SLICING")
+
+        ret, output = self.advance("AWAITING_UI_LAYOUT_APPROVAL")
+        self.assertEqual(ret, 1)
+        self.assertIn("STALE_APPROVAL_INVALIDATED", output)
+        self.assertEqual(self.current_state(), "AWAITING_ENTITY_BOUNDARIES_APPROVAL")
+
+        res = self.approve()
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        ret, output = self.advance("STAGE_3_VERTICAL_SLICING")
+        self.assertEqual(ret, 0, output)
+        self.assertEqual(self.current_state(), "STAGE_3_VERTICAL_SLICING")
+
+    def test_an_undeletable_derived_doc_still_leaves_the_feature_at_its_gate(self):
+        self.set_state("AWAITING_ENTITY_BOUNDARIES_APPROVAL")
+        self.write_lexicon(self.LEXICON)
+        self.assertEqual(self.approve().returncode, 0)
+        self.assertEqual(self.advance("STAGE_3_VERTICAL_SLICING")[0], 0)
+        # A directory where the derived document should be (left by a mis-aimed --out).
+        (self.feature_dir / "docs" / "domain-entity-map.md").mkdir(parents=True)
+
+        edited = json.loads(json.dumps(self.LEXICON))
+        edited["simulated_dependencies"] = [{"boundary_class": "HTTP"}]
+        self.write_lexicon(edited)
+        ret, output = self.advance("AWAITING_UI_LAYOUT_APPROVAL")
+        self.assertEqual(ret, 1)
+        self.assertIn("STALE_APPROVAL_INVALIDATED", output)
+        self.assertIn("DERIVED_DOCUMENT_NOT_DELETED", output)
+        self.assertEqual(self.current_state(), "AWAITING_ENTITY_BOUNDARIES_APPROVAL")
+        self.assertEqual(self.ledger_record()["status"], "STALE")
+        self.assertEqual(self.approve().returncode, 0)
+
+
 if __name__ == "__main__":
     unittest.main()

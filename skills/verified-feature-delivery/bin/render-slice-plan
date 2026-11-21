@@ -18,6 +18,7 @@ Supported Error Codes:
 - FLOW_SLICE_WITHOUT_OUTCOME
 - SLICE_FLOW_REF_UNKNOWN
 - TEMPLATE_CONTEXT_MISMATCH
+- INVALID_OUTPUT_PATH
 """
 
 import argparse
@@ -27,7 +28,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from lib.render import render_document, RenderError
+from lib.render import RenderError, RenderOutputError, render_document
 
 TEMPLATE_NAME = "slice-plan.md.tmpl"
 DOC_NAME = "vertical-slice-plan.md"
@@ -37,7 +38,7 @@ RENDERER_NAME = "render-slice-plan"
 def build_parser():
     parser = argparse.ArgumentParser(description="Render vertical-slice-plan.md from execution-dag.json")
     parser.add_argument("--artifact", required=True, help="Path to execution-dag.json")
-    parser.add_argument("--out", required=True, help="Output directory")
+    parser.add_argument("--out", required=True, help="Output directory, or the document's own path (<dir>/<doc name>); an existing document is overwritten")
     return parser
 
 
@@ -133,6 +134,10 @@ def main():
             artifact_path=artifact_path.name,
             renderer_name=RENDERER_NAME,
         )
+    except RenderOutputError as e:
+        sys.stderr.write("INVALID_OUTPUT_PATH: %s\n" % e)
+        print("INVALID_OUTPUT_PATH")
+        return 1
     except RenderError as e:
         sys.stderr.write("%s\n" % e)
         print("TEMPLATE_CONTEXT_MISMATCH")

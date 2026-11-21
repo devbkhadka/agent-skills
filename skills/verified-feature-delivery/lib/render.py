@@ -33,6 +33,43 @@ class RenderError(Exception):
     """Raised when a template and its context do not match each other exactly."""
 
 
+class RenderOutputError(RenderError):
+    """Raised when `--out` names no place the renderer's derived document can be written.
+
+    A subclass of RenderError so a caller that only catches RenderError still refuses cleanly
+    instead of printing a traceback; renderers catch it first to print INVALID_OUTPUT_PATH.
+    """
+
+
+# Suffixes that mark `--out` as the document's own file path rather than its directory.
+DOCUMENT_SUFFIXES = (".md", ".html")
+
+
+def resolve_output_path(out: Any, doc_name: str) -> Path:
+    """The file a renderer writes `doc_name` to, given `--out` as a directory or a file path.
+
+    `--out` may be the directory the document lives in (the original contract) or the document's
+    own path (`docs/vertical-slice-plan.md`). A path ending in .md or .html that is not an
+    existing directory is read as a file path, and must name `doc_name` itself: planner-state
+    checks and stale invalidation delete derived documents by their fixed names, so a document
+    written under any other name would be one the pipeline never tracks or invalidates.
+    """
+    out_path = Path(out)
+    if out_path.suffix.lower() in DOCUMENT_SUFFIXES and not out_path.is_dir():
+        if out_path.name != doc_name:
+            raise RenderOutputError(
+                "--out %s names a document other than %s; pass the output directory or "
+                "<dir>/%s" % (out_path, doc_name, doc_name)
+            )
+        return out_path
+    if out_path.exists() and not out_path.is_dir():
+        raise RenderOutputError(
+            "--out %s is an existing file, not a directory; pass the output directory or "
+            "<dir>/%s" % (out_path, doc_name)
+        )
+    return out_path / doc_name
+
+
 def _declared_placeholders(template_text: str):
     pattern = string.Template.pattern
     names = set()
@@ -84,13 +121,21 @@ def render_document(
     banner = _BANNER.format(renderer_name=renderer_name, artifact_path=artifact_path)
     rendered = banner + body
 
-    out_dir = Path(out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / doc_name
+    out_path = resolve_output_path(out_dir, doc_name)
+    if out_path.is_dir():
+        raise RenderOutputError(
+            "%s is a directory, so the derived document cannot be written there; remove it and "
+            "re-render" % out_path
+        )
 
-    if out_path.exists():
-        out_path.chmod(0o644)
-    out_path.write_text(rendered, encoding="utf-8")
-    out_path.chmod(0o444)
+    # The document is derived, so an existing copy is overwritten in place rather than refused.
+    try:
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        if out_path.exists():
+            out_path.chmod(0o644)
+        out_path.write_text(rendered, encoding="utf-8")
+        out_path.chmod(0o444)
+    except OSError as error:
+        raise RenderOutputError("cannot write %s: %s" % (out_path, error))
 
     return out_path

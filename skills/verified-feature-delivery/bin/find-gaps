@@ -1,0 +1,283 @@
+#!/usr/bin/env python3
+"""Gap finder: every gap in a flow-simulation matrix, not just the first.
+
+Owner: feature-gaps
+Purpose: The Stage 2 gate (validate-scenario-matrix) stops at the first violation, which is right
+for a gate and wrong for an analyst who wants the whole list. This tool walks the same rules via
+iter_scenario_matrix_findings, adds the discriminator-collision advisory from verify-projections,
+and, when a project baseline exists, flags matrix terms the baseline lexicon does not know.
+
+Gap codes are the validator's own reason codes, so a gap here and a gate refusal later carry the
+same name. Two advisory codes are added: DISCRIMINATOR_COLLISION_ADVISORY and UNVERIFIED_TERM.
+
+Exit 0 when it ran (gaps are the product, not an error).
+Exit 1 with --strict when any blocking gap exists. Exit 2 on unreadable input.
+"""
+
+import argparse
+import importlib.util
+from importlib.machinery import SourceFileLoader
+import json
+from pathlib import Path
+import sys
+from typing import Dict, List, Optional, Set, Tuple
+
+BIN_DIR = Path(__file__).resolve().parent
+
+
+def _load_bin(module_name: str, file_name: str):
+    loader = SourceFileLoader(module_name, str(BIN_DIR / file_name))
+    spec = importlib.util.spec_from_loader(module_name, loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
+
+
+_vsm = _load_bin("_validate_scenario_matrix", "validate-scenario-matrix")
+_vp = _load_bin("_verify_projections", "verify-projections")
+
+BLOCKING = "blocking"
+ADVISORY = "advisory"
+
+# Reader-facing headings for the report; the code stays the identifier.
+GAP_HEADINGS = {
+    "HANGING_STATE": "Dead-end states (non-terminal, no way out)",
+    "SELF_LOOP_ONLY_EGRESS": "States that can only loop on themselves",
+    "TERMINAL_STATE_HAS_EGRESS": "Terminal states that still transition",
+    "DANGLING_TRANSITION_TARGET": "Transitions to undeclared states",
+    "MISSING_EVIDENCE_KEY": "States nobody can observe (no evidence key)",
+    "MISSING_DISCRIMINATOR": "States an observer cannot tell apart (no discriminator)",
+    "BRANCH_CLASS_UNADDRESSED": "Unconsidered resource/state branches (Group A)",
+    "BRANCH_INAPPLICABLE_UNREASONED": "Branches dismissed without a reason",
+    "GROUP_B_REQUIRED_ON_REPEATABLE_TRIGGER": "Unconsidered trigger/observation branches (Group B)",
+    "SUPERSESSION_NOT_MATERIALISED": "Stale-output supersession not modelled as states",
+    "INVALID_BRANCH_STATUS_TOKEN": "Invalid branch status tokens",
+    "EMPTY_FLOW_GROUP": "Empty flow groups",
+    "PRECONDITION_DUPLICATED_FROM_GROUP": "Preconditions duplicated from their group",
+    "FLOW_STEPS_DISCONTINUOUS": "Flows with broken step chains",
+    "FLOW_OUTCOME_EVIDENCE_UNDECLARED": "Flows without an observable outcome",
+    "STATE_NOT_COVERED_BY_FLOW": "States no flow ever reaches",
+    "INVALID_SCENARIO_MATRIX_SCHEMA": "Matrix schema errors (analysis stopped here)",
+    "UNKNOWN_ACTOR_ATTRIBUTE": "Matrix schema errors (analysis stopped here)",
+    "UNKNOWN_STATE_ATTRIBUTE": "Matrix schema errors (analysis stopped here)",
+    "DISCRIMINATOR_COLLISION_ADVISORY": "Observers may confuse two states (advisory)",
+    "UNVERIFIED_TERM": "Terms not in the project baseline (advisory)",
+}
+
+
+def collect_gaps(matrix: dict, baseline_lexicon: Optional[dict] = None) -> List[dict]:
+    """Return every gap as {code, severity, message}, ordered by code then message."""
+    gaps: List[dict] = []
+    seen: Set[Tuple[str, str]] = set()
+
+    def add(code: str, severity: str, message: str) -> None:
+        if (code, message) not in seen:
+            seen.add((code, message))
+            gaps.append({"code": code, "severity": severity, "message": message})
+
+    for code, message in _vsm.iter_scenario_matrix_findings(matrix):
+        add(code, BLOCKING, message)
+
+    if isinstance(matrix, dict) and isinstance(matrix.get("states"), list):
+        _, collision_report = _vp.check_stage_2_projections(matrix)
+        for line in collision_report.splitlines():
+            if line.startswith("DISCRIMINATOR_COLLISION_ADVISORY:"):
+                add("DISCRIMINATOR_COLLISION_ADVISORY", ADVISORY,
+                    line.split(":", 1)[1].strip())
+
+    if baseline_lexicon is not None:
+        known = {_vsm.normalize_token(t) for t in lexicon_terms(baseline_lexicon)}
+        for term_kind, term in sorted(_extract_matrix_terms(matrix)):
+            if _vsm.normalize_token(term) not in known:
+                add("UNVERIFIED_TERM", ADVISORY,
+                    "%s '%s' is not in the baseline domain-lexicon" % (term_kind, term))
+
+    gaps.sort(key=lambda g: (g["severity"] != BLOCKING, g["code"], g["message"]))
+    return gaps
+
+
+def lexicon_terms(lexicon: dict) -> Set[str]:
+    """Every name a matrix may legitimately use: entities, actions, state enums and their
+    tokens, actors and observers."""
+    terms: Set[str] = set()
+
+    def names(items, *keys):
+        for item in items if isinstance(items, list) else []:
+            if isinstance(item, dict):
+                for key in keys:
+                    if isinstance(item.get(key), str) and item[key].strip():
+                        terms.add(item[key].strip())
+
+    names(lexicon.get("entities"), "name")
+    names(lexicon.get("value_objects"), "name")
+    names(lexicon.get("actions"), "name")
+    names(lexicon.get("state_enums"), "name")
+    for enum in lexicon.get("state_enums") or []:
+        if isinstance(enum, dict):
+            terms.update(t for t in enum.get("tokens") or [] if isinstance(t, str))
+    registers = lexicon.get("actors_and_observers")
+    if isinstance(registers, dict):
+        names(registers.get("actors"), "id", "name")
+        names(registers.get("observers"), "id", "name")
+    return terms
+
+
+def _extract_matrix_terms(matrix: dict) -> Set[Tuple[str, str]]:
+    """Extract all state/action/actor/observer tokens from a matrix."""
+    terms: Set[Tuple[str, str]] = set()
+    for s in matrix.get("states", []):
+        if isinstance(s, dict) and s.get("state_id"):
+            terms.add(("state", s["state_id"]))
+    for t in matrix.get("triggers", []):
+        if isinstance(t, dict) and t.get("trigger_id"):
+            terms.add(("trigger", t["trigger_id"]))
+    for a in matrix.get("actors", []):
+        if isinstance(a, dict) and a.get("actor_id"):
+            terms.add(("actor", a["actor_id"]))
+    for o in matrix.get("observers", []):
+        if isinstance(o, dict) and o.get("observer_id"):
+            terms.add(("observer", o["observer_id"]))
+    return terms
+
+
+def group_gaps(gaps: List[dict]) -> Dict[str, List[dict]]:
+    """Group gaps by their code."""
+    grouped: Dict[str, List[dict]] = {}
+    for g in gaps:
+        grouped.setdefault(g["code"], []).append(g)
+    return grouped
+
+
+def render_gap_report_md(gaps: List[dict], matrix: dict) -> str:
+    """Render a markdown gap report."""
+    feature = matrix.get("feature_slug", "unknown")
+    grouped = group_gaps(gaps)
+    blocking_count = sum(1 for g in gaps if g["severity"] == BLOCKING)
+    advisory_count = sum(1 for g in gaps if g["severity"] == ADVISORY)
+
+    lines = [
+        "# Gap Report: %s" % feature,
+        "",
+        "**Total gaps:** %d (%d blocking, %d advisory)" % (len(gaps), blocking_count, advisory_count),
+        "",
+    ]
+
+    if not gaps:
+        lines.append("No gaps found. The matrix is clean.")
+        return "\n".join(lines)
+
+    # Blocking first, then advisory, sorted by code
+    for severity_label, severity_val in [("Blocking Gaps", BLOCKING), ("Advisory Gaps", ADVISORY)]:
+        severity_gaps = [g for g in gaps if g["severity"] == severity_val]
+        if not severity_gaps:
+            continue
+        lines.append("## %s" % severity_label)
+        lines.append("")
+        severity_grouped = group_gaps(severity_gaps)
+        for code in sorted(severity_grouped):
+            findings = severity_grouped[code]
+            lines.append("### %s — `%s` (%d)" % (GAP_HEADINGS.get(code, code), code, len(findings)))
+            lines.append("")
+            for f in findings:
+                lines.append("- %s" % f["message"])
+            lines.append("")
+
+    return "\n".join(lines)
+
+
+def render_gap_report_json(gaps: List[dict], matrix: dict) -> dict:
+    """Render a JSON gap report."""
+    feature = matrix.get("feature_slug", "unknown")
+    blocking = [g for g in gaps if g["severity"] == BLOCKING]
+    advisory = [g for g in gaps if g["severity"] == ADVISORY]
+    return {
+        "feature_slug": feature,
+        "total_gaps": len(gaps),
+        "blocking_count": len(blocking),
+        "advisory_count": len(advisory),
+        "gaps": gaps,
+        "gaps_by_type": {code: items for code, items in group_gaps(gaps).items()},
+    }
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Find structural and coverage gaps in a flow-simulation matrix",
+        prog="find-gaps",
+    )
+    parser.add_argument("matrix_path", help="Path to flow-simulation-matrix.json")
+    parser.add_argument("--baseline-dir", help="Directory containing domain-lexicon.json for term verification")
+    parser.add_argument("--out", help="Output directory for gap-report.md and gap-report.json")
+    parser.add_argument("--json", action="store_true", dest="json_output",
+                        help="Print JSON report to stdout")
+    parser.add_argument("--strict", action="store_true",
+                        help="Exit 1 if any blocking gap exists")
+    return parser
+
+
+def main() -> int:
+    parser = build_parser()
+    args = parser.parse_args()
+
+    matrix_path = Path(args.matrix_path)
+    if not matrix_path.is_file():
+        sys.stderr.write("Matrix file not found: %s\n" % matrix_path)
+        return 2
+
+    try:
+        matrix = json.loads(matrix_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as e:
+        sys.stderr.write("Error reading matrix: %s\n" % e)
+        return 2
+
+    baseline_lexicon = None
+    if args.baseline_dir:
+        lexicon_path = Path(args.baseline_dir) / "domain-lexicon.json"
+        if lexicon_path.is_file():
+            try:
+                baseline_lexicon = json.loads(lexicon_path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                pass  # proceed without baseline
+
+    gaps = collect_gaps(matrix, baseline_lexicon)
+
+    # Print summary
+    blocking = [g for g in gaps if g["severity"] == BLOCKING]
+    advisory = [g for g in gaps if g["severity"] == ADVISORY]
+
+    if args.json_output:
+        report = render_gap_report_json(gaps, matrix)
+        print(json.dumps(report, indent=2))
+    else:
+        # Print summary to stdout
+        if not gaps:
+            print("GAPS_CLEAN: no gaps found in %s" % matrix.get("feature_slug", "unknown"))
+        else:
+            print("GAPS_FOUND: %d gaps (%d blocking, %d advisory)" % (len(gaps), len(blocking), len(advisory)))
+            for g in gaps:
+                marker = "[BLOCKING]" if g["severity"] == BLOCKING else "[advisory]"
+                print("  %s %s: %s" % (marker, g["code"], g["message"]))
+
+    # Without a baseline, note that all terms are inline/unverified
+    if baseline_lexicon is None and not args.json_output:
+        matrix_terms = _extract_matrix_terms(matrix)
+        if matrix_terms:
+            print("\nNote: no baseline lexicon provided; %d term(s) are inline/unverified." % len(matrix_terms))
+
+    # Write output files
+    if args.out:
+        out_dir = Path(args.out)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        md_report = render_gap_report_md(gaps, matrix)
+        (out_dir / "gap-report.md").write_text(md_report, encoding="utf-8")
+        json_report = render_gap_report_json(gaps, matrix)
+        (out_dir / "gap-report.json").write_text(
+            json.dumps(json_report, indent=2) + "\n", encoding="utf-8")
+
+    if args.strict and blocking:
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -26,7 +26,9 @@ MILESTONES = {
     },
     "ENTITY_BOUNDARIES": {
         "awaiting_state": "AWAITING_ENTITY_BOUNDARIES_APPROVAL",
-        "artifact_path": "flow-simulation-matrix.json",
+        # The guarded entity boundaries, relationships and simulated dependencies are Stage 0
+        # declarations in the lexicon; the scenario matrix carries none of them.
+        "artifact_path": "domain-lexicon.json",
         "digest_scope": ["entity_boundaries", "entity_relationships", "simulated_dependencies"],
         "derived_docs": ["domain-entity-map.md"],
     },
@@ -106,29 +108,75 @@ def find_approval(ledger_data, milestone_id):
     return None
 
 
-def mark_approval_stale(feature_dir, ledger_data, milestone_id):
+def mark_approval_stale(feature_dir, ledger_data, milestone_id, stale_elements=None):
     for r in ledger_data.get("approvals", []):
         if r.get("milestone_id") == milestone_id:
             r["status"] = "STALE"
+            if stale_elements is not None:
+                r["stale_elements"] = stale_elements
     save_ledger(feature_dir, ledger_data)
 
 
-def delete_derived_docs(feature_dir, doc_names):
-    docs_dir = feature_dir / "docs"
-    for name in doc_names:
-        p = docs_dir / name
-        if not p.exists():
-            continue
+def _skill_lib():
+    """Put the skill root on sys.path so the shared lib/ package imports."""
+    skill_root = str(Path(__file__).resolve().parent.parent)
+    if skill_root not in sys.path:
+        sys.path.insert(0, skill_root)
+
+
+def stale_element_ids(feature_dir, milestone_id):
+    """The element ids a stale approval no longer matches, or None for a legacy record.
+
+    A record written before element-scoped approvals carries no element_digests; it stays
+    whole-section, exactly as before.
+    """
+    rec = find_approval(load_ledger(feature_dir), milestone_id)
+    if not rec or not isinstance(rec.get("element_digests"), dict):
+        return None
+    meta = MILESTONES[milestone_id]
+    artifact = load_artifact(feature_dir, meta["artifact_path"])
+    _skill_lib()
+    from lib.baseline import changed_element_ids, scoped_element_digests
+    current = scoped_element_digests(artifact, meta["digest_scope"])
+    return changed_element_ids(rec["element_digests"], current)
+
+
+def _remove_derived_file(p):
+    """Delete one derived document; report, never raise, when it cannot be removed.
+
+    Called only after the state transition and the ledger are saved, so a document that cannot
+    be removed (a directory left at its path, a permission the process lacks) leaves the feature
+    recoverable at its awaiting gate rather than half-invalidated. Returns False on failure.
+    """
+    if not p.exists() and not p.is_symlink():
+        return True
+    if p.is_dir() and not p.is_symlink():
+        sys.stderr.write(
+            "DERIVED_DOCUMENT_NOT_DELETED: %s is a directory, not a rendered document; remove it "
+            "by hand before re-rendering\n" % p
+        )
+        return False
+    try:
         try:
             p.unlink()
         except PermissionError:
             p.chmod(0o644)
             p.unlink()
+    except OSError as error:
+        sys.stderr.write("DERIVED_DOCUMENT_NOT_DELETED: %s (%s)\n" % (p, error))
+        return False
+    return True
+
+
+def delete_derived_docs(feature_dir, doc_names):
+    docs_dir = feature_dir / "docs"
+    for name in doc_names:
+        _remove_derived_file(docs_dir / name)
 
 
 def find_stale_milestone(feature_dir, state_data):
-    """Return the milestone_id of the earliest-gated APPROVED record whose
-    recomputed digest no longer matches its artifact, considering only
+    """Return the milestone_id of the earliest-gated record that is already STALE, or
+    APPROVED with a recomputed digest that no longer matches its artifact, considering only
     milestones the pipeline has already advanced past. A mismatch on the
     milestone the pipeline is currently sitting at is not staleness -- it is
     handled by the leaving-the-gate check in cmd_advance instead.
@@ -150,7 +198,14 @@ def find_stale_milestone(feature_dir, state_data):
         if awaiting_ord < 0 or awaiting_ord >= current_ord:
             continue
         rec = find_approval(ledger_data, milestone_id)
-        if not rec or rec.get("status") != "APPROVED":
+        if not rec:
+            continue
+        # A STALE record past its own gate is an invalidation that was interrupted before the
+        # state transition landed; it still requires the awaiting state, so re-advance recovers.
+        if rec.get("status") == "STALE":
+            candidates.append((awaiting_ord, milestone_id))
+            continue
+        if rec.get("status") != "APPROVED":
             continue
         artifact = load_artifact(feature_dir, meta["artifact_path"])
         if artifact is None:
@@ -203,19 +258,12 @@ def mark_ui_layout_stale(ledger_data, slice_id):
 
 
 def delete_ui_mockup(feature_dir, slice_id):
-    p = feature_dir / "docs" / ("ui-mockup-%s.html" % slice_id)
-    if not p.exists():
-        return
-    try:
-        p.unlink()
-    except PermissionError:
-        p.chmod(0o644)
-        p.unlink()
+    _remove_derived_file(feature_dir / "docs" / ("ui-mockup-%s.html" % slice_id))
 
 
 def find_stale_ui_layout_slices(feature_dir, state_data):
-    """Return the slice_ids whose APPROVED UI_LAYOUT record no longer matches that slice's
-    current ui_layout content. Only meaningful once the pipeline has already left
+    """Return the slice_ids whose UI_LAYOUT record is already STALE, or APPROVED but no longer
+    matching that slice's current ui_layout content. Only meaningful once the pipeline has already left
     AWAITING_UI_LAYOUT_APPROVAL -- a mismatch while still sitting at that gate is handled by the
     leaving-the-gate check in cmd_advance instead."""
     current_ord = state_ordinal(state_data.get("current_state"))
@@ -231,7 +279,12 @@ def find_stale_ui_layout_slices(feature_dir, state_data):
     stale = []
     for slice_id in ui_slices_with_layout(artifact):
         rec = find_ui_layout_approval(ledger_data, slice_id)
-        if not rec or rec.get("status") != "APPROVED":
+        if not rec:
+            continue
+        if rec.get("status") == "STALE":
+            stale.append(slice_id)
+            continue
+        if rec.get("status") != "APPROVED":
             continue
         if slice_ui_layout_digest(artifact, slice_id) != rec.get("approved_digest"):
             stale.append(slice_id)
@@ -362,6 +415,14 @@ STAGE_INVALIDATED_ARTIFACTS = {
 }
 
 
+# A rollback whose scope is derivable keeps every upstream artifact registered: only the
+# evidence of the affected slices is invalidated, and the gates re-check everything on re-advance.
+SCOPED_INVALIDATED_ARTIFACTS = ["stage_4_milestone_evidence", "stage_5_delivery_report"]
+EXECUTIONS_PATH = "milestones/executions.json"
+EVIDENCE_SUMMARY_PATH = "milestones/evidence-summary.json"
+INVALIDATED_EXECUTIONS_PATH = "milestones/invalidated-executions.json"
+
+
 def now_iso_utc():
     """Return current UTC timestamp in ISO-8601 format."""
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -437,9 +498,41 @@ def cmd_init(args):
             }
         ],
     }
+    lane = getattr(args, "lane", None) or "NEW_CAPABILITY"
+    state_data["lane"] = lane
+    baseline_dir = getattr(args, "baseline_dir", None)
+    seeded = None
+    if baseline_dir:
+        _skill_lib()
+        from lib.baseline import BaselineError, seed_feature_from_baseline
+        root = Path(args.root).resolve() if getattr(args, "root", None) else Path.cwd()
+        baseline_path = Path(baseline_dir)
+        if not baseline_path.is_absolute():
+            baseline_path = root / baseline_path
+        if not (baseline_path / "baseline.json").is_file():
+            print("BASELINE_NOT_FOUND")
+            sys.stderr.write("BASELINE_NOT_FOUND: no baseline.json under %s; nothing was written\n"
+                             % baseline_path)
+            return 1
+        if not args.dry_run:
+            try:
+                seeded = seed_feature_from_baseline(baseline_path, feature_dir)
+            except BaselineError as error:
+                print(error.code)
+                sys.stderr.write("%s\n" % error)
+                return 1
+        state_data["baseline"] = {
+            "dir": str(baseline_dir),
+            "reused_boundary_classes": (seeded or {}).get("reused_boundary_classes", []),
+        }
     if not args.dry_run:
         save_state(feature_dir, state_data)
-    print("INITIALIZED: %s at UNINITIALIZED" % args.feature)
+    print("INITIALIZED: %s at UNINITIALIZED (lane %s)" % (args.feature, lane))
+    if seeded is not None:
+        reused = seeded["reused_boundary_classes"]
+        print("BASELINE_SEEDED: lexicon %s; Stage 1 reuses %s"
+              % ("copied" if seeded["lexicon_seeded"] else "kept",
+                 ", ".join(reused) if reused else "no boundary class (every class is probed)"))
     print(json.dumps(state_data, indent=2))
     return 0
 
@@ -486,13 +579,15 @@ def cmd_advance(args):
     # invalidates loudly: the record goes STALE, its rendered documents are
     # deleted, and the feature is pulled back to that milestone's gate --
     # regardless of what target was requested.
+    #
+    # Order is load-bearing for crash recovery: the state transition is saved first, then the
+    # ledger, then the derived documents are removed best-effort. A crash between any two steps
+    # leaves the feature at the awaiting gate (where record-approval works) or leaves a STALE
+    # record that find_stale_milestone still routes back to that gate on the next advance.
     stale_id = find_stale_milestone(feature_dir, state_data)
     if stale_id:
         meta = MILESTONES[stale_id]
-        ledger_data = load_ledger(feature_dir)
-        if not args.dry_run:
-            mark_approval_stale(feature_dir, ledger_data, stale_id)
-            delete_derived_docs(feature_dir, meta["derived_docs"])
+        stale_elements = stale_element_ids(feature_dir, stale_id)
         prev_state = state_data["current_state"]
         if prev_state != meta["awaiting_state"]:
             state_data["current_state"] = meta["awaiting_state"]
@@ -509,12 +604,24 @@ def cmd_advance(args):
             )
             if not args.dry_run:
                 save_state(feature_dir, state_data)
+        if not args.dry_run:
+            ledger_data = load_ledger(feature_dir)
+            if ledger_data:
+                mark_approval_stale(feature_dir, ledger_data, stale_id, stale_elements)
+            delete_derived_docs(feature_dir, meta["derived_docs"])
         print("STALE_APPROVAL_INVALIDATED")
+        if stale_elements:
+            print("STALE_ELEMENTS: %s" % ", ".join(stale_elements))
         sys.stderr.write(
             "STALE_APPROVAL_INVALIDATED: %s approval no longer matches the current content of "
             "%s; record marked STALE, its rendered documents deleted, and the feature returned "
-            "to %s. Re-run bin/record-approval to re-open the path.\n"
-            % (stale_id, meta["artifact_path"], meta["awaiting_state"])
+            "to %s. %s Re-run bin/record-approval to re-open the path.\n"
+            % (
+                stale_id, meta["artifact_path"], meta["awaiting_state"],
+                ("Only these elements changed since approval and need review: %s."
+                 % ", ".join(stale_elements)) if stale_elements else
+                "The record predates element-scoped approvals, so the whole section needs review.",
+            )
         )
         return 1
 
@@ -522,15 +629,9 @@ def cmd_advance(args):
     # slice's ui_layout edited after its own approval invalidates only that slice's record and
     # deletes only that slice's mockup, regardless of what other UI slices in the same feature
     # are still approved.
+    # Same save order as above: state, then ledger, then the derived mockups.
     stale_ui_slices = find_stale_ui_layout_slices(feature_dir, state_data)
     if stale_ui_slices:
-        ledger_data = load_ledger(feature_dir)
-        if not args.dry_run:
-            for slice_id in stale_ui_slices:
-                mark_ui_layout_stale(ledger_data, slice_id)
-            save_ledger(feature_dir, ledger_data)
-            for slice_id in stale_ui_slices:
-                delete_ui_mockup(feature_dir, slice_id)
         prev_state = state_data["current_state"]
         awaiting = "AWAITING_UI_LAYOUT_APPROVAL"
         if prev_state != awaiting:
@@ -548,6 +649,14 @@ def cmd_advance(args):
             )
             if not args.dry_run:
                 save_state(feature_dir, state_data)
+        if not args.dry_run:
+            ledger_data = load_ledger(feature_dir)
+            if ledger_data:
+                for slice_id in stale_ui_slices:
+                    mark_ui_layout_stale(ledger_data, slice_id)
+                save_ledger(feature_dir, ledger_data)
+            for slice_id in stale_ui_slices:
+                delete_ui_mockup(feature_dir, slice_id)
         print("STALE_APPROVAL_INVALIDATED")
         sys.stderr.write(
             "STALE_APPROVAL_INVALIDATED: UI_LAYOUT approval for slice(s) %s no longer matches "
@@ -702,6 +811,7 @@ def cmd_advance(args):
                     check_gates,
                     verify_medium,
                     verify_claim,
+                    live_observation_scope,
                 )
                 report, rep_problems = read_report(delivery_json)
                 if rep_problems:
@@ -728,7 +838,9 @@ def cmd_advance(args):
                     print(token)
                     sys.stderr.write("EVIDENCE_VERIFICATION_FAILED: %s\n" % med_problems[0])
                     return 1
-                _notes, claim_problems = verify_claim(report, planned, verified, base_dir=feature_dir)
+                _notes, claim_problems = verify_claim(
+                    report, planned, verified, base_dir=feature_dir,
+                    observe_milestones=live_observation_scope(state_data))
                 if claim_problems:
                     token = claim_problems[0].split(":")[0].strip()
                     print(token)
@@ -811,12 +923,27 @@ def cmd_rollback(args):
         )
         return 1
 
-    # Invalidate downstream artifacts
-    invalidated = STAGE_INVALIDATED_ARTIFACTS.get(target_state, [])
+    scope, scope_problem = derive_rollback_scope(feature_dir, args)
+
+    # Invalidate downstream artifacts: all of them when the scope is underivable (the safe
+    # default), only the evidence of the affected slices when it is.
+    invalidated = (
+        SCOPED_INVALIDATED_ARTIFACTS if scope else STAGE_INVALIDATED_ARTIFACTS.get(target_state, [])
+    )
     if "artifacts" in state_data:
         for art_key in invalidated:
             if art_key in state_data["artifacts"]:
                 state_data["artifacts"][art_key] = None
+    if scope:
+        # Scoped rollbacks before the next delivery accumulate: every slice any of them
+        # invalidated must be re-run and re-observed.
+        previous = state_data.get("rollback_scope")
+        if isinstance(previous, dict):
+            scope = {key: sorted(set(scope[key]) | set(previous.get(key) or []))
+                     for key in ("elements", "slices", "milestones")}
+        state_data["rollback_scope"] = dict(scope, cause=cause, timestamp=now_iso_utc())
+    else:
+        state_data.pop("rollback_scope", None)
 
     state_data["current_state"] = target_state
     state_data["updated_at"] = now_iso_utc()
@@ -833,9 +960,82 @@ def cmd_rollback(args):
 
     if not args.dry_run:
         save_state(feature_dir, state_data)
+        if scope:
+            invalidate_slice_evidence(feature_dir, scope["milestones"], cause)
 
     print("ROLLED_BACK: %s -> %s (cause: %s)" % (current_state, target_state, cause))
+    if scope:
+        print("ROLLBACK_SCOPE: elements=%s slices=%s" % (
+            ",".join(scope["elements"]), ",".join(scope["slices"])))
+        sys.stderr.write(
+            "ROLLBACK_SCOPE: upstream artifacts kept; evidence invalidated only for milestone(s) "
+            "%s of the affected slice(s). Every gate still re-checks on re-advance.\n"
+            % (", ".join(scope["milestones"]) or "none")
+        )
+    else:
+        print("ROLLBACK_SCOPE_UNDERIVABLE")
+        sys.stderr.write(
+            "ROLLBACK_SCOPE_UNDERIVABLE: %s; every downstream artifact of %s was invalidated.\n"
+            % (scope_problem, target_state)
+        )
     return 0
+
+
+def derive_rollback_scope(feature_dir, args):
+    """(scope, None) when the regression names elements the DAG's slices reference, else
+    (None, why). The scope comes from lib/rollback.rollback_scope; this only gathers inputs."""
+    milestone_id = getattr(args, "scope_milestone", None)
+    trace = getattr(args, "scope_trace", None)
+    trace_file = getattr(args, "trace", None)
+    if trace_file:
+        try:
+            data = json.loads(Path(trace_file).read_text(encoding="utf-8"))
+        except (OSError, ValueError) as error:
+            return None, "the failure trace %s is unreadable (%s)" % (trace_file, error)
+        if not isinstance(data, dict):
+            return None, "the failure trace %s is not an object" % trace_file
+        milestone_id = data.get("milestone_id")
+        trace = data.get("trace")
+    if not milestone_id and not trace:
+        return None, "no failure trace was given, so the affected elements cannot be derived"
+    dag = load_artifact(feature_dir, "execution-dag.json")
+    lexicon = load_artifact(feature_dir, "domain-lexicon.json")
+    _skill_lib()
+    from lib.rollback import rollback_scope
+    scope = rollback_scope(milestone_id, trace, lexicon, dag)
+    if scope is None:
+        return None, "the failure trace names nothing any slice of execution-dag.json references"
+    return scope, None
+
+
+def invalidate_slice_evidence(feature_dir, milestone_ids, cause):
+    """Move the affected milestones' execution records aside and retire the evidence summary.
+
+    Records of unaffected slices stay in milestones/executions.json, so the harness re-grades them
+    unchanged once the affected slices are re-run. Nothing is deleted: moved records are appended
+    to milestones/invalidated-executions.json and the summary is renamed, both for audit.
+    """
+    affected = set(milestone_ids)
+    executions_file = feature_dir / EXECUTIONS_PATH
+    executions = load_artifact(feature_dir, EXECUTIONS_PATH)
+    if isinstance(executions, dict) and isinstance(executions.get("milestones"), list):
+        kept, moved = [], []
+        for record in executions["milestones"]:
+            is_affected = isinstance(record, dict) and str(record.get("milestone_id")) in affected
+            (moved if is_affected else kept).append(record)
+        if moved:
+            ledger = load_artifact(feature_dir, INVALIDATED_EXECUTIONS_PATH)
+            if not isinstance(ledger, dict) or not isinstance(ledger.get("invalidated"), list):
+                ledger = {"schema_version": "1.0.0", "invalidated": []}
+            ledger["invalidated"].append(
+                {"cause": cause, "timestamp": now_iso_utc(), "milestones": moved})
+            (feature_dir / INVALIDATED_EXECUTIONS_PATH).write_text(
+                json.dumps(ledger, indent=2) + "\n", encoding="utf-8")
+            executions["milestones"] = kept
+            executions_file.write_text(json.dumps(executions, indent=2) + "\n", encoding="utf-8")
+    summary = feature_dir / EVIDENCE_SUMMARY_PATH
+    if summary.is_file():
+        summary.replace(summary.with_name("evidence-summary.invalidated.json"))
 
 
 def cmd_status(args):
@@ -1165,6 +1365,10 @@ def build_parser():
     p_init.add_argument("--dir", help="Explicit target directory for state files")
     p_init.add_argument("--root", help="Project root directory")
     p_init.add_argument("--dry-run", action="store_true", help="Validate without writing state to disk")
+    p_init.add_argument("--lane", choices=["TWEAK", "EXTENSION", "NEW_CAPABILITY"], default="NEW_CAPABILITY",
+                        help="Change lane from triage-change; sizes the Stage 5 exit tier (default NEW_CAPABILITY)")
+    p_init.add_argument("--baseline-dir", help="Seed the feature lexicon and reusable contract fixtures "
+                        "from this project baseline (relative to --root or cwd)")
 
     # show
     p_show = subparsers.add_parser("show", help="Show current state and artifacts")
@@ -1204,6 +1408,8 @@ def build_parser():
     p_rb.add_argument("--dir", help="Explicit target directory for state files")
     p_rb.add_argument("--root", help="Project root directory")
     p_rb.add_argument("--dry-run", action="store_true", help="Validate without writing state to disk")
+    p_rb.add_argument("--trace", help='Failure trace JSON {"milestone_id": ..., "trace": {...}}; scopes '
+                      "the rollback to the slices it touches (full invalidation when underivable)")
 
     # sidecar
     p_sc = subparsers.add_parser("sidecar", help="Generate slice sidecar state for worker")

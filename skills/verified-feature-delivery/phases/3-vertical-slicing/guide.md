@@ -63,6 +63,10 @@ python3 bin/render-slice-plan --artifact .verified-feature-delivery/<feature-slu
 python3 bin/render-ui-mockup --artifact .verified-feature-delivery/<feature-slug>/execution-dag.json --slice <slice_id> --out .verified-feature-delivery/<feature-slug>/docs
 ```
 
+`--out` takes the output directory or the document's own path (`docs/<doc name>`); an existing
+derived document is overwritten in place. A file path naming any other document, or an existing
+file given as the directory, is refused with `INVALID_OUTPUT_PATH`.
+
 ### Validate Gate
 ```bash
 python3 bin/validate-execution-dag .verified-feature-delivery/<feature-slug>/execution-dag.json

@@ -1,0 +1,39 @@
+{
+  "schema_version": "1.0.0",
+  "updated_at": "2026-11-15T18:11:00Z",
+  "sources": [
+    "stripe-subscription-downgrade"
+  ],
+  "element_digests": {
+    "entity:Subscription": "a088fde30743be3932213db70d9ab4f7e765802c0e2fcdc1f3963982d48aab2d",
+    "entity:Organization": "b97189fd6996d8009c5c265d33f4160c4b5ec5a624e01d3c60770374913eb74d",
+    "value_object:ProrationInvoice": "5cd5758a12adae46befc4f9b3705712c7439ab517f41ac04df0fdd395ce5670b",
+    "action:DowngradeSubscription": "a3c4a8fc868ed86ec611bc7eeabb42cbc242c953d2f122a4ccc4ec3f1c961c8b",
+    "state_enum:SubscriptionStatus": "8c51c8c85509da47123f887ee59060d3a59735ed96157603d26196a3bcfc6a1a",
+    "state_enum:SubscriptionTier": "52fe02f5f2d319f579983e91a033202174e3be0fc31bd5e1e2a658371d65e729",
+    "state_enum:QuotaStatus": "225b62e880ce04b28d6fa8b996b8d33a0f11980553553544928f805991b93a85",
+    "monotonic_clock:StripeEventClock": "ca410c7c63727fd49686329c271a4c814030cdf25c48a19fc36b696a09cf1b38",
+    "unit_precision:integer_cents": "dbaee5db8a62552742452d8343af8cf1e7d6e3922788b02719a4ac05ae81959e",
+    "unit_precision:unix_epoch_seconds": "1b8b381747f610e9721cb213980acb87476e9cd2ab7b98c21a74f3f106aee97e",
+    "unit_precision:iso8601_datetime_ms": "639250e6815d94894004cc913f69ece21f4e1c6f8fe17042f7991fd550aac12c",
+    "unit_precision:seat_count": "1d2cbf419886a53d451c8b803e42b5274e32409a062bcb1275f2047c2ec60872",
+    "actor:StripeWebhookDispatcher": "c6c51742d3b77585a1bca2f725e10aa39aee6afefab59dcba96af470a7825851",
+    "actor:OrgAdmin": "953ffc8e912d700b887da0e3932b339669462dc4932dbe88540e6bee21e4c37d",
+    "actor:BullMQWorker": "c00bda507d14040e209211ec9f1011503f97315cb6af48fd15bff6b277243d6c",
+    "observer:OrgAdmin": "9edeba54cc531778441ffa95ba3e5c818642c4522e3860fb0c5e524516d835a4",
+    "observer:OrgMember": "34f3bd357e2425b15156efc08bfb93f4e14e94a472003c0805d10062bc7b6317",
+    "observer:SystemMonitor": "06374cb1b2c08e1d032be5f564c9775f35f62caecc17e6679a0f3232fab29029",
+    "alias_pair:CustomerIdentifier": "9458e9fc4c66a8984faa42b64e223fb403443a4c393b0878b857fbbbcb56ea3d",
+    "alias_pair:SubscriptionIdentifier": "ed0dd210559127f4f403f1b039cbd5558e77d75fd628b5ae89da74fc9da5deab",
+    "projection_binding:quota_warning_banner": "071ac79f74ee9647e26b1fca3f1407313d99f0303c822217f7a4835063a042a1",
+    "projection_binding:surplus_seat_count": "830e352835ba077f22edff7636849caea075cccc3291adc7d09121cf0e3c8571",
+    "projection_binding:member_access_alert": "3524d53119081da49738e393b0c6d731a91275fd2623a43740b2390143ab9671",
+    "projection_binding:system_event_stream": "d580396a25c01ae6347e18c4c65de4297595db26f285374b9742ecc0571ab188",
+    "value_authority:proration_amount": "2364cb57ff28ef7e8c6041d1397ef5bc7a7f8f9fbd265f6d3fafb4e1cea32c50",
+    "fact_precedence:subscription_cancellation_status": "de2cbc382119c268030b5a3bed541b28885cb19d1ac500e4521120ac8898cb8d",
+    "boundary:billing_and_entitlements": "14e9cb75349df258735a205faba7dafa2f38b7f60e3ba22b4f6f764e7bbbd48b",
+    "entity_relationship:Subscription->Organization": "0f942e905a5e60e74d789aa4b2c92b74448d1267827cfec1ed2616397caf5ed1",
+    "simulated_dependency:NETWORK_API": "08d46bbbaf33ec30a91d17f4208c23398d14725e77ad2dc847e696b08279828b"
+  },
+  "approvals": {}
+}

@@ -151,6 +151,7 @@ def determine_escalation_tier(
     stage: Optional[str] = None,
     is_stage_5_exit: bool = False,
     slice_def: Optional[Dict[str, Any]] = None,
+    lane: Optional[str] = None,
 ) -> Tuple[str, List[str], List[str]]:
     """Deterministically determine execution tier, rationale tokens, and warnings.
 
@@ -159,6 +160,7 @@ def determine_escalation_tier(
         stage: Current lifecycle state name.
         is_stage_5_exit: Explicit flag indicating Stage 5 delivery exit gating.
         slice_def: Optional slice definition from execution DAG.
+        lane: The feature's change lane (state.json `lane`); None means NEW_CAPABILITY.
 
     Returns:
         Tuple of (escalation_tier, rationale_tokens, warnings).
@@ -166,10 +168,19 @@ def determine_escalation_tier(
     warnings: List[str] = []
     rationale_tokens: List[str] = []
 
-    # Rule 1: Stage 5 Delivery Exit is mandatory Tier 3 Gatekeeper run
+    # Rule 1: the Stage 5 delivery exit runs at the lane's tier. NEW_CAPABILITY (the default, and
+    # every feature initialised before lanes existed) keeps the mandatory Tier 3 gatekeeper run.
     if is_stage_5_exit or stage in {"STAGE_5_DELIVERY", "COMPLETED"}:
-        rationale_tokens.append("STAGE_5_DELIVERY_EXIT_MANDATORY_TIER_3")
-        return TIER_3, rationale_tokens, warnings
+        from lib.triage import LANE_TIER, NEW_CAPABILITY
+        lane_tier = LANE_TIER.get(lane or NEW_CAPABILITY)
+        if lane_tier is None:
+            warnings.append("Unknown lane %r. Conservatively escalating to TIER_3." % lane)
+            lane_tier = TIER_3
+        if lane_tier == TIER_3:
+            rationale_tokens.append("STAGE_5_DELIVERY_EXIT_MANDATORY_TIER_3")
+        else:
+            rationale_tokens.append("STAGE_5_DELIVERY_EXIT_LANE_%s" % lane)
+        return lane_tier, rationale_tokens, warnings
 
     if not diff_files:
         # Default based on slice definition if provided, else conservative Tier 1/2
@@ -253,6 +264,7 @@ def generate_verification_plan(
     feature_dir = Path(feature_dir).resolve()
     state_file = feature_dir / "state.json"
     feature_slug = feature_dir.name
+    lane = None
 
     if state_file.is_file():
         try:
@@ -261,6 +273,7 @@ def generate_verification_plan(
                 feature_slug = sdata.get("feature_slug") or feature_slug
                 if stage is None:
                     stage = sdata.get("current_state")
+                lane = sdata.get("lane")
         except Exception:
             pass
 
@@ -270,6 +283,7 @@ def generate_verification_plan(
         stage=stage,
         is_stage_5_exit=is_stage_5_exit,
         slice_def=slice_def,
+        lane=lane,
     )
 
     is_mandatory_gatekeeper = (tier == TIER_3 and (is_stage_5_exit or stage == "STAGE_5_DELIVERY"))

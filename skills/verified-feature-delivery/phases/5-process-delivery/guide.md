@@ -22,15 +22,17 @@
 5. Generate the changelog from the verified milestone evidence record — never from the
    version-control log.
 
-### Driver Role & Mandatory Tier 3 Gatekeeper
-The driving agent does not run browser observations or write changelogs directly. It dispatches a delivery worker and validates the resulting report via `bin/planner-state advance`. Stage 5 delivery exit strictly enforces a mandatory **Tier 3 Gatekeeper** verification run ([`verification-policy.md`](../4-milestone-execution/verification-policy.md)), executing full regressions, adversarial checks, and Playwright UI observations without bypassing.
+### Driver Role & the Lane-Sized Exit Tier
+The driving agent does not run browser observations or write changelogs directly. It dispatches a delivery worker and validates the resulting report via `bin/planner-state advance`. The Stage 5 exit tier follows the feature's lane (`state.json` `lane`, set by `planner-state init --lane` from `triage-change`): `NEW_CAPABILITY` — the default, and every feature initialised without a lane — keeps the mandatory **Tier 3 Gatekeeper** run ([`verification-policy.md`](../4-milestone-execution/verification-policy.md)), executing full regressions, adversarial checks, and Playwright UI observations without bypassing; `EXTENSION` exits at Tier 2 and `TWEAK` at Tier 1.
+
+Live browser observation follows the lane too. `NEW_CAPABILITY` observes every `rendered_ui` milestone. A `TWEAK` or `EXTENSION` delivery observes only the slices new or invalidated in it: after a scoped rollback, the milestones in `state.json` `rollback_scope`, whose evidence was re-run; the preserved slices keep the observation they already passed. Every other evidence check still runs on every milestone.
 
 
 ---
 
 ## Running the gate
 
-Every `rendered_ui` slice is verified by live browser observation, so Node.js and Playwright
+Every `rendered_ui` slice in the observation scope above is verified by live browser observation, so Node.js and Playwright
 must be resolvable here (`PLAYWRIGHT_PATH`, `NODE_PATH`, or `node_modules/playwright` above the
 repository). Absent, the gate refuses with `OBSERVATION_BROWSER_UNAVAILABLE`; it does not pass.
 

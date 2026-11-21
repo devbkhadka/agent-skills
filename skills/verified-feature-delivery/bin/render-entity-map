@@ -8,7 +8,7 @@ value shown is a declared field already present on the artifact (improvement pla
 §4.1); this executable adds no judgement of its own (rule R2).
 
 Usage:
-    render-entity-map --artifact <path/to/domain-lexicon.json> --out <output-dir>
+    render-entity-map --artifact <path/to/domain-lexicon.json> --out <output-dir or output-dir/domain-entity-map.md>
 
 Exit Codes:
 - 0: Wrote <out>/domain-entity-map.md, mode 0444, and nothing else in that directory.
@@ -28,7 +28,7 @@ Supported Rejection Codes:
 - MISSING_SIMULATED_DEPENDENCIES, MISSING_SIMULATION_BOUNDARY_CLASS,
   MISSING_SIMULATION_STRATEGY, SIMULATION_WITHOUT_FIXTURE_REF,
   MISSING_SIMULATION_BUSINESS_LOGIC
-- RENDER_CONTEXT_MISMATCH
+- RENDER_CONTEXT_MISMATCH, INVALID_OUTPUT_PATH
 """
 
 import argparse
@@ -39,7 +39,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from lib.primitives import is_vacuous_container
-from lib.render import RenderError, render_document
+from lib.render import RenderError, RenderOutputError, render_document
 
 RENDERER_NAME = "render-entity-map"
 DOC_NAME = "domain-entity-map.md"
@@ -289,7 +289,7 @@ def build_parser():
         description="Render domain-entity-map.md from domain-lexicon.json",
     )
     parser.add_argument("--artifact", required=True, help="Path to domain-lexicon.json")
-    parser.add_argument("--out", required=True, help="Output directory for the rendered document")
+    parser.add_argument("--out", required=True, help="Output directory, or the document's own path (<dir>/<doc name>); an existing document is overwritten")
     return parser
 
 
@@ -331,6 +331,10 @@ def main():
             artifact_path=artifact_path.name,
             renderer_name=RENDERER_NAME,
         )
+    except RenderOutputError as e:
+        sys.stderr.write("INVALID_OUTPUT_PATH: %s\n" % e)
+        print("INVALID_OUTPUT_PATH")
+        return 1
     except RenderError as e:
         sys.stderr.write(f"RENDER_CONTEXT_MISMATCH: {e}\n")
         print("RENDER_CONTEXT_MISMATCH")
